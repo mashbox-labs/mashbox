@@ -1,1 +1,1 @@
-Qwen3.8-27B: time to ready on one TPU v6e-1. Measured 2026-10-28 03:53-05:39 UTC on one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1. MASHBOX measurement ledger CH-01.
+Qwen3.8-27B: time to ready on one TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1.

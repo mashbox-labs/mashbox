@@ -18,7 +18,7 @@ For coding agents that work on this repo, or that run its models for a person.
 ## Run a model for a person
 
 - **Qwen3.8-27B** runs on one TPU v6e-1 ($2.70 an hour on demand); it does not fit on v5e. Install on the chip: `python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"` (the chip's system Python is 3.10; JAX for TPU needs 3.12, which uv brings). One answer: `~/.local/bin/mashbox run qwen3-8-27b --prompt "..."`. A server: [docs/models/qwen3-8-27b.md](docs/models/qwen3-8-27b.md).
-- **Hy-Nomas** is coming soon: its weights are not public yet, so do not try to run it.
+- Run only the models in the README's Models table.
 - **Coding agents as clients:** to point Claude Code, Codex or Pi at a model you serve, follow [docs/agents-on-tpu.md](docs/agents-on-tpu.md).
 
 1. Read `models.json`. Pick the model, note its chips and its `run` command.

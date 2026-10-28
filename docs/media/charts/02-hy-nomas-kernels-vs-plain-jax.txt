@@ -1,1 +1,1 @@
-Hy-Nomas on TPU: our kernels vs plain JAX, same chip. Measured 2026-10-28 04:36-04:40 UTC on one chip of a TPU v6e-4 (jax 0.11.2) vs plain JAX on the same chip. MASHBOX measurement ledger CH-08.
+Hy-Nomas on TPU: our kernels vs plain JAX, same chip. Hardware: one chip of a TPU v6e-4 (jax 0.11.2) vs plain JAX on the same chip.

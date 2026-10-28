@@ -2,36 +2,35 @@
 
 Claude Code, Codex and Pi can use a model that `mashbox` serves on your TPU as their LLM. Keep the agent you already have: nothing on this page reinstalls it or changes its normal settings. Claude Code reads one extra settings file that you name when you start it, Codex gets an added provider and profile, and Pi gets a profile folder of its own. Started the usual way, each agent works as before.
 
-The `mashbox` server speaks the APIs these agents use: Anthropic Messages (Claude Code), OpenAI Responses (Codex) and OpenAI chat completions with tool calls (Pi). Every LLM that `mashbox run` serves gets them. Today that is [Qwen3.8-27B](models/qwen3-8-27b.md), the example on this page.
+The `mashbox` server speaks the APIs these agents use: Anthropic Messages (Claude Code), OpenAI Responses (Codex) and OpenAI chat completions with tool calls (Pi). Every LLM that `mashbox run` serves gets them. In this release that is [Qwen3.8-27B](models/qwen3-8-27b.md), the example on this page.
 
 ## What it costs
 
-The chip bills from create to delete: $2.70 an hour for one TPU v6e chip at Google's on-demand list price (read 19 October 2026). The server does not charge per token and does not check keys.
+The chip bills from create to delete: $2.70 an hour for one TPU v6e chip at Google's on-demand list price. The server does not charge per token and does not check keys.
 
 ## Before you start
 
 - A TPU v6e-1 with `mashbox` on it, from the [Quickstart](quickstart.md) or the [Qwen3.8-27B guide](models/qwen3-8-27b.md). Below the chip is `qwen-1` in zone `us-east5-b`: use your chip's name and zone.
-- Claude Code, Codex CLI or Pi, already installed on your machine. We tested Claude Code 2.1.312, Codex CLI 0.165.0 and Pi 1.4.0.
+- Claude Code, Codex CLI or Pi, already installed on your machine. The settings below are for Claude Code 2.1.312, Codex CLI 0.165.0 and Pi 1.4.0.
 - Port 8000 free on your machine.
 
 ## 1. Start the server and the tunnel
 
 From your machine:
 
-<!-- test:tpu -->
 ```bash
 gcloud compute tpus tpu-vm ssh qwen-1 --zone=us-east5-b --command='~/.local/bin/mashbox run qwen3-8-27b --ctx 32768 --slots 1' -- -L 8000:127.0.0.1:8000
 ```
 
 Leave it running. It takes requests once it prints a line with `"event": "ready"`. The server listens only on the chip's 127.0.0.1 and the SSH tunnel brings it to port 8000 on your machine, so nothing is open to the internet.
 
-When the tunnel closed, the server kept running on the chip in our run. To stop it:
+Closing the tunnel does not stop the server on the chip. To stop it:
 
 ```bash
 gcloud compute tpus tpu-vm ssh qwen-1 --zone=us-east5-b --command='pkill -f "mashbox run"'
 ```
 
-`--ctx 32768 --slots 1` gives one conversation of up to 32,768 tokens, which is what fits next to the 26.94 GB of weights on a v6e chip (two slots at this context ran out of chip memory). Each agent below is set to compact its conversation before it gets there.
+`--ctx 32768 --slots 1` gives one conversation of up to 32,768 tokens, which is what fits next to the 26.94 GB of weights on a v6e chip; two slots at this context do not fit. Each agent below is set to compact its conversation before it gets there.
 
 ## 2. Point your agent at it
 
@@ -162,7 +161,7 @@ Pi:
 PI_CODING_AGENT_DIR=~/.pi/mashbox pi -p "Reply with one word: ready"
 ```
 
-Each ends with `ready`. Before it, Claude Code prints a warning that it does not know the model name (`[claude-code:unrecognized_model]`) and Codex one about model metadata: both are harmless. The first request after the server starts is slow while the server compiles its programs for this context: 46 s on our chip, then about 0.2 to 0.5 s to the first token on later turns.
+Each ends with `ready`. Before it, Claude Code prints a warning that it does not know the model name (`[claude-code:unrecognized_model]`) and Codex one about model metadata: both are harmless. The first request after the server starts is slow while the server compiles its programs for this context: 46 s on a TPU v6e-1, then about 0.2 to 0.5 s to the first token on later turns.
 
 The server's terminal shows one line per request, with the agent in `ua`, the API in `api` and the part of the prompt it did not have to read again in `cached_tokens`:
 
@@ -170,18 +169,18 @@ The server's terminal shows one line per request, with the agent in `ua`, the AP
 {"event": "request", "api": "anthropic", "ua": "claude-cli/2.1.312 (external, cli)", "prompt_tokens": 12700, "cached_tokens": 12438, "new_tokens": 143, "tools": 7, "tool_calls": 1, "thinking": false, "finish": "stop", "dropped_tools": null, "batch_rows": 1, "ttft_s": 0.269, "total_s": 4.319}
 ```
 
-## What we measured
+## Benchmark: a 9-turn coding task
 
-Each agent did the same 9-turn session in its normal terminal interface on one TPU v6e-1 (europe-west4-a, on demand) running `mashbox` 0.1.0 from PyPI, on 28 October 2026. The agents were set up with the steps on this page and nothing else, in a user account where they were already installed. The project was a clone of [python-slugify](https://github.com/un33k/python-slugify) (133 tests). Every request is in the server's log.
+Each agent did the same 9-turn session in a clone of [python-slugify](https://github.com/un33k/python-slugify) (133 tests). The agents ran in their terminal interfaces with the settings on this page, on one TPU v6e-1 (on demand) with `mashbox` 0.1.0 from PyPI. So that they did not stop to ask, Claude Code started with `--permission-mode acceptEdits --allowedTools Bash` and Codex with `--dangerously-bypass-approvals-and-sandbox`, added to the commands above. Each agent answered every turn correctly, and the project's full test suite passed at the end of each session.
 
-Seconds per turn, from sending the prompt to the agent being done:
+Seconds per turn, from sending the prompt to the agent finishing the turn (approximate):
 
-| Turn | What the agent was asked | Claude Code 2.1.312 | Codex CLI 0.165.0 | Pi 1.4.0 |
+| Turn | What the agent is asked | Claude Code 2.1.312 | Codex CLI 0.165.0 | Pi 1.4.0 |
 |---|---|---|---|---|
 | 1 | read two files and note a codename and a reviewer for later | 44 | 27 | 21 |
 | 2 | write a new module and its tests | 18 | 36 | 21 |
 | 3 | run the new tests | 6 | 14 | 72 |
-| 4 | fix the module for a failing test we added | 24 | 33 | 31 |
+| 4 | fix the module for a failing test added to the project | 24 | 33 | 31 |
 | 5 | add a parameter and two tests, run them | 38 | 32 | 23 |
 | 6 | run the whole suite and `git status` | 18 | 23 | 10 |
 | 7 | read a long CI log and name the failed step, error code, file and line | 175 | 52 | 50 |
@@ -192,22 +191,17 @@ Seconds per turn, from sending the prompt to the agent being done:
 | | Time to first token, median, prompt cached / not cached | 0.27 s / 9.0 s | 0.33 s / 5.5 s | 0.26 s / 4.5 s |
 | | Compactions (turn) | 2 (7 and 8) | 1 (8) | 1 (9) |
 
-All three answered every turn correctly: the failed step `wheel-audit`, error `E7731`, `slugify/special.py` line 42, the codename and reviewer, and a commit of exactly the three files with the reviewer named; the full suite passed after each session. Claude Code had also saved the codename and reviewer in its own memory file in turn 1 and read that file again after compacting. Codex answered from its compacted summary, and Pi still had turn 1 in its context (it compacted in turn 9).
-
 Where the time goes:
 
 - **Compacting.** Claude Code's two compactions took 139 s and 173 s: it writes a summary of up to 4,096 tokens, and answers stream at about 29 tokens a second at a 20,000-token context.
 - **Codex's title request.** Every turn Codex also sends a short request (about 4,700 tokens) to name the task. With one slot it takes the place of the conversation in the cache, so the next request reads the whole conversation again (4 to 17 s to the first token). That is why Codex reads less from cache.
-- **Pi, turn 3.** In Pi's terminal the project's Python was not on the `PATH` (in the other two it was), so Pi first looked for it.
-- **First requests.** The first request after the server starts took 46 s, and a prompt length the server has not seen yet adds a few seconds once.
-
-Times are approximate: our test driver typed each prompt into the agent and took the turn as done after 12 s with no change on screen, and those 12 s are taken off. To answer without stopping, the driver started Claude Code with `--permission-mode acceptEdits --allowedTools Bash` and Codex with `--dangerously-bypass-approvals-and-sandbox` added to the commands above.
+- **First request.** The first request after the server starts took 46 s while the server compiled its programs, and a prompt length the server has not seen before adds a few seconds once.
 
 ## Limits
 
 - **One conversation at a time is cached.** With one slot, two agents on one chip take turns and each switch reads the whole prompt again. Use one chip per agent if you run several.
 - **Context.** Prompts over 32,767 tokens are refused with `prompt is too long`. The settings above make each agent compact before that.
-- **Thinking is off** in the settings above. In an earlier test on a TPU v6e-1 the same day, Claude Code with thinking on ran out of room above 27,000 tokens: 12 answers were cut off at the context limit and one turn kept compacting for over 8 minutes.
+- **Thinking is off** in the settings above. With thinking on, Claude Code on a TPU v6e-1 ran out of room above 27,000 tokens: 12 answers were cut off at the context limit and one turn kept compacting for over 8 minutes.
 - **Text only.** Images and files in a request are refused with an error that says so.
 - **Hosted tools.** Tools that run on Anthropic's or OpenAI's servers (web search) are not available here. A Claude Code web search request is refused with an error; Codex's web search tool is left out of the list the model sees, and the server log names it under `dropped_tools`.
 

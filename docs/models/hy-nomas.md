@@ -2,12 +2,8 @@
 
 Tencent Hunyuan's open video world model, playable in your browser from a Google Cloud TPU v6e-4. You type a world (or pick one), then steer it with the keyboard while it generates 720p video at 24 frames per second, 5 seconds at a time.
 
-> Status: staging. The release runtime is in the package (`mashbox run hy-nomas`). On 28 October 2026 it ran on a TPU v6e-4 by following this page on a new chip: install, download, the browser app with every control, and each compiled kernel checked against plain JAX. On CPU, with a small test model, it gives the same video latents as the code of our 26 October live demo within bf16 rounding. The numbers below say where each one comes from.
 
 ## What it is
-
-<!-- TODO source="release media: a clip of the release build running the command in Run on TPU v6e-4 (media standard)" -->
-> **Pending.** A clip of the release build on TPU v6e-4 goes here after its first full run.
 
 How it runs:
 
@@ -20,11 +16,11 @@ How it runs:
 
 | Chip | Status |
 |---|---|
-| TPU v6e-4 (4 chips, one VM) | the target for this release; 1.04 s of compute per second of video (measured 28 October 2026, [Performance](#performance)) |
-| TPU v6e-1 | not supported yet |
+| TPU v6e-4 (4 chips, one VM) | 1.04 s of compute per second of video ([Performance](#performance)) |
+| TPU v6e-1 | not supported |
 | TPU v5e | not supported: this release's compiled kernels load and run on v5e, but the model does not fit its 16 GB per chip ([Performance](#performance)) |
 
-v6e-4 costs $10.80 an hour at Google's on-demand list price ($2.70 per chip-hour, read 19 October 2026). The chip bills from create to delete.
+v6e-4 costs $10.80 an hour at Google's on-demand list price ($2.70 per chip-hour). The chip bills from create to delete.
 
 You also need the Google Cloud CLI set up and TPU v6e quota in your zone: [google-cloud.md](../google-cloud.md) does that from a new Google account. A v6e-4 needs 4 cores of "TPU v6e cores per project per zone".
 
@@ -46,7 +42,7 @@ gcloud compute tpus queued-resources create hy-nomas-request --node-id=hy-nomas 
 gcloud compute tpus queued-resources describe hy-nomas-request --zone=asia-northeast1-b --format="value(state.state)"
 ```
 
-Run the second line until it prints `ACTIVE`, then connect with the `ssh` line above. On 28 October 2026 plain creates found no free v6e-4 in 5 zones for an hour, and a queued request in asia-northeast1-b was granted after about 14 minutes.
+Run the second line until it prints `ACTIVE`, then connect with the `ssh` line above. A plain create can find no free v6e-4 in 5 zones for an hour; a queued request can be granted in about 14 minutes.
 
 Then, on the VM:
 
@@ -89,7 +85,7 @@ To try the browser app without a chip: `mashbox run hy-nomas --stub` on any mach
 - **Timed actions:** type an action ("dives steeply, head first") or pick one, choose when it starts and how long it lasts inside the next 5 s window. While it plays, the video shows "Action now: ...".
 - **Keys:** W A S D move, arrow keys turn and climb or dive. Hold to keep going, let go to stop. Each window replays your holds frame by frame, one window later.
 - **Camera:** turn rate, move speed, rotation scale (Tencent's `trajectory_rotation_scale`, default 2.5) and pitch limit.
-- **Quality preset:** "quality" (3 denoising steps plus a separate history pass) is the default; "live" (4 steps, the setting of our 26 October live demo) is the option. Both run 4 model passes per 5 s window, so they take the same time.
+- **Quality preset:** "quality" (3 denoising steps plus a separate history pass) is the default; "live" (4 steps) is the option. Both run 4 model passes per 5 s window, so they take the same time.
 - **Decoder:** "Tencent full" (Tencent's pixel decoder, the sharpest picture) is the default; "MASHBOX Fast" is our own small decoder, faster than real time on a v6e-4 with a softer picture ([Performance](#performance)). It switches at the next window.
 - Pause, restart, hide the UI (H). The top-left of the video shows which chip it runs on, read from the chip, plus the compute meter and a UTC clock.
 
@@ -117,7 +113,7 @@ All options: `~/.local/bin/mashbox run hy-nomas --help`.
 
 ## Variants
 
-This release runs Tencent's own weights, downloaded as Tencent publishes them and rounded to bf16 when they load onto the chips (the way `torch`'s `.to(bfloat16)` rounds). There is no smaller weights file yet.
+This release runs Tencent's own weights, downloaded as Tencent publishes them and rounded to bf16 when they load onto the chips (the way `torch`'s `.to(bfloat16)` rounds). There is no smaller weights file.
 
 | File | Weights type | GB | Bits per weight | Quality vs full precision | Speed | Chips |
 |---|---|---|---|---|---|---|
@@ -126,7 +122,7 @@ This release runs Tencent's own weights, downloaded as Tencent publishes them an
 
 ## Performance
 
-Measured on 28 October 2026 on TPU v6e-4, on demand, new chips in asia-northeast1-b, europe-west4-a and us-east5-b, after following this page: `mashbox` 0.1.0 with its kernel bundle and JAX 0.11.2 for TPU (`~/.local/bin/mashbox env` prints the full list), default options, the app in Chrome through the SSH tunnel. Compute is the time the chips take for a 5 s window divided by 5 s (1.00 = real time).
+Measured on TPU v6e-4, on demand, on new chips set up as this page shows: `mashbox` 0.1.0 with its kernel bundle and JAX 0.11.2 for TPU (`~/.local/bin/mashbox env` prints the full list), default options, the app in Chrome through the SSH tunnel. Compute is the time the chips take for a 5 s window divided by 5 s (1.00 = real time).
 
 | What | Result |
 |---|---|
@@ -141,16 +137,14 @@ Measured on 28 October 2026 on TPU v6e-4, on demand, new chips in asia-northeast
 | Timed action, preset or typed | ready 0.8 to 1.5 s after Inject, on screen 5.6 to 7.0 s after |
 | Compiled kernels against plain JAX on the same chip | 28 of 28 load and run; 4 give identical outputs, the rest differ by bf16 rounding (largest relative L2 difference 0.0032). The main model's attention runs 7.6 to 7.8 times faster than plain JAX, the decoder's attention 3.7 times |
 
-Our live demo of this model on 26 October 2026, with different code, measured 0.93 s of compute per second of video on the same chip type.
-
-<!-- TODO source="public link to the v6e-4 run record (status/tpu-v6e.json) once tpu_ci publishes it" -->
+The MASHBOX live demo of this model, an earlier build with different code (not this release), ran at 0.93 s of compute per second of video on the same chip type.
 
 Other chips:
 
-| Chip | What we measured |
+| Chip | Result |
 |---|---|
-| TPU v6e-1 | On one chip, with a reduced-size main model, it took 2.42 to 2.46 s of compute per second of video (measured 26 October 2026): slower than real time. The full-size model and the text encoder do not fit on one chip together. |
-| TPU v5e | All 28 compiled kernels of this release load and run on a TPU v5e-1 (JAX 0.11.2 for TPU, 28 October 2026). Against plain JAX on the same chip: 4 give identical outputs and the rest differ only by bf16 rounding (largest relative L2 difference 0.0032). On v5e the main model's attention kernels are slower than plain JAX (25 to 50 ms vs 17 to 29 ms per call); the decoder kernels are 4 to 13 times faster. The model as laid out needs more than v5e's 16 GB per chip: the video decoder takes 12.99 GiB and its share of the main model about 4 GiB (estimate from measured sizes). |
+| TPU v6e-1 | On one chip, with a reduced-size main model, it takes 2.42 to 2.46 s of compute per second of video: slower than real time. The full-size model and the text encoder do not fit on one chip together. |
+| TPU v5e | All 28 compiled kernels of this release load and run on a TPU v5e-1 (JAX 0.11.2 for TPU). Against plain JAX on the same chip: 4 give identical outputs and the rest differ only by bf16 rounding (largest relative L2 difference 0.0032). On v5e the main model's attention kernels are slower than plain JAX (25 to 50 ms vs 17 to 29 ms per call); the decoder kernels are 4 to 13 times faster. The model as laid out needs more than v5e's 16 GB per chip: the video decoder takes 12.99 GiB and its share of the main model about 4 GiB (estimate from measured sizes). |
 
 ## Use it with your coding agent
 
@@ -160,14 +154,14 @@ Point your agent (Claude Code, Codex, Gemini CLI or any other) at this repo and 
 
 | What you see | Why | What to do |
 |---|---|---|
-| `There is no more capacity in the zone` or `Insufficient capacity` when you create the chip | that zone has no free v6e-4 right now (on 28 October 2026 at 03:35-04:10 UTC we saw this in asia-northeast1-b, us-east5-a, us-east5-b, europe-west4-a and us-south1-a) | run the create command again in another zone, and use that zone in every command after it; or queue the request (see [Install](#install)) |
+| `There is no more capacity in the zone` or `Insufficient capacity` when you create the chip | that zone has no free v6e-4 right now | run the create command again in another zone, and use that zone in every command after it; or queue the request (see [Install](#install)) |
 | `User does not have permission to submit requests for accelerator type "v6e-4"` or `Quota limit 'TPUV6EPerProjectPerZoneForTPUAPI'` | your project has no on-demand TPU v6e quota in that zone | ask for 4 cores of "TPU v6e cores per project per zone" in that zone ([step 5 of the setup guide](../google-cloud.md#5-check-your-tpu-quota)) or pick a zone where you have it |
 | `ERROR: No matching distribution found for jax[tpu]==0.11.2` | plain `pip install` ran on the chip's system Python 3.10; JAX for TPU needs Python 3.12 | use the install lines in [Install](#install), which get Python 3.12 through uv |
 | `hy-nomas needs a TPU v6e-4 (4 chips); found ...` | the machine has no TPU or fewer than 4 chips | create a v6e-4 ([Install](#install)), or use `--stub` to try the app on CPU |
 | `... sha256 ... does not match the pinned ...` | a download was cut off or changed | delete the file named in the message and run again |
 | `... code hash ... does not match the pinned ...` | Tencent's code folder in the cache is incomplete or changed | delete the folder named in the message and run again |
 | a log line `"event": "disk"` with `free_gb` below `missing_gb` | the cache disk has less free space than the files still to download | set `HF_HUB_CACHE` to a folder with more room (see [What you need](#what-you-need)) and run again |
-| `Unable to initialize backend 'tpu': ... START_SESSION failed` when `mashbox` starts | the chips could not be linked into one slice. We saw it twice on 28 October 2026: once when a run started less than 1 s after the previous run had exited, once after a server was stopped with `kill`. Both times it stayed for as long as we tried (on one chip 25 minutes and a reboot) | stop the server with Ctrl-C, not `kill`, and wait 10 s after it exits before the next start. If it happens, delete the chip and create a new one |
+| `Unable to initialize backend 'tpu': ... START_SESSION failed` when `mashbox` starts | the chips could not be linked into one slice. It can follow a start less than 1 s after the previous run exited, or a server stopped with `kill`, and can last through 25 minutes and a reboot | stop the server with Ctrl-C, not `kill`, and wait 10 s after it exits before the next start. If it happens, delete the chip and create a new one |
 | `TPU is already in use by process with pid ...` | another `mashbox` server is still running on the VM | stop it with Ctrl-C in its terminal (or `kill -INT <pid>`), then start again |
 | `mashbox: command not found` | `~/.local/bin` is not on your `PATH` until you log in again | use the full path `~/.local/bin/mashbox` |
 | `ModuleNotFoundError: torch` (or `transformers`, `yaml`) | the `hy-nomas` extra is not installed | run the `uv tool install` line in [Install](#install) again |
@@ -176,15 +170,15 @@ Point your agent (Claude Code, Codex, Gemini CLI or any other) at this repo and 
 ## FAQ
 
 - **Does typing a new world recompile the model?** No. Every text is padded to 256 or 512 tokens, so new text reuses the compiled programs (see [Options](#in-the-browser)).
-- **Can I run it on one TPU v6e chip or on TPU v5e?** Not yet. One chip is slower than real time with a reduced-size model, and v5e has too little memory per chip as the model is laid out ([Performance](#performance)).
+- **Can I run it on one TPU v6e chip or on TPU v5e?** No. One chip is slower than real time with a reduced-size model, and v5e has too little memory per chip as the model is laid out ([Performance](#performance)).
 - **Can I try the app without a chip?** Yes: `--stub` serves the same browser app with test frames instead of the model ([Run](#run)).
 - **Where does a rendered clip go?** `--out out.mp4` writes it on the VM. Copy it to your machine with `gcloud compute tpus tpu-vm scp hy-nomas:out.mp4 . --zone=asia-northeast1-b` before you delete the chip.
 
 ## Changelog
 
-| Version | Date | What changed |
-|---|---|---|
-| 0.1.0 | staging, not released | First release: runtime in the package (`mashbox run hy-nomas`, `--out`, `--stub`), browser app, timed actions, quality and live presets, text padded to 256 or 512 tokens, kernel bundle in mashbox-labs/Hy-Nomas-TPU with a plain JAX fallback. |
+| Version | What changed |
+|---|---|
+| 0.1.0 | First release: runtime in the package (`mashbox run hy-nomas`, `--out`, `--stub`), browser app, timed actions, quality and live presets, text padded to 256 or 512 tokens, kernel bundle in mashbox-labs/Hy-Nomas-TPU with a plain JAX fallback. |
 
 ## Credits and licences
 

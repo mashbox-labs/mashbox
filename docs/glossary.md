@@ -39,10 +39,10 @@ The words these docs use, each with one meaning. Google Cloud terms follow Googl
 | Thinking mode | A mode of some language models that writes its reasoning before the answer. Off by default. |
 | TPU | Tensor Processing Unit, Google's chip for machine learning, rented through Google Cloud. |
 | TPU v5e | A TPU generation with 16 GB of memory per chip. A model runs there when it fits. |
-| TPU v6e | The TPU generation every model here is tested on first, with 32 GB of memory per chip. |
+| TPU v6e | The default TPU generation for every model here, with 32 GB of memory per chip. |
 | TPU VM | The machine a chip is attached to. You connect to it with SSH and run the model there. |
 | Weights type | How a weights file stores its numbers: full precision, or a reduced-size type with fewer bits per weight. Each file name says its type. |
-| World model | A model that generates video of a place you steer while it plays. Hy-Nomas is one. |
+| World model | A model that generates video of a place you steer while it plays. |
 | Zone | A Google Cloud location, for example `us-east5-b`. Quota and capacity are counted per zone. |
 
 ## Details
@@ -57,11 +57,5 @@ Only chips bill in these docs. A project, a billing account, an enabled API and 
 
 ## Sources
 
-- TPU terms, accelerator types and software versions: Google's [Cloud TPU docs](https://cloud.google.com/tpu/docs), read 28 October 2026.
-- Quota row names: the Google Cloud console quotas page, 28 October 2026.
-
-## Changelog
-
-| Date | What changed |
-|---|---|
-| 28 October 2026 | First version. |
+- TPU terms, accelerator types and software versions: Google's [Cloud TPU docs](https://cloud.google.com/tpu/docs).
+- Quota row names: the Google Cloud console quotas page.

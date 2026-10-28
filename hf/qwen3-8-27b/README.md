@@ -37,11 +37,11 @@ Qwen's 27B hybrid-attention language model on one Google Cloud TPU v6e chip, wit
 
 <sub>vLLM comparisons ran both sides on the same Google Cloud TPU v6e-1: ours with Qwen3.8-27B-BQ8_R.bshj (26.94 GB, 8.01 bits per weight), vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8), since Qwen's bf16 weights do not fit one chip. Measured 2026-10-28 (UTC). Every measurement and its method: [Results](#results).</sub>
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/top/01-qwen38-27b-vs-vllm-at-a-glance-dark.png"><img alt="Qwen3.8-27B vs vLLM-TPU on the same TPU v6e-1. Measured 2026-10-28 03:55-05:47 UTC on one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1. MASHBOX measurement ledger CH-09." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/top/01-qwen38-27b-vs-vllm-at-a-glance-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/top/01-qwen38-27b-vs-vllm-at-a-glance-dark.png"><img alt="Qwen3.8-27B vs vLLM-TPU on the same TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/top/01-qwen38-27b-vs-vllm-at-a-glance-light.png" width="100%"></picture>
 
 <img alt="Qwen3.8-27B running on Google Cloud TPU" width="720" src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/hero.gif">
 
-<sub>A first-time user on a new TPU v6e-1 (28 October 2026): install, weights download, first answer. Sped up 10x, pauses over 2 s cut to 2 s.</sub>
+<sub>Qwen3.8-27B on a new TPU v6e-1: install, weights download, first answer. Sped up 10x, pauses over 2 s cut to 2 s.</sub>
 
 ## Quickstart
 
@@ -92,11 +92,11 @@ The `mashbox` server speaks the Anthropic Messages, OpenAI Responses and OpenAI 
 
 Each chart names its measurement date (UTC) and the hardware on both sides.
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/01-qwen38-27b-time-to-ready-dark.png"><img alt="Qwen3.8-27B: time to ready on one TPU v6e-1. Measured 2026-10-28 03:53-05:39 UTC on one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1. MASHBOX measurement ledger CH-01." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/01-qwen38-27b-time-to-ready-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/01-qwen38-27b-time-to-ready-dark.png"><img alt="Qwen3.8-27B: time to ready on one TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/01-qwen38-27b-time-to-ready-light.png" width="100%"></picture>
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/02-qwen38-27b-one-request-speed-dark.png"><img alt="Qwen3.8-27B: one request at a time, same TPU v6e-1. Measured 2026-10-28 03:55-05:47 UTC on one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1. MASHBOX measurement ledger CH-02." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/02-qwen38-27b-one-request-speed-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/02-qwen38-27b-one-request-speed-dark.png"><img alt="Qwen3.8-27B: one request at a time, same TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/02-qwen38-27b-one-request-speed-light.png" width="100%"></picture>
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/03-qwen38-27b-fits-one-chip-dark.png"><img alt="Qwen3.8-27B on one TPU v6e-1: weights in chip memory. Measured 2026-10-28 03:53-04:27 UTC on one TPU v6e-1, 31.24 GiB HBM vs the same TPU v6e-1 (vLLM-TPU 0.32.0). MASHBOX measurement ledger CH-03." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/03-qwen38-27b-fits-one-chip-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/03-qwen38-27b-fits-one-chip-dark.png"><img alt="Qwen3.8-27B on one TPU v6e-1: weights in chip memory. Hardware: one TPU v6e-1, 31.24 GiB HBM vs the same TPU v6e-1 (vLLM-TPU 0.32.0)." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/03-qwen38-27b-fits-one-chip-light.png" width="100%"></picture>
 
 ## Files
 

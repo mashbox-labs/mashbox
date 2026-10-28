@@ -4,14 +4,14 @@ From a Google account with no Cloud setup to a running model, then a deleted chi
 
 ## What it costs
 
-Google bills the chip from the moment it is created until it is deleted, running or idle. At Google's on-demand list price, one TPU v6e chip is $2.70 an hour (read 19 October 2026), so 30 minutes is about $1.35 and a chip left on for a day is $64.80. One TPU v5e chip is about $1.20 an hour. Prices change by region: [cloud.google.com/tpu/pricing](https://cloud.google.com/tpu/pricing).
+Google bills the chip from the moment it is created until it is deleted, running or idle. At Google's on-demand list price, one TPU v6e chip is $2.70 an hour, so 30 minutes is about $1.35 and a chip left on for a day is $64.80. One TPU v5e chip is about $1.20 an hour. Prices change by region: [cloud.google.com/tpu/pricing](https://cloud.google.com/tpu/pricing).
 
 ## Before you start
 
 - A Google account.
 - A payment method for the billing account. Google asks for one when you create a billing account (step 3).
 - A terminal: Linux or macOS, or the Google Cloud SDK Shell on Windows.
-- About 35 minutes. Our run on 28 October 2026, with a screenshot at every step, took 35 minutes from a new project to a deleted chip. The chip existed for 17 minutes, which is $0.77 at the list price above.
+- About 35 minutes from a new project to a deleted chip. The chip exists for 17 minutes of that, which is $0.77 at the list price above.
 
 ## 1. Install the Google Cloud CLI and sign in
 
@@ -50,13 +50,13 @@ gcloud config set project my-tpu-project-12345
 
 ## 3. Turn on billing
 
-If your account already has a billing account, the console links a new project to it on its own. Ours did on 28 October 2026. Check at [console.cloud.google.com/billing/linkedaccount](https://console.cloud.google.com/billing/linkedaccount) with your project selected.
+If your account already has a billing account, the console links a new project to it on its own. Check at [console.cloud.google.com/billing/linkedaccount](https://console.cloud.google.com/billing/linkedaccount) with your project selected.
 
 If it says the project has no billing account:
 
 ![Billing page: 1 Link a billing account](media/get-a-tpu-03a-billing-link.png)
 
-1. Click **Link a billing account**. If you have no billing account yet, use **Manage billing accounts** to create one first.
+1. Click **Link a billing account**. If you have no billing account, use **Manage billing accounts** to create one first.
 
 ![Set the billing account dialog: 1 billing account, 2 Set account](media/get-a-tpu-03b-billing-account.png)
 
@@ -76,7 +76,7 @@ Open [console.cloud.google.com/apis/library/tpu.googleapis.com](https://console.
 
 ![Cloud TPU API page: 1 Enable](media/get-a-tpu-04a-tpu-api.png)
 
-1. Click **Enable**. It took about a minute for us.
+1. Click **Enable**. It takes about a minute.
 
 ![Cloud TPU API details: 1 Status Enabled](media/get-a-tpu-04b-tpu-api-enabled.png)
 
@@ -95,7 +95,7 @@ Open [console.cloud.google.com/iam-admin/quotas](https://console.cloud.google.co
 ![Quotas page filtered to v6e in us-east5-b: 1 filters, 2 on-demand v6e quota](media/get-a-tpu-05a-quota.png)
 
 1. In **Filter**, type `v6e` and press Enter, then type your zone (for example `us-east5-b`) and press Enter.
-2. The row **TPU v6e cores per project per zone** is the on-demand quota. One v6e-1 chip needs 1. Our new project had 16 in us-east5-b (28 October 2026). The "Preemptible" row is for spot chips.
+2. The row **TPU v6e cores per project per zone** is the on-demand quota. One v6e-1 chip needs 1. The "Preemptible" row is for spot chips.
 
 If the value is 0, ask for more:
 
@@ -106,7 +106,7 @@ If the value is 0, ask for more:
 
 ## 6. Create one chip
 
-| Chip | `--accelerator-type` | `--version` | Zones that worked for us (October 2026) |
+| Chip | `--accelerator-type` | `--version` | Zones to try first |
 |---|---|---|---|
 | TPU v6e | `v6e-1` | `v2-alpha-tpuv6e` | us-east5-b, europe-west4-a |
 | TPU v5e | `v5litepod-1` | `v2-alpha-tpuv5-lite` | us-central1-a, us-south1-a, europe-west4-b |
@@ -128,16 +128,15 @@ In the console, open [console.cloud.google.com/compute/tpus](https://console.clo
 
 Or from the terminal:
 
-<!-- test:tpu -->
 ```bash
 gcloud compute tpus tpu-vm create mashbox-1 \
   --zone=us-east5-b --accelerator-type=v6e-1 --version=v2-alpha-tpuv6e
 gcloud compute tpus tpu-vm describe mashbox-1 --zone=us-east5-b --format='value(state)'
 ```
 
-Wait until the state is `READY`. Ours took 9 minutes (28 October 2026).
+Wait until the state is `READY`. On a new TPU v6e-1 this took 9 minutes.
 
-If a zone has no free chips, the create command fails after about 2 minutes with `There is no more capacity in the zone`. Run it again with the next zone in the table, and use that zone in every command after it. On 28 October 2026 at 03:3x UTC, us-east5-b and us-east5-a had none and europe-west4-a made the chip.
+If a zone has no free chips, the create command fails after about 2 minutes with `There is no more capacity in the zone`. Run it again with the next zone in the table, and use that zone in every command after it.
 
 ![TPU list: 1 mashbox-1 with a green check, 2 SSH](media/get-a-tpu-06c-tpu-ready.png)
 
@@ -172,13 +171,12 @@ gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b \
 
 Install and run a model:
 
-<!-- test:tpu -->
 ```bash
 gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b \
   --command='python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]" && ~/.local/bin/mashbox run qwen3-8-27b --prompt "Hello"'
 ```
 
-The chip's system Python is 3.10, and JAX for TPU needs Python 3.12. So the command first installs [uv](https://docs.astral.sh/uv/) with pip, and uv installs `mashbox` with its own Python 3.12. The `mashbox` command lands in `~/.local/bin`; the commands in these docs use that full path because the folder is not on your `PATH` until you next log in. pip and uv both print a warning saying so; that is expected. On our new chip (28 October 2026) the install took 5 to 7 seconds, and the model's first start took 138 s, most of it downloading the 26.9 GB weights file; later starts took 6.6 s.
+The chip's system Python is 3.10, and JAX for TPU needs Python 3.12. So the command first installs [uv](https://docs.astral.sh/uv/) with pip, and uv installs `mashbox` with its own Python 3.12. The `mashbox` command lands in `~/.local/bin`; the commands in these docs use that full path because the folder is not on your `PATH` until you next log in. pip and uv both print a warning saying so; that is expected. On a new TPU v6e-1 the install took 5 to 7 s, and the model's first start took 138 s, most of it downloading the 26.9 GB weights file; later starts took 6.6 s.
 
 This runs Qwen3.8-27B, which fits on the one chip from step 6. For another model, swap in its `run` command from [models.json](../models.json) and create the chip type its row lists in step 6. A model that writes files (for example a video) leaves them on the chip; copy them to your machine with `gcloud compute tpus tpu-vm scp mashbox-1:<file> . --zone=us-east5-b` before step 8.
 
@@ -194,11 +192,10 @@ In the console:
 
 ![TPU list after delete: 1 No rows to display](media/get-a-tpu-08b-deleted.png)
 
-1. Deleting took about 2.5 minutes for us. When the list says "No rows to display", the chip is gone.
+1. Deleting a TPU v6e-1 takes about 2.5 minutes. When the list says "No rows to display", the chip is gone.
 
 Or from the terminal:
 
-<!-- test:tpu -->
 ```bash
 gcloud compute tpus tpu-vm delete mashbox-1 --zone=us-east5-b --quiet
 gcloud compute tpus tpu-vm list --zone=us-east5-b
@@ -233,7 +230,7 @@ gcloud compute tpus tpu-vm list --zone=us-east5-b
 | `mashbox: command not found` | use the full path `~/.local/bin/mashbox`, or log in again so `~/.local/bin` is on your `PATH` |
 | `429 Too Many Requests` from `cdn.hf.co` during the download | Hugging Face's Xet transfer is limiting the download: run the command again. `mashbox` downloads over plain HTTPS unless `HF_HUB_DISABLE_XET=0` is set |
 | `The TPU is already in use by another process` | one process at a time can use the chip: stop the other one (for example a server in another SSH session) and run again |
-| `its runtime is not in mashbox <version> yet` | that model's port is not in the installed version yet; its page under Models says what is ready |
+| `its runtime is not in mashbox <version> yet` | that model's port is not in the installed version; its page under Models says what is ready |
 
 ## Next
 

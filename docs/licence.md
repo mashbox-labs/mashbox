@@ -28,10 +28,3 @@ Contributions are accepted under the licence in [LICENSE](../LICENSE), with a DC
 ## Sources
 
 - Upstream licences: each maker's Hugging Face repo at the revision pinned in `models.json`.
-
-## Changelog
-
-| Date | What changed |
-|---|---|
-| 28 October 2026 | First version. |
-| 28 October 2026 | Names each model's weights licence and the upstream revision it was read at; our conversions of someone else's weights keep their licence. |

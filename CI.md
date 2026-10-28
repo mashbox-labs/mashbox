@@ -6,7 +6,7 @@ Three tiers. Each change runs only what it can break, and every test has to earn
 |---|---|---|---|
 | **T0** | registry and its packaged copy, generated views, imports, test docstrings, syntax errors and undefined names, sign-off | GitHub, pytest and ruff only, about 10 s | every push and pull request |
 | **T1** | CPU tests against references (NumPy, transformers, plain JAX), only for the areas the change touches | GitHub, one job per area, CPU torch | when code in an area changes |
-| **T2** | the same code on a real TPU: kernels vs plain JAX, version pins, the CPU suite again on the chip | a fresh on-demand TPU v6e-1 that is deleted after the run | started by a maintainer for a commit; later also by label, nightly and on release tags |
+| **T2** | the same code on a real TPU: kernels vs plain JAX, version pins, the CPU suite again on the chip | a fresh on-demand TPU v6e-1 that is deleted after the run | started by a maintainer for a commit |
 
 ## What runs on which change
 
@@ -45,9 +45,9 @@ One run, on one fresh on-demand v6e-1:
 
 The chip gets the commit and the kernel bundles, never a token. The run is posted on the commit as the status `tpu/v6e-1`. The chip is deleted when the run ends, on any error, and at a hard deadline.
 
-**How to trigger it today:** say in the pull request that the change needs a chip run; a maintainer starts T2 for the commit. A label (`tpu-run`), `[tpu]` in a commit message on main, a nightly run when main moved, and release tags come next.
+**How to trigger it:** say in the pull request that the change needs a chip run; a maintainer starts T2 for the commit.
 
-**Cost:** on-demand v6e-1 list price is about $2.70 an hour. The first measured run (2026-10-28) billed 10.1 minutes, about $0.46: 2.6 min to create the chip, 13 s to install, 229 s for the 28 Hy-Nomas kernels, 46 s for the CPU suite on the chip, 2.2 min to delete. Getting a chip can take longer than the run: on-demand v6e-1 had no capacity in five zones for about 30 minutes that morning, and a failed create bills nothing. Release tags will also run the Hy-Nomas model on a v6e-4.
+**Cost:** on-demand v6e-1 list price is about $2.70 an hour. One T2 run billed 10.1 minutes, about $0.46: 2.6 min to create the chip, 13 s to install, 229 s for the 28 Hy-Nomas kernels, 46 s for the CPU suite on the chip, 2.2 min to delete. Getting a chip can take longer than the run: for example, on-demand v6e-1 had no capacity in five zones for about 30 minutes, and a failed create bills nothing.
 
 ## Every test earns its place
 

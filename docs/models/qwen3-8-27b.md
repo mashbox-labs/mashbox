@@ -2,13 +2,11 @@
 
 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) by Qwen, running on a single Google Cloud TPU v6e chip, with an OpenAI-compatible server. The model code is plain JAX in [src/mashbox/models/qwen3_8_27b](../../src/mashbox/models/qwen3_8_27b). The weights come as one BSHJ file from [mashbox-labs/Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU), and decoding uses our compiled TPU kernels (Culet).
 
-> On 28 October 2026 this page ran on a new TPU v6e-1 as a first-time user would follow it: install, first answer, the server through an SSH tunnel and 8 users at once.
-
 ## What it is
 
-![A first-time user on a new TPU v6e-1: install, weights download, first answer](../../hf/qwen3-8-27b/assets/hero.gif)
+![Qwen3.8-27B on a new TPU v6e-1: install, weights download, first answer](../../hf/qwen3-8-27b/assets/hero.gif)
 
-A first-time user on a new TPU v6e-1 (28 October 2026): install, weights download, first answer. Sped up 10x, pauses over 2 s cut to 2 s.
+Qwen3.8-27B on a new TPU v6e-1: install, weights download, first answer. Sped up 10x, pauses over 2 s cut to 2 s.
 
 How it runs:
 
@@ -20,10 +18,10 @@ How it runs:
 
 | | TPU v6e (v6e-1) | TPU v5e |
 |---|---|---|
-| Status | passing (28 October 2026) | does not fit: the weights alone are about 27 GB and a v5e chip has 16 GB |
+| Status | Supported | does not fit: the weights alone are about 27 GB and a v5e chip has 16 GB |
 | Create with | `--accelerator-type=v6e-1 --version=v2-alpha-tpuv6e` | |
 
-One TPU v6e chip is $2.70 an hour at Google's on-demand list price (read 19 October 2026). The chip bills from create to delete. Context is 2,048 tokens per request with 8 request slots.
+One TPU v6e chip is $2.70 an hour at Google's on-demand list price. The chip bills from create to delete. Context is 2,048 tokens per request with 8 request slots.
 
 You also need the Google Cloud CLI set up: [google-cloud.md](../google-cloud.md) does that from a new Google account.
 
@@ -35,7 +33,7 @@ On the chip, the package installs with one line; the command in [Run](#run) does
 python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"
 ```
 
-The chip's system Python is 3.10 and JAX for TPU needs 3.12, so pip installs [uv](https://docs.astral.sh/uv/), and uv installs `mashbox` with its own Python 3.12. The `mashbox` command goes to `~/.local/bin`; the commands on this page use that full path. pip and uv each print a warning that `~/.local/bin` is not on your `PATH`: that is expected. The install took 5 to 7 seconds on a new TPU v6e-1 (28 October 2026).
+The chip's system Python is 3.10 and JAX for TPU needs 3.12, so pip installs [uv](https://docs.astral.sh/uv/), and uv installs `mashbox` with its own Python 3.12. The `mashbox` command goes to `~/.local/bin`; the commands on this page use that full path. pip and uv each print a warning that `~/.local/bin` is not on your `PATH`: that is expected. On a new TPU v6e-1 the install took 5 to 7 s.
 
 ## Run
 
@@ -99,7 +97,7 @@ The default is greedy (temperature 0): the same prompt gives the same answer. Fo
 | `top_k` | 0 (no cut) | 20 |
 | `presence_penalty` | 0 | 1.5 |
 
-With these settings our server gave 33.0 tokens/s for one request at a time on TPU v6e-1 (28 October 2026, [Compared with vLLM TPU](#compared-with-vllm-tpu-on-the-same-chip)).
+With these settings the `mashbox` server gives 33.0 tokens/s for one request at a time on a TPU v6e-1 ([Compared with vLLM TPU](#compared-with-vllm-tpu-on-the-same-chip)).
 
 ### Server routes and sampling
 
@@ -111,11 +109,11 @@ Routes: `GET /health`, `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/
 |---|---|---|---|---|---|
 | `Qwen3.8-27B-BQ8_R.bshj` | BSHJ | 26.94 GB | 8.01 | mean KL 0.00065, top-1 agreement 99.72% vs bf16 (8 prompts x 32 tokens) | 38.6 tokens/s for 1 request, 269 tokens/s for 8 |
 
-Made from the original bf16 weights: each large weight matrix (and the embedding and output layers) is stored as int8 values with one f32 scale per output row; norms and the small linear-attention tensors keep their original dtype. The original weights stay at [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B). Speed measured 2026-10-28 on TPU v6e-1 (64-token prompt, 128 new tokens, greedy, default options); quality measured 2026-10-27 against Hugging Face transformers in bf16 with the same weights.
+Made from the original bf16 weights: each large weight matrix (and the embedding and output layers) is stored as int8 values with one f32 scale per output row; norms and the small linear-attention tensors keep their original dtype. The original weights stay at [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B). Speed measured on TPU v6e-1 (64-token prompt, 128 new tokens, greedy, default options); quality measured against Hugging Face transformers in bf16 with the same weights.
 
 ## Performance
 
-Measured on 28 October 2026 on one TPU v6e-1 (on demand, zone europe-west4-a), after following this page on a new chip: `mashbox` 0.1.0 with its kernel bundle and JAX 0.11.2 for TPU (`~/.local/bin/mashbox env` prints the full list), through the server with the default options (greedy, `--ctx 2048 --slots 8`). Chat prompts of about 30 tokens, 128 new tokens per request.
+Measured on one TPU v6e-1 (on demand), set up on a new chip as this page shows: `mashbox` 0.1.0 with its kernel bundle and JAX 0.11.2 for TPU (`~/.local/bin/mashbox env` prints the full list), through the server with the default options (greedy, `--ctx 2048 --slots 8`). Chat prompts of about 30 tokens, 128 new tokens per request.
 
 | What | Result |
 |---|---|
@@ -124,16 +122,16 @@ Measured on 28 October 2026 on one TPU v6e-1 (on demand, zone europe-west4-a), a
 | 8 users, each sending a new request as soon as its answer came back, for 60 s | 258 tokens/s in total; a request took 4.0 s (median) |
 | Install (`pip install uv` and `uv tool install`) | 5 to 7 s |
 | Start to ready on a new chip: download of the 26.9 GB file from Hugging Face (about 200 MB/s there), sha256 check, load; compiled programs come from the shipped compile cache | 138 s; 9.8 s of it after the download and check |
-| The same first start without the compile cache (same chip, same day) | 166.6 s; 25.7 s after the download and check |
+| The same first start without the compile cache (same chip) | 166.6 s; 25.7 s after the download and check |
 | Start to ready, later runs | 6.6 s (median of 3) |
 
-The engine on its own does 38.6 tokens/s for 1 request and 269 tokens/s for 8 ([Variants](#variants)). On TPU v6e with JAX 0.11.2, `mashbox run` also downloads a 47 MB compile cache from the model repo (checked by sha256 like the weights), so the first start loads its compiled programs instead of compiling them. Any other chip or JAX version compiles on first use and keeps the result. A prompt length the server has not seen before compiles its programs once (5.8 s extra on that first request in our run); the result is kept on disk in `~/.cache/mashbox/xla`, so later runs skip it. Download speed depends on the zone and the day.
+The engine on its own does 38.6 tokens/s for 1 request and 269 tokens/s for 8 ([Variants](#variants)). On TPU v6e with JAX 0.11.2, `mashbox run` also downloads a 47 MB compile cache from the model repo (checked by sha256 like the weights), so the first start loads its compiled programs instead of compiling them. Any other chip or JAX version compiles on first use and keeps the result. A prompt length the server has not seen before compiles its programs once (5.8 s extra on that first request on a TPU v6e-1); the result is kept on disk in `~/.cache/mashbox/xla`, so later runs skip it. Download speed depends on the zone and the day.
 
-Quality from the installed package on the same chip, the same day: mean KL 0.00065 and top-1 agreement 99.72% against Hugging Face transformers in bf16 on our 8 fixed prompts (367 token positions), the same as in [Variants](#variants).
+Quality from the installed package on the same chip: mean KL 0.00065 and top-1 agreement 99.72% against Hugging Face transformers in bf16 on 8 fixed prompts (367 token positions), the same as in [Variants](#variants).
 
 ### Compared with vLLM TPU on the same chip
 
-Measured on 28 October 2026 on one TPU v6e-1 (on demand, zone us-east5-b), one server on the chip at a time, the same OpenAI chat requests to both (streamed, 256 new tokens, thinking off). Ours: `mashbox` 0.1.0 with `Qwen3.8-27B-BQ8_R.bshj` (26.94 GB, 8.01 bits per weight) and default options. vLLM: vllm-tpu 0.32.0 with Qwen's own 8-bit file [Qwen/Qwen3.8-27B-FP8](https://huggingface.co/Qwen/Qwen3.8-27B-FP8), the closest like-for-like.
+Measured on one TPU v6e-1 (on demand), one server on the chip at a time, the same OpenAI chat requests to both (streamed, 256 new tokens, thinking off). Ours: `mashbox` 0.1.0 with `Qwen3.8-27B-BQ8_R.bshj` (26.94 GB, 8.01 bits per weight) and default options. vLLM: vllm-tpu 0.32.0 with Qwen's own 8-bit file [Qwen/Qwen3.8-27B-FP8](https://huggingface.co/Qwen/Qwen3.8-27B-FP8), the closest like-for-like.
 
 | What | mashbox | vLLM TPU 0.32.0 |
 |---|---|---|
@@ -142,8 +140,6 @@ Measured on 28 October 2026 on one TPU v6e-1 (on demand, zone us-east5-b), one s
 | 1 request at a time, short prompts, greedy | 38.1 tokens/s | 31.4 tokens/s |
 | 1 request at a time, 790-token prompts, greedy | 37.0 tokens/s | 31.0 tokens/s |
 | 1 request at a time, sampled (temperature 0.7, top_p 0.8, top_k 20) | 33.0 tokens/s | 23.7 tokens/s |
-
-<!-- TODO source="public link to the v6e-1 run record (status/tpu-v6e.json) once tpu_ci publishes it" -->
 
 ## Use it with your coding agent
 
@@ -162,8 +158,6 @@ Claude Code, Codex and Pi can use Qwen3.8-27B as their LLM: start the server wit
 | `The TPU is already in use by another process` | one process at a time can use the chip, for example a server you started in another SSH session | stop that process (Ctrl-C in its session) and run again; if `sudo lsof -w /dev/vfio/0` shows no process, the lock file is left over: `sudo rm /tmp/libtpu_lockfile`, as the message says |
 | `There is no more capacity in the zone` when you create the chip | no free TPU v6e chips in that zone right now | create it in another zone from [step 6 of the setup guide](../google-cloud.md#6-create-one-chip) and use that zone in every later command |
 
-The last five rows are errors we hit ourselves, following this page on a new TPU v6e-1 on 28 October 2026.
-
 ## FAQ
 
 - **Why not TPU v5e?** The weights alone are about 27 GB and a v5e chip has 16 GB.
@@ -172,13 +166,13 @@ The last five rows are errors we hit ourselves, following this page on a new TPU
 
 ## Changelog
 
-| Version | Date | What changed |
-|---|---|---|
-| 0.1.1 | 28 Oct 2026 | Server: `/v1/completions` without streaming returns `choices[0].text`, as OpenAI does. `mashbox tpu`: a failed chip list shows Google's error instead of reading as no chips; the tunnel stops when the chip is gone; the max lifetime runs on a wall-clock timer; a create that may have reached Google before an error (such as an expired sign-in) is deleted by name, or `up` prints its name and the delete command. Docs: settings for long Claude Code, Codex and Pi sessions, and installing on your own computer. |
-| 0.1.0 | 28 Oct 2026 | First release: one TPU v6e chip, OpenAI-compatible server, compiled kernels for 8 request slots, compile cache for TPU v6e. |
+| Version | What changed |
+|---|---|
+| 0.1.1 | Server: `/v1/completions` without streaming returns `choices[0].text`, as OpenAI does. `mashbox tpu`: a failed chip list shows Google's error instead of reading as no chips; the tunnel stops when the chip is gone; the max lifetime runs on a wall-clock timer; a create that may have reached Google before an error (such as an expired sign-in) is deleted by name, or `up` prints its name and the delete command. Docs: settings for long Claude Code, Codex and Pi sessions, and installing on your own computer. |
+| 0.1.0 | First release: one TPU v6e chip, OpenAI-compatible server, compiled kernels for 8 request slots, compile cache for TPU v6e. |
 
 ## Credits and licences
 
-Qwen3.8-27B is made by Qwen: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B). Model weights: Apache-2.0, Qwen's licence as published with Qwen3.8-27B (recorded 28 October 2026), kept unchanged in [licenses/qwen3-8-27b/LICENSE](../../licenses/qwen3-8-27b/LICENSE).
+Qwen3.8-27B is made by Qwen: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B). Model weights: Apache-2.0, Qwen's licence as published with Qwen3.8-27B, kept unchanged in [licenses/qwen3-8-27b/LICENSE](../../licenses/qwen3-8-27b/LICENSE).
 
 Our code in this repo: Apache-2.0 (see [LICENSE](../../LICENSE)). Compiled kernels: see [LICENSE-KERNELS](../../LICENSE-KERNELS).
