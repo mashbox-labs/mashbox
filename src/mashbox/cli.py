@@ -109,6 +109,7 @@ def warm(eng, chat):
 
 
 def cmd_run(a):
+    keys = api_keys(a) if a.prompt is None else []       # before the load: a bad key file fails at once
     m, eng, chat, info, t0 = load(a)
     if a.prompt is not None:
         ids = chat.chat_ids([dict(role="user", content=a.prompt)], enable_thinking=a.thinking)
@@ -125,7 +126,41 @@ def cmd_run(a):
         warm(eng, chat)
     srv.ready = True
     log(json.dumps(dict(event="ready", seconds_since_start=round(time.time() - t0, 1))))
-    serve(srv, a.host, a.port, log)
+    serve(srv, a.host, a.port, log, keys=keys)
+
+
+KEY_FILE = os.path.join(os.path.expanduser("~"), ".config", "mashbox", "api-key")
+
+
+def api_keys(a):
+    """The server's API keys: --api-key-file (one per line, as llama-server), else MASHBOX_API_KEY (comma-separated),
+    else none on a loopback --host; on any other --host one is made (once) in ~/.config/mashbox/api-key, mode 0600, and
+    its path is printed, never the key."""
+    from .runtime import guard
+    if a.api_key_file:
+        with open(a.api_key_file) as f:
+            keys = [x.strip() for x in f.read().splitlines() if x.strip()]
+        if not keys:
+            raise SystemExit(f"mashbox: {a.api_key_file} holds no key")
+        src = a.api_key_file
+    elif os.environ.get("MASHBOX_API_KEY", "").strip():
+        keys, src = [x.strip() for x in os.environ["MASHBOX_API_KEY"].split(",") if x.strip()], "MASHBOX_API_KEY"
+    elif guard.loopback(a.host):
+        return []
+    else:
+        if not os.path.exists(KEY_FILE):
+            os.makedirs(os.path.dirname(KEY_FILE), exist_ok=True)
+            fd = os.open(KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(guard.new_token() + "\n")
+        with open(KEY_FILE) as f:
+            keys, src = [x.strip() for x in f.read().splitlines() if x.strip()], KEY_FILE
+    if not keys:                                                        # never start open because a key source is empty
+        raise SystemExit(f"mashbox: {src} holds no key"
+                         + (" (delete the file and start again: a new key is made)" if src == KEY_FILE else ""))
+    log(json.dumps(dict(event="api_key", keys=len(keys), source=src,
+                        use="send Authorization: Bearer <key> (or x-api-key: <key>) on /v1 requests")))
+    return keys
 
 
 def main(argv=None):
@@ -156,6 +191,10 @@ def main(argv=None):
             p.add_argument("--seed", type=int, default=0)
             p.add_argument("--host", default="127.0.0.1")
             p.add_argument("--port", type=int, default=8000)
+            p.add_argument("--api-key-file", metavar="FILE",
+                           help="require an API key from FILE (one per line; each key has its own prompt cache) on /v1 "
+                                "requests; also MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host "
+                                "a key made in ~/.config/mashbox/api-key")
             p.add_argument("--ctx", type=int, default=2048)
             p.add_argument("--slots", type=int, default=8)
             p.add_argument("--steps", type=int, default=8, help="decode steps per device call")
@@ -174,5 +213,6 @@ def main(argv=None):
     if a.cmd == "download":
         return cmd_download(a)
     if a.host not in ("127.0.0.1", "localhost", "::1"):
-        log("note: serving on a non-loopback address exposes the server to your network; prefer an SSH tunnel")
+        log("note: serving on a non-loopback address exposes the server to your network (an API key is required); "
+            "prefer an SSH tunnel")
     return cmd_run(a)

@@ -12,10 +12,16 @@ if [ "${1:-}" != fire ]; then
   [ "$secs" -gt 0 ] || { log "off (mashbox-max-seconds=$secs)"; exit 0; }
   mkdir -p /var/lib/mashbox
   [ -s /var/lib/mashbox/deadline ] || echo $(( $(date +%s) + secs )) > /var/lib/mashbox/deadline
-  dl=$(cat /var/lib/mashbox/deadline); left=$(( dl - $(date +%s) )); [ "$left" -gt 0 ] || left=1
   md instance/attributes/startup-script > /usr/local/sbin/mashbox-life && chmod 755 /usr/local/sbin/mashbox-life
-  if systemd-run --unit=mashbox-life --on-active="${left}s" /usr/local/sbin/mashbox-life fire >/dev/null 2>&1; then how=systemd-run
-  else nohup sh -c "sleep $left; /usr/local/sbin/mashbox-life fire" >/dev/null 2>&1 & how="sleep"; fi
+  dl=$(cat /var/lib/mashbox/deadline); left=$(( dl - $(date +%s) ))   # after the fetch: a past calendar time never fires
+  # A wall-clock timer: a monotonic one (--on-active) fired 5 min late on a queued chip (10-28), most likely because its
+  # VM was paused while Google provisioned it (the monotonic clock stops, the wall clock does not).
+  if [ "$left" -le 2 ]; then nohup /usr/local/sbin/mashbox-life fire >/dev/null 2>&1 & how="now, deadline passed"
+  elif systemd-run --unit=mashbox-life --timer-property=AccuracySec=1s \
+       --on-calendar="$(date -u -d @"$dl" '+%Y-%m-%d %H:%M:%S') UTC" /usr/local/sbin/mashbox-life fire >/dev/null 2>&1; then
+    how=systemd-run
+  else nohup sh -c "while [ \$(date +%s) -lt $dl ]; do sleep 20; done; /usr/local/sbin/mashbox-life fire" >/dev/null 2>&1 &
+    how="wall-clock loop"; fi
   log "armed ($how): delete at $(date -u -d @"$dl" +%FT%TZ), in ${left}s"; exit 0
 fi
 p=$(md instance/attributes/mashbox-project); z=$(md instance/attributes/mashbox-zone)

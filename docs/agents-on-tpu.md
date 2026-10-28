@@ -1,40 +1,46 @@
 # Use with coding agents
 
-Claude Code, Codex and Pi can use a model that `mashbox` serves as their LLM. The `mashbox` server speaks the three APIs these agents use: Anthropic Messages (Claude Code), OpenAI Responses (Codex) and OpenAI chat completions with tool calls (Pi). This is part of the server, not of one model, so every LLM that `mashbox run` serves gets it. Today that is [Qwen3.8-27B](models/qwen3-8-27b.md), the example on this page. For another LLM, put its id from the models table in place of `qwen3-8-27b`.
+Claude Code, Codex and Pi can use a model that `mashbox` serves on your TPU as their LLM. Keep the agent you already have: nothing on this page reinstalls it or changes its normal settings. Claude Code reads one extra settings file that you name when you start it, Codex gets an added provider and profile, and Pi gets a profile folder of its own. Started the usual way, each agent works as before.
 
-The agent keeps working the way it always does: it reads files, runs commands, edits code and goes back and forth with the model, and every request runs on your chip.
+The `mashbox` server speaks the APIs these agents use: Anthropic Messages (Claude Code), OpenAI Responses (Codex) and OpenAI chat completions with tool calls (Pi). Every LLM that `mashbox run` serves gets them. Today that is [Qwen3.8-27B](models/qwen3-8-27b.md), the example on this page.
 
-| Model | Server options for agents | Chip |
-|---|---|---|
-| [Qwen3.8-27B](models/qwen3-8-27b.md) | `--ctx 32768 --slots 1` | TPU v6e-1 |
+## What it costs
 
-## What you need
+The chip bills from create to delete: $2.70 an hour for one TPU v6e chip at Google's on-demand list price (read 19 October 2026). The server does not charge per token and does not check keys.
 
-- A chip with `mashbox` installed: [Run on Google Cloud TPU](google-cloud.md) and the model's guide. Qwen3.8-27B runs on one TPU v6e chip, $2.70 an hour on demand at Google's list price (read 19 October 2026), billed from create to delete.
-- Claude Code, Codex CLI or Pi on your own machine.
+## Before you start
+
+- A TPU v6e-1 with `mashbox` on it, from the [Quickstart](quickstart.md) or the [Qwen3.8-27B guide](models/qwen3-8-27b.md). Below the chip is `qwen-1` in zone `us-east5-b`: use your chip's name and zone.
+- Claude Code, Codex CLI or Pi, already installed on your machine. We tested Claude Code 2.1.312, Codex CLI 0.165.0 and Pi 1.4.0.
+- Port 8000 free on your machine.
 
 ## 1. Start the server and the tunnel
 
-From your machine, with your chip's name and zone (the [Qwen3.8-27B guide](models/qwen3-8-27b.md) calls the chip `qwen-1`):
+From your machine:
 
 <!-- test:tpu -->
 ```bash
 gcloud compute tpus tpu-vm ssh qwen-1 --zone=us-east5-b --command='~/.local/bin/mashbox run qwen3-8-27b --ctx 32768 --slots 1' -- -L 8000:127.0.0.1:8000
 ```
 
-Agents send long prompts (Claude Code sends about 18,000 tokens of instructions and tool descriptions before your first word), so the server runs a 32,768-token context with one conversation slot. That is what fits next to the 26.94 GB of weights on a v6e chip: two slots at this context ran out of chip memory in our test.
+Leave it running. It takes requests once it prints a line with `"event": "ready"`. The server listens only on the chip's 127.0.0.1 and the SSH tunnel brings it to port 8000 on your machine, so nothing is open to the internet.
 
-Leave it running and wait for the line `{"event": "ready", ...}`. The server listens only on the chip's 127.0.0.1 and the SSH tunnel brings it to port 8000 on your machine, so nothing is open to the internet. Check it from a second terminal: `curl http://127.0.0.1:8000/health` prints `{"status": "ok"}`.
+When the tunnel closed, the server kept running on the chip in our run. To stop it:
 
-The server does not check API keys. The agents below want one, so give them any string, for example `local`.
+```bash
+gcloud compute tpus tpu-vm ssh qwen-1 --zone=us-east5-b --command='pkill -f "mashbox run"'
+```
+
+`--ctx 32768 --slots 1` gives one conversation of up to 32,768 tokens, which is what fits next to the 26.94 GB of weights on a v6e chip (two slots at this context ran out of chip memory). Each agent below is set to compact its conversation before it gets there.
 
 ## 2. Point your agent at it
 
 ### Claude Code
 
-Add an `env` block to `~/.claude/settings.json`:
+Save these settings in a new file:
 
-```json
+```bash
+cat > ~/.claude/mashbox.json <<'EOF'
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:8000",
@@ -46,106 +52,162 @@ Add an `env` block to `~/.claude/settings.json`:
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3-8-27b",
     "CLAUDE_CODE_SUBAGENT_MODEL": "qwen3-8-27b",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "DISABLE_TELEMETRY": "1",
-    "DISABLE_ERROR_REPORTING": "1",
-    "DISABLE_AUTOUPDATER": "1",
     "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768",
-    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4096"
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "36000",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4096",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING": "1",
+    "MAX_THINKING_TOKENS": "0"
   },
-  "model": "qwen3-8-27b"
+  "model": "qwen3-8-27b",
+  "permissions": {
+    "deny": ["Agent", "CronCreate", "CronDelete", "CronList", "EnterWorktree", "ExitWorktree", "ListAgents", "Monitor", "NotebookEdit", "ReportFindings", "ScheduleWakeup", "SendMessage", "Skill", "TaskStop", "WebFetch", "WebSearch", "Workflow"]
+  }
 }
+EOF
 ```
 
-Then run `claude` as usual. If you already use Claude Code with your Anthropic account, put these settings in a separate user or project so your normal setup stays as it is.
+Then, in your project folder:
+
+```bash
+claude --settings ~/.claude/mashbox.json --strict-mcp-config
+```
+
+The file sends every request to the tunnel with our model in every role and turns off Claude Code's other network traffic for the session. It makes Claude Code compact at about 19,000 tokens (it compacts at `CLAUDE_CODE_MAX_CONTEXT_TOKENS` minus its output size minus about 13,000), so the summary still has room, and turns thinking off so one step cannot use up the rest of the 32,768 tokens. The deny list leaves out 17 tools that cannot work here or that a coding session does not need: the first prompt drops from about 20,000 tokens to about 8,000. `--strict-mcp-config` leaves out your MCP servers for the session, as their tools would take room too. Nothing is written to your `~/.claude/settings.json`, and `claude` without these options works as before.
 
 ### Codex CLI
 
-In `~/.codex/config.toml`:
+Codex reads a named profile from its own file next to `config.toml`. Save this as `~/.codex/mashbox.config.toml`:
 
-```toml
+```bash
+cat > ~/.codex/mashbox.config.toml <<'EOF'
 model_provider = "mashbox"
 model = "qwen3-8-27b"
 model_context_window = 32768
 model_auto_compact_token_limit = 26214
-check_for_update_on_startup = false
-
-[analytics]
-enabled = false
+model_reasoning_effort = "none"
 
 [model_providers.mashbox]
 name = "MASHBOX TPU"
 base_url = "http://127.0.0.1:8000/v1"
-env_key = "MASHBOX_API_KEY"
 wire_api = "responses"
+EOF
 ```
 
-Then `export MASHBOX_API_KEY=local` and run `codex`. Codex 0.165 accepts only `wire_api = "responses"`; the server has the Responses API for it.
+Then, in your project folder:
+
+```bash
+codex --profile mashbox
+```
+
+Codex compacts at 26,214 tokens (80% of 32,768), and `model_reasoning_effort = "none"` keeps thinking off even when your own config sets an effort, so long thinking cannot fill the context. Your `~/.codex/config.toml` stays as it is, and `codex` without `--profile mashbox` works as before. Codex 0.165 refuses a `[profiles.mashbox]` table inside `config.toml` when you start it with `--profile mashbox`: use the separate file.
 
 ### Pi
 
-In `~/.pi/agent/models.json`:
+Make a Pi profile folder with the provider and compaction settings:
 
-```json
+```bash
+mkdir -p ~/.pi/mashbox
+cat > ~/.pi/mashbox/models.json <<'EOF'
 {
   "providers": {
     "mashbox": {
       "baseUrl": "http://127.0.0.1:8000/v1",
       "api": "openai-completions",
-      "apiKey": "$MASHBOX_API_KEY",
+      "apiKey": "local",
       "models": [{"id": "qwen3-8-27b", "name": "Qwen3.8-27B on MASHBOX TPU", "contextWindow": 32768, "maxTokens": 4096, "reasoning": false}]
     }
   }
 }
-```
-
-And in `~/.pi/agent/settings.json`:
-
-```json
+EOF
+cat > ~/.pi/mashbox/settings.json <<'EOF'
 {
   "defaultProvider": "mashbox",
-  "defaultModel": "qwen3-8-27b"
+  "defaultModel": "qwen3-8-27b",
+  "compaction": {"enabled": true, "reserveTokens": 6144, "keepRecentTokens": 8192}
 }
+EOF
 ```
 
-Then `export MASHBOX_API_KEY=local` and run `pi`.
+Then, in your project folder:
 
-Other agents that take an OpenAI-compatible base URL can use the same values: base URL `http://127.0.0.1:8000/v1`, the model id, any key. We tested the three above.
+```bash
+PI_CODING_AGENT_DIR=~/.pi/mashbox pi
+```
 
-## Check it worked
+Pi's default compaction (reserve 16,384 tokens, keep 20,000) does not fit a 32,768 context: after one large file read Pi stays stuck on `prompt is too long`. These settings compact at 26,624 tokens and keep the last 8,192. Your `~/.pi/agent` folder stays as it is, and `pi` alone works as before.
 
-Every request is one line in the server's output, for example:
+## 3. Check it works
+
+From a second terminal on your machine:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+It prints `{"status": "ok"}`. Then one turn from your agent, in your project folder. Claude Code:
+
+```bash
+claude --settings ~/.claude/mashbox.json --strict-mcp-config -p "Reply with one word: ready"
+```
+
+Codex:
+
+```bash
+codex exec --profile mashbox "Reply with one word: ready"
+```
+
+Pi:
+
+```bash
+PI_CODING_AGENT_DIR=~/.pi/mashbox pi -p "Reply with one word: ready"
+```
+
+Each ends with `ready`. Before it, Claude Code prints a warning that it does not know the model name (`[claude-code:unrecognized_model]`) and Codex one about model metadata: both are harmless. The first request after the server starts is slow while the server compiles its programs for this context: 46 s on our chip, then about 0.2 to 0.5 s to the first token on later turns.
+
+The server's terminal shows one line per request, with the agent in `ua`, the API in `api` and the part of the prompt it did not have to read again in `cached_tokens`:
 
 ```text
-{"event": "request", "api": "anthropic", "ua": "claude-cli/2.1.312 ...", "prompt_tokens": 18585, "cached_tokens": 18253, "new_tokens": 128, "tool_calls": 1, "ttft_s": 0.629, ...}
+{"event": "request", "api": "anthropic", "ua": "claude-cli/2.1.312 (external, cli)", "prompt_tokens": 12700, "cached_tokens": 12438, "new_tokens": 143, "tools": 7, "tool_calls": 1, "thinking": false, "finish": "stop", "dropped_tools": null, "batch_rows": 1, "ttft_s": 0.269, "total_s": 4.319}
 ```
-
-`api` says which API the agent used and `cached_tokens` how much of the prompt the server did not have to read again.
 
 ## What we measured
 
-Qwen3.8-27B on one TPU v6e-1 (us-east5-b, 28 October 2026). Each agent was given the same kind of task, "run the test, find the bug, fix it, run the test again", in a small Python project with a planted bug. All three fixed it, and the server log shows every request.
+Each agent did the same 9-turn session in its normal terminal interface on one TPU v6e-1 (europe-west4-a, on demand) running `mashbox` 0.1.0 from PyPI, on 28 October 2026. The agents were set up with the steps on this page and nothing else, in a user account where they were already installed. The project was a clone of [python-slugify](https://github.com/un33k/python-slugify) (133 tests). Every request is in the server's log.
 
-| Agent | Version | API | Result |
-|---|---|---|---|
-| Claude Code | 2.1.312 | Anthropic Messages, streamed | ran the test, read 2 files, edited, reran: `ok`. 6 requests, 182 s |
-| Codex CLI | 0.165.0 | OpenAI Responses, streamed | ran the test, read the files, patched, reran: `ok` |
-| Pi | 1.4.0 | OpenAI chat completions with tools, streamed | ran the test and read the file in one turn, edited, reran: `ok` |
+Seconds per turn, from sending the prompt to the agent being done:
 
-Agents send the whole conversation again on every turn. The server keeps the start of the last prompt on the chip and reads only what is new:
+| Turn | What the agent was asked | Claude Code 2.1.312 | Codex CLI 0.165.0 | Pi 1.4.0 |
+|---|---|---|---|---|
+| 1 | read two files and note a codename and a reviewer for later | 44 | 27 | 21 |
+| 2 | write a new module and its tests | 18 | 36 | 21 |
+| 3 | run the new tests | 6 | 14 | 72 |
+| 4 | fix the module for a failing test we added | 24 | 33 | 31 |
+| 5 | add a parameter and two tests, run them | 38 | 32 | 23 |
+| 6 | run the whole suite and `git status` | 18 | 23 | 10 |
+| 7 | read a long CI log and name the failed step, error code, file and line | 175 | 52 | 50 |
+| 8 | give the codename and reviewer from turn 1, from memory | 184 | 56 | 5 |
+| 9 | commit the three new files with the reviewer in the message | 24 | 24 | 80 |
+| | Requests | 35 | 36 | 34 |
+| | Prompt tokens read from cache | 84% | 52% | 87% |
+| | Time to first token, median, prompt cached / not cached | 0.27 s / 9.0 s | 0.33 s / 5.5 s | 0.26 s / 4.5 s |
+| | Compactions (turn) | 2 (7 and 8) | 1 (8) | 1 (9) |
 
-| Prompt | Time to first token, first turn | Time to first token, next turns |
-|---|---|---|
-| 19,467 tokens | 12.2 s | 0.70 to 1.15 s (99.6% of the prompt cached) |
-| 30,179 tokens | 27.4 s | 0.77 s |
+All three answered every turn correctly: the failed step `wheel-audit`, error `E7731`, `slugify/special.py` line 42, the codename and reviewer, and a commit of exactly the three files with the reviewer named; the full suite passed after each session. Claude Code had also saved the codename and reviewer in its own memory file in turn 1 and read that file again after compacting. Codex answered from its compacted summary, and Pi still had turn 1 in its context (it compacted in turn 9).
 
-Answers stream at about 29 tokens a second at a 20,000-token context.
+Where the time goes:
+
+- **Compacting.** Claude Code's two compactions took 139 s and 173 s: it writes a summary of up to 4,096 tokens, and answers stream at about 29 tokens a second at a 20,000-token context.
+- **Codex's title request.** Every turn Codex also sends a short request (about 4,700 tokens) to name the task. With one slot it takes the place of the conversation in the cache, so the next request reads the whole conversation again (4 to 17 s to the first token). That is why Codex reads less from cache.
+- **Pi, turn 3.** In Pi's terminal the project's Python was not on the `PATH` (in the other two it was), so Pi first looked for it.
+- **First requests.** The first request after the server starts took 46 s, and a prompt length the server has not seen yet adds a few seconds once.
+
+Times are approximate: our test driver typed each prompt into the agent and took the turn as done after 12 s with no change on screen, and those 12 s are taken off. To answer without stopping, the driver started Claude Code with `--permission-mode acceptEdits --allowedTools Bash` and Codex with `--dangerously-bypass-approvals-and-sandbox` added to the commands above.
 
 ## Limits
 
-- **One conversation at a time is cached.** With one slot, two agents on one chip take turns and each switch reads the whole prompt again (about 12 s for 19,000 tokens on Qwen3.8-27B). Use one chip per agent if you run several.
-- **Context.** Prompts over 32,767 tokens are refused with `prompt is too long`. Set the agent's context to 32,768 so it compacts the conversation before that.
-- **Thinking.** Claude Code asks for thinking, and the model then thinks before each step, which takes longer. Codex and Pi do not ask for it by default.
+- **One conversation at a time is cached.** With one slot, two agents on one chip take turns and each switch reads the whole prompt again. Use one chip per agent if you run several.
+- **Context.** Prompts over 32,767 tokens are refused with `prompt is too long`. The settings above make each agent compact before that.
+- **Thinking is off** in the settings above. In an earlier test on a TPU v6e-1 the same day, Claude Code with thinking on ran out of room above 27,000 tokens: 12 answers were cut off at the context limit and one turn kept compacting for over 8 minutes.
 - **Text only.** Images and files in a request are refused with an error that says so.
 - **Hosted tools.** Tools that run on Anthropic's or OpenAI's servers (web search) are not available here. A Claude Code web search request is refused with an error; Codex's web search tool is left out of the list the model sees, and the server log names it under `dropped_tools`.
 
@@ -153,10 +215,15 @@ Answers stream at about 29 tokens a second at a 20,000-token context.
 
 | What you see | What to do |
 |---|---|
-| `prompt is too long: N tokens > 32767 maximum` | lower the agent's context setting to 32,768 or start a new session |
-| `Connection refused` from the agent | the tunnel is down; start step 1 again |
-| `The TPU is already in use by process ...` when restarting the server | an old server is still running on the chip; stop it with Ctrl-C in its terminal and wait a few seconds |
-| Codex: `wire_api = "chat" is no longer supported` | use `wire_api = "responses"` |
+| `prompt is too long: N tokens > 32767 maximum` | use the context settings in step 2 for your agent, or start a new session |
+| `Connection refused` from the agent or from `curl` | the tunnel is down; run step 1 again |
+| `bind [127.0.0.1]:8000: Address already in use` in step 1 | something else on your machine uses port 8000; stop it, or use `-L 8001:127.0.0.1:8000` and 8001 in every address in step 2 |
+| `403 Host not allowed`, `403 Origin not allowed` or `415 Content-Type must be application/json` from the server | the server answers clients on this machine by localhost or an IP address; a web page of another site, or a request with another host name, is refused, and a POST must send `Content-Type: application/json` (agents and `curl -H 'Content-Type: application/json'` do) |
+| `The TPU is already in use by process ...` when starting the server | an old server is still running on the chip; stop it with the command at the end of step 1 and wait a few seconds |
+| Claude Code: `[claude-code:unrecognized_model]` | a warning only; Claude Code works |
+| Codex: `Model metadata for qwen3-8-27b not found` | a warning only; Codex works |
+| Codex: `--profile mashbox cannot be used while ... config.toml contains legacy ... [profiles.mashbox]` | Codex 0.165 wants the profile in its own file: move those lines to `~/.codex/mashbox.config.toml` as in step 2 |
+| Codex: `wire_api = "chat" is no longer supported` | use `wire_api = "responses"` as in step 2 |
 
 ## Next
 

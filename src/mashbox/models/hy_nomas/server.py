@@ -26,6 +26,38 @@ from . import prompts as PR
 from .cameras import Cameras, block_angles
 
 HOST = '127.0.0.1'
+LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
+
+
+def _hostname(v):
+    """'127.0.0.1:8790', '[::1]:8790' or 'http://localhost:18873' -> the bare lower-case host name ('' when missing)."""
+    v = (v or '').strip().lower()
+    v = v.split('://', 1)[1] if '://' in v else v
+    v = v.split('/', 1)[0]
+    if v.startswith('['):
+        return v[1:v.find(']')] if ']' in v else ''
+    return v.rsplit(':', 1)[0] if v.count(':') == 1 else v
+
+
+def request_allowed(headers, allow):
+    """Pages on this machine only: the Host must be a loopback name (any port, so an SSH tunnel on another local port works) or
+    one listed in MASHBOX_ALLOW_HOSTS, which refuses DNS-rebinding names; an Origin, when the browser sends one, must pass the
+    same test, which refuses pages of other sites (their POSTs and their WebSockets)."""
+    o = headers.get('Origin')
+    return _hostname(headers.get('Host')) in allow and (o is None or _hostname(o) in allow)
+
+
+def seed_of(v, default):
+    """Seed from a request: a whole number from 0 to 2**32 - 1 (numpy's range), else ValueError (answered 400)."""
+    v = default if v is None or v == '' else v                    # 0 is a seed, not "no seed"
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    if isinstance(v, bool) or not isinstance(v, (int, str)):
+        raise ValueError('seed must be a whole number from 0 to 4294967295')
+    s = int(v)                                                   # a string that is not a whole number: ValueError
+    if not 0 <= s < 2 ** 32:
+        raise ValueError('seed must be a whole number from 0 to 4294967295')
+    return s
 FPS = 24.0
 GUID = b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
@@ -609,7 +641,13 @@ class Live:
             if r is not None:
                 if r['kind'] == 'world':
                     self.world = r['world']
-                self.eng.reset(r.get('seed', self.world['seed']))
+                try:
+                    self.eng.reset(r.get('seed', self.world['seed']))
+                except Exception as e:  # one bad request never ends this thread
+                    self.log(json.dumps(dict(event='reset_failed', err=repr(e)[:300])))
+                    with self.cv:
+                        self.mode, self.msg = 'paused', 'That start failed; pick a world or press Restart.'
+                    continue
                 with self.cv:
                     self.sess += 1
                     self.w, self.cams, self.mode, self.msg, ahead = 0, self.new_cams(), 'playing', '', None
@@ -790,7 +828,7 @@ class Live:
     def api(self, path, body):
         if path == '/api/world':
             mode = body.get('mode', 'preset')
-            seed = int(body.get('seed') or self.seed)
+            seed = seed_of(body.get('seed'), self.seed)
             if mode == 'preset':
                 w = self.worlds[body['id']]
                 spec = dict(id=w['id'], title=w['title'], seg1=w['seg1'], seg2=w['seg2'])
@@ -825,7 +863,7 @@ class Live:
             if not self.world:
                 raise ValueError('no world yet')
             with self.cv:
-                seed = int(body.get('seed') or self.world['seed'])
+                seed = seed_of(body.get('seed'), self.world['seed'])
                 self.world['seed'] = seed
                 self.req.append(dict(kind='restart', seed=seed))
                 self.cv.notify_all()
@@ -874,6 +912,7 @@ class Live:
         page = page_bytes()
         live = self
         wl = [dict(id=w['id'], title=w['title'], seg1=w['seg1'], seg2=w['seg2']) for w in self.worlds.values()]
+        allow = LOOPBACK | {h.strip().lower() for h in os.environ.get('MASHBOX_ALLOW_HOSTS', '').split(',') if h.strip()}
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -890,7 +929,13 @@ class Live:
                 self.end_headers()
                 self.wfile.write(b)
 
+            def _refuse(self, code, err):
+                self.close_connection = True
+                self._json(code, dict(err=err))
+
             def do_GET(self):
+                if not request_allowed(self.headers, allow):
+                    return self._refuse(403, 'host or origin not allowed: open the page through localhost (see the docs)')
                 path = self.path.split('?')[0]
                 if path in ('/', '/index.html'):
                     self.send_response(200)
@@ -911,6 +956,10 @@ class Live:
                     self._json(404, dict(err='not found'))
 
             def do_POST(self):
+                if not request_allowed(self.headers, allow):
+                    return self._refuse(403, 'host or origin not allowed: open the page through localhost (see the docs)')
+                if not (self.headers.get('Content-Type') or '').lower().startswith('application/json'):
+                    return self._refuse(415, 'send JSON (Content-Type: application/json)')
                 n = int(self.headers.get('Content-Length', 0) or 0)
                 if n > 20000:
                     return self._json(413, dict(err='too big'))

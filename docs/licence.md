@@ -10,16 +10,16 @@ Which licence covers which part of this repo and its downloads. The licence file
 |---|---|
 | Our code: the `mashbox` package and CLI, model ports, demo apps, docs | Apache License 2.0 ([LICENSE](../LICENSE)). |
 | Compiled kernel bundles (our Culet kernels, one bundle per release) and the precompiled compile cache | MASHBOX Kernel Licence 1.0 ([LICENSE-KERNELS](../LICENSE-KERNELS)): free for personal use, research and evaluation, and for any use by companies under US$1M annual revenue; larger companies in production write to hello@mashbox.gg. |
-| Model weights | Each model's own licence, as its makers state it. It is shown on the model's Hugging Face card, and upstream licence files are kept unchanged in `licenses/`. |
+| Model weights, and our conversions of them (such as our BQ8_R file of Qwen3.8-27B) | The licence their makers publish, read at the revision we pin. It is shown on the model's Hugging Face card, and the upstream LICENSE file is kept unchanged in `licenses/` and in the model's Hugging Face repo. |
 
 ## Details
 
 ### Per model
 
-| Model | Made by | Licence |
-|---|---|---|
-| Hy-Nomas | Tencent Hunyuan | [as stated by Tencent](https://huggingface.co/tencent/Hy-Nomas/blob/main/LICENSE), kept unchanged in [licenses/hy-nomas/](../licenses/hy-nomas/LICENSE) |
-| Qwen3.8-27B | Qwen | [as stated by Qwen](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE), kept unchanged in [licenses/qwen3-8-27b/](../licenses/qwen3-8-27b/LICENSE) |
+| Model | Made by | Weights licence | From |
+|---|---|---|---|
+| Hy-Nomas | Tencent Hunyuan | Apache-2.0, [as stated by Tencent](https://huggingface.co/tencent/Hy-Nomas/blob/main/LICENSE), kept unchanged in [licenses/hy-nomas/](../licenses/hy-nomas/LICENSE) | tencent/Hy-Nomas@4b8b4ed8 |
+| Qwen3.8-27B | Qwen | Apache-2.0, [as stated by Qwen](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE), kept unchanged in [licenses/qwen3-8-27b/](../licenses/qwen3-8-27b/LICENSE) | Qwen/Qwen3.8-27B@1d4bf0f2 |
 
 ### Contributions
 
@@ -34,3 +34,4 @@ Contributions are accepted under the licence in [LICENSE](../LICENSE), with a DC
 | Date | What changed |
 |---|---|
 | 28 October 2026 | First version. |
+| 28 October 2026 | Names each model's weights licence and the upstream revision it was read at; our conversions of someone else's weights keep their licence. |

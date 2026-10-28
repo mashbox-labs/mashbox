@@ -1,7 +1,7 @@
 <!-- Generated file: edit the FAQ source, not this page. -->
 # Frequently asked questions
 
-What we ran into while running these models on new Google Cloud TPU chips as first-time users on 28 October 2026, and what to do about each. Each model guide also has a Troubleshooting table with every error message we saw: [Qwen3.8-27B](models/qwen3-8-27b.md#troubleshooting), [Hy-Nomas](models/hy-nomas.md#troubleshooting).
+What we ran into while running these models on new Google Cloud TPU chips as first-time users on 28 October 2026, and what to do about each. The [Qwen3.8-27B guide](models/qwen3-8-27b.md#troubleshooting) also has a Troubleshooting table with every error message we saw.
 
 ## Getting a chip
 
@@ -11,7 +11,7 @@ What we ran into while running these models on new Google Cloud TPU chips as fir
 
 **Why:** Google has no free chip of that type in that zone right now. It changes from hour to hour, and it is outside our control. On 28 October 2026 we saw it for TPU v6e-1 in us-east5-b, us-east5-a, us-south1-a and asia-northeast1-b, and for TPU v6e-4 in asia-northeast1-b, us-east5-a, us-east5-b, europe-west4-a and us-south1-a.
 
-**What to do:** Run the same create command in another zone, then use that zone in every later command. Or queue a request in that zone: it costs nothing while it waits, and the chip bills from the moment Google grants it (the two lines are on the [Hy-Nomas page](models/hy-nomas.md#install)). Zones that gave us a chip on 28 October 2026: TPU v6e-1 in europe-west4-a and us-east5-b, TPU v6e-4 in asia-northeast1-b, europe-west4-a and us-east5-b (all through queued requests), TPU v5e-1 in us-south1-a.
+**What to do:** Run the same create command in another zone, then use that zone in every later command. Or queue a request in that zone: it costs nothing while it waits, and the chip bills from the moment Google grants it. Zones that gave us a chip on 28 October 2026: TPU v6e-1 in europe-west4-a and us-east5-b, TPU v6e-4 in asia-northeast1-b, europe-west4-a and us-east5-b (all through queued requests), TPU v5e-1 in us-south1-a.
 
 ### How long does it take to get a chip?
 
@@ -52,6 +52,21 @@ python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[t
 ```
 
 Hy-Nomas is coming soon; its own install lines come with it.
+
+### pip install uv fails with externally-managed-environment
+
+**What you see:** `error: externally-managed-environment` right after `python3 -m pip install uv` on your own computer.
+
+**Why:** That line is for the TPU VM, whose image (Ubuntu 22.04) lets pip install into the system Python. Ubuntu 24.04 and newer refuse it (PEP 668). We hit this on Ubuntu 24.04.3 on 28 October 2026.
+
+**What to do:** Install uv with its own installer, then `mashbox` with uv. On your own computer the plain `mashbox` package is enough for `mashbox tpu`; `mashbox[tpu]` is for the chip.
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+~/.local/bin/uv tool install --python 3.12 mashbox
+```
+
+On a new user on Ubuntu 24.04.3 (28 October 2026) these two lines installed uv 0.13.6 and mashbox, and `~/.local/bin/mashbox tpu -h` worked.
 
 ### mashbox: command not found
 
@@ -131,9 +146,3 @@ A TPU v6e chip has 32 GB of memory (JAX reports 31.24 GiB); a TPU v5e chip has 1
 A chip bills from create to delete, whether anything runs on it or not. Google's on-demand list prices, read 19 October 2026: TPU v6e-1 $2.70 an hour, TPU v6e-4 $10.80 an hour, TPU v5e-1 $1.20 an hour. A queued request costs nothing while it waits. Deleting a chip took about 2.5 minutes in our runs.
 
 **What to do:** Delete the chip when you are done and check that the list is empty ([step 8 of the setup guide](google-cloud.md#8-delete-the-chip)). If you queued the chip, delete the queued request: that deletes the chip with it.
-
-## Before release
-
-### Do I need a Hugging Face token?
-
-Not after release: the mashbox-labs model repos will be public, and `mashbox` downloads without a token. Until then they are private, so early testers need a read token in `~/.cache/huggingface/token` (where `hf auth login` puts it).

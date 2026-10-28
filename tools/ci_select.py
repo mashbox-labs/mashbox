@@ -8,7 +8,8 @@
 Areas are one per models.json row (the id with underscores, e.g. hy_nomas) plus `core`:
 - a model area is its port folder, apps/<id>/, its own models.json row and the tests whose file names carry the id
 - core (the shared package, pyproject.toml, test config, workflows, tools) runs every area, because it touches every model
-- docs, licences, cards, templates and tests/tpu run T0 only
+- docs, licences, cards and templates run T0 only; a tests/tpu file runs T0 plus the area of any CPU test that reads it
+- a models.json row runs its model and the core tests (the CLI and `mashbox tpu` tests read the rows)
 - a path nothing above claims runs every area, so a new kind of file is never silently untested
 tests/conftest.py uses test_area() to mark each test with its area, so the same rule picks the tests.
 """
@@ -22,7 +23,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 T0_TESTS = {"test_core.py"}                     # the T0 suite: static and registry checks, pytest only
 EXTRA = {"hy_nomas": "imageio-ffmpeg"}          # pip packages an area's tests need beyond .[dev] (the app server test)
-T0_ONLY_DIRS = ("docs/", "licenses/", "hf/", "templates/", "tests/tpu/", ".github/ISSUE_TEMPLATE/")
+T0_ONLY_DIRS = ("docs/", "licenses/", "hf/", "templates/", ".github/ISSUE_TEMPLATE/")
+CORE_TESTS = "+core"                            # run the core T1 job without expanding to every model
 T0_ONLY_FILES = {"llms.txt", "LICENSE", "LICENSE-KERNELS", ".github/pull_request_template.md", "tests/cpu/test_core.py"}
 CORE_DIRS = ("src/mashbox/runtime/", ".github/workflows/", "tools/")
 CORE_FILES = {"pyproject.toml", "tests/conftest.py"}
@@ -52,11 +54,22 @@ def registry_areas(base, head):
     if old is None or new is None:
         return {"core"}
     changed = {i for i in old.keys() | new.keys() if old.get(i) != new.get(i)}
-    return {"core"} if changed - new.keys() else {i.replace("-", "_") for i in changed}
+    if changed - new.keys():
+        return {"core"}
+    return {i.replace("-", "_") for i in changed} | ({CORE_TESTS} if changed else set())
+
+
+def tpu_file_users(path, areas):
+    """tests/tpu/<file> -> the areas of the CPU tests that name it (test_hy_nomas_port.py runs the kernel check's
+    stand-in bundle path on CPU), so an edit there runs those tests; no reader -> T0 only."""
+    name = path.rsplit("/", 1)[-1]
+    return {test_area(p.name, areas) for p in (ROOT / "tests" / "cpu").glob("*.py") if name in p.read_text()}
 
 
 def classify(path, areas, base=None, head=None):
     """The areas one changed path selects: a set of area names, {'core'}, or an empty set (T0 only)."""
+    if path.startswith("tests/tpu/"):
+        return tpu_file_users(path, areas)
     if path in T0_ONLY_FILES or path.startswith(T0_ONLY_DIRS) or path.endswith(".md"):
         return set()
     if path in ("models.json", "src/mashbox/models.json"):
@@ -83,7 +96,11 @@ def select(files, areas, base=None, head=None):
     for f in files:
         picked |= classify(f, areas, base, head)
     if "core" in picked:
-        picked = set(areas) | ({"core"} if core_has_t1_tests(areas) else set())
+        picked = set(areas) | {"core"}
+    if CORE_TESTS in picked:
+        picked = (picked - {CORE_TESTS}) | {"core"}
+    if "core" in picked and not core_has_t1_tests(areas):
+        picked.discard("core")
     return sorted(picked)
 
 

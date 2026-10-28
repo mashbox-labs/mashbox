@@ -1,5 +1,6 @@
 """Hy-Nomas runtime on CPU: tiny models with the real architecture, the window loop, padding, LoRA merge, kernel dispatch,
 decoder shapes, cameras, prompts, the command line and the app server against the stand-in engine."""
+import base64
 import io
 import json
 import os
@@ -274,5 +275,65 @@ def test_app_server_against_stub():
             time.sleep(0.2)
         assert live.frames >= 48 and live.stream.sent > 0
         assert eng.preset == "live"
+    finally:
+        srv.shutdown()
+
+
+def test_seed_is_a_whole_number_in_range_and_zero_counts():
+    from mashbox.models.hy_nomas.server import seed_of
+    assert seed_of(0, 123) == 0 and seed_of(None, 123) == 123 and seed_of("", 7) == 7 and seed_of("42", 7) == 42
+    assert seed_of(2 ** 32 - 1, 0) == 2 ** 32 - 1 and seed_of(5.0, 0) == 5
+    for bad in (-1, 2 ** 32, 1.5, 4294967295.9, True, False, "x", "1.5", [1], {}):
+        with pytest.raises(ValueError):
+            seed_of(bad, 0)
+
+
+def test_app_server_same_machine_only_and_bad_seeds():
+    """Only pages on this machine drive the server (Host and Origin loopback, JSON POSTs); a bad seed is a 400 and generation goes on."""
+    import http.client
+    import urllib.error
+    from mashbox.models.hy_nomas import server as S
+    try:
+        import imageio_ffmpeg  # noqa: F401
+    except ImportError:
+        pytest.skip("imageio-ffmpeg not installed")
+    eng = S.StubEngine(lambda *a: None, dit_s=0.05, dec_s=0.02, encode_s=0.0)
+    live = S.Live(eng, lambda *a: None, hw="STUB", stub=True, buffer=0.2)
+    port = free_port()
+    srv = live.start(port)
+    base = "http://127.0.0.1:%d" % port
+
+    def code(p, body=None, **h):
+        r = urllib.request.Request(base + p, None if body is None else json.dumps(body).encode(), h)
+        try:
+            with urllib.request.urlopen(r, timeout=5) as f:
+                return f.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def ws(origin):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request("GET", "/ws", headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Version": "13",
+                                         "Sec-WebSocket-Key": base64.b64encode(b"the sample nonce").decode(), "Origin": origin})
+        st = c.getresponse().status
+        c.close()
+        return st
+    J = {"Content-Type": "application/json"}
+    try:
+        assert code("/") == 200 and code("/", Host="localhost:%d" % (port + 1)) == 200   # a tunnel on another local port
+        assert code("/", Host="evil.example:%d" % port) == 403 and code("/api/state", Host="evil.example") == 403
+        wid = json.loads(urllib.request.urlopen(base + "/api/state", timeout=5).read())["worlds"][0]["id"]
+        assert code("/api/world", dict(mode="preset", id=wid), **J, Origin="https://evil.example") == 403
+        assert code("/api/world", dict(mode="preset", id=wid), **{"Content-Type": "text/plain"}) == 415
+        assert code("/api/world", dict(mode="preset", id=wid), **J, Origin=base) == 200
+        assert ws("https://evil.example") == 403 and ws("null") == 403 and ws(base) == 101
+        for bad in (-1, 2 ** 32, "x"):
+            assert code("/api/restart", dict(seed=bad), **J) == 400
+            assert code("/api/world", dict(mode="preset", id=wid, seed=bad), **J) == 400
+        assert code("/api/restart", dict(seed=2 ** 32 - 1), **J) == 200
+        f0, t0 = live.frames, time.time()
+        while time.time() - t0 < 30 and live.frames < f0 + 48:
+            time.sleep(0.2)
+        assert live.frames >= f0 + 48
     finally:
         srv.shutdown()

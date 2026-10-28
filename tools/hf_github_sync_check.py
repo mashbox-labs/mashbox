@@ -318,6 +318,15 @@ def readme_measured(m):
             f"[All results](https://huggingface.co/{m['hf_repo']})")
 
 
+def profile_measured(m):
+    """Profile cell: the README's lead number (first headline marked readme), chip named; else the first result."""
+    hl = [h for h in m.get("headline") or [] if h.get("readme")]
+    if not hl:
+        return measured_cell(m, n=1)
+    r = m["results"][hl[0]["results"][0]]
+    return f"**{hl[0]['big']}** {hl[0]['label']} ({r['chip']})"
+
+
 def profile_table(reg):
     """Compact view for the org profile (reads on a phone): model and maker, in and out, chips passed."""
     rows = []
@@ -325,7 +334,7 @@ def profile_table(reg):
         passed = [f"TPU {c} ({m['chips'][c]['date']})" for c in CHIPS
                   if (m["chips"].get(c) or {}).get("status") == "passing"]
         rows.append([f"**[{m['name']}]({code_url(reg, m)})** by {m['upstream']['maker']}",
-                     f"{m['in']} in, {m['out']} out", measured_cell(m, n=1), ", ".join(passed) or "pending"])
+                     f"{m['in']} in, {m['out']} out", profile_measured(m), ", ".join(passed) or "pending"])
     return table(["Model", "What it does", "Measured", "Chip tests"], rows) + soon_line(reg)
 
 
@@ -417,6 +426,27 @@ def license_text(reg, m):
     if up["license"] == "other":
         return f"[{up['license_name']}]({up['license_link']})"
     return up["license"]
+
+
+SPDX = {"apache-2.0": "Apache-2.0", "mit": "MIT", "bsd-3-clause": "BSD-3-Clause", "cc-by-4.0": "CC-BY-4.0"}
+
+
+def weights_licence(m):
+    """The card's weights line: the upstream licence recorded at our pin, never our own (someone else's weights, and
+    our conversions of them, follow their licence)."""
+    up = m["upstream"]
+    name = SPDX.get(str(up["license"]).lower(), up.get("license_name") or up["license"])
+    rev = up.get("revision")
+    pin = f"{up['hf']}@{rev[:8]}" if rev else up["hf"]
+    url = f"https://huggingface.co/{up['hf']}/tree/{rev}" if rev else f"https://huggingface.co/{up['hf']}"
+    return f"Weights: {name} licence, from [{pin}]({url})"
+
+
+def upstream_licence_file(m):
+    if not (m["upstream"].get("license_sha256") and m["hf_repo"]):
+        return ""
+    return (f"{m['upstream']['maker']}'s LICENSE file is in this repo, unchanged: "
+            f"[LICENSE](https://huggingface.co/{m['hf_repo']}/blob/main/LICENSE). ")
 
 
 def highlights(m):
@@ -544,6 +574,7 @@ def card_vars(reg, m, repo=None):
         "docs_url": docs_url(m), "agents_url": f"{gh_base(reg)}/blob/v{reg['version']}/AGENTS.md",
         "results_table": results_table(m), "results_charts": results_charts(repo, m), "files_table": files_table(m), "chips_table": chips_table(m),
         "license_text": license_text(reg, m), "our_license": reg["license"],
+        "weights_licence": weights_licence(m), "upstream_licence_file": upstream_licence_file(m),
         "notes": m.get("notes", ""), "agents_section": agents_section(m),
         "kernels_section": kernels_section(reg, m),
         "kernels_license": (f"The compiled kernels in `kernels/` are under their own licence: "
@@ -569,6 +600,38 @@ def splice(text, block, where, problems):
     return text[:a] + "\n" + block + "\n" + text[b:]
 
 
+LINK_RE = re.compile(r'(!?\[[^\]]*\]\()([^)\s]+)(\))|((?:src|srcset|href)=")([^"]+)(")')
+
+
+def pin_links(reg, repo, text, where, problems):
+    """README is also the PyPI page, where repo-relative paths do not resolve: every relative link and image becomes an
+    absolute URL pinned to the release tag v<version> (images from raw.githubusercontent.com, files from blob/, folders
+    from tree/), as the HF cards already pin code_url. Pinned URLs of an older version move to the current one."""
+    org, name, ver = reg["github"]["org"], reg["github"]["repo"], reg["version"]
+    old = re.compile(rf"(https://github\.com/{org}/{name}/(?:blob|tree)/|https://raw\.githubusercontent\.com/{org}/{name}/)"
+                     rf"v\d+\.\d+\.\d+(?=/)")
+    text = old.sub(lambda mt: mt.group(1) + "v" + ver, text)
+
+    def sub(mt):
+        if mt.group(2) is not None:
+            pre, target, post, image = mt.group(1), mt.group(2), mt.group(3), mt.group(1).startswith("!")
+        else:
+            pre, target, post = mt.group(4), mt.group(5), mt.group(6)
+            image = not pre.startswith("href")
+        if re.match(r"[a-z][a-z0-9+.-]*:|#|/", target):
+            return mt.group(0)
+        path, _, frag = target.partition("#")
+        if not (repo / path).exists():
+            problems.add(where, f"relative link to a missing path: {target}")
+            return mt.group(0)
+        if image:
+            url = f"https://raw.githubusercontent.com/{org}/{name}/v{ver}/{path}"
+        else:
+            url = f"{gh_base(reg)}/{'tree' if (repo / path).is_dir() else 'blob'}/v{ver}/{path.rstrip('/')}"
+        return pre + url + ("#" + frag if frag else "") + post
+    return LINK_RE.sub(sub, text)
+
+
 def render_all(reg, repo, profile, templates, problems):
     """Return {relative path or 'profile': rendered text} for every view."""
     views = {}
@@ -576,7 +639,7 @@ def render_all(reg, repo, profile, templates, problems):
     if readme.exists():
         out = splice(readme.read_text(), models_table(reg, absolute=False), "README.md", problems)
         if out is not None:
-            views["README.md"] = out
+            views["README.md"] = pin_links(reg, repo, out, "README.md", problems)
     else:
         problems.add("README.md", "missing")
     llms = repo / "llms.txt"
@@ -594,6 +657,78 @@ def render_all(reg, repo, profile, templates, problems):
         if m["hf_repo"]:
             views[f"hf/{m['id']}/README.md"] = render_card(reg, m, templates, repo)
     return views
+
+
+LICENCE_UNSTATED_RE = re.compile(r"(?i)not chosen|not decided|pending|all rights reserved|LICENSE-PENDING")
+APACHE_HEAD = ("Apache License", "Version 2.0, January 2004")
+LICENCE_GLOBS = ("README.md", "llms.txt", "AGENTS.md", "CONTRIBUTING.md", "SECURITY.md", "docs/*.md", "docs/models/*.md",
+                 "hf/*/README.md", "templates/hf/*.md")
+LICENCE_HISTORY = {"CORE-CHANGES.md"}  # dated history: older entries keep the words they had on their date
+
+
+def _sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _upstream_pins(repo, m):
+    """{repo: revision} pinned by the model's upstream.json (its code commit and every repo it downloads), or None."""
+    f = repo / m["path"] / "upstream.json"
+    if not f.is_file():
+        return None
+    u = json.loads(f.read_text())
+    pins = {u["code"]["repo"]: u["code"]["commit"]} if u.get("code") else {}
+    pins.update({r["hf"]: r["revision"] for r in (u.get("repos") or {}).values() if r.get("hf")})
+    return pins
+
+
+def check_licences(reg, repo, problems):
+    """Licence drift, report only: fails when the licence files, package metadata, upstream pins or the licence wording
+    of a page or card source disagree with models.json. Never edits (a licence is changed by people, by hand).
+    The rule: our stack is Apache-2.0; someone else's weights, and our conversions of them, keep the
+    upstream licence recorded at our pin, with the upstream LICENSE file unchanged."""
+    ours = str(reg["license"])
+    lic = repo / "LICENSE"
+    if not lic.is_file():
+        problems.add("LICENSE", "missing")
+    elif ours == "Apache-2.0" and not all(s in lic.read_text()[:400] for s in APACHE_HEAD):
+        problems.add("LICENSE", "is not the Apache License 2.0 text, while models.json license is Apache-2.0")
+    py = repo / "pyproject.toml"
+    if py.is_file():
+        import tomllib
+        proj = tomllib.loads(py.read_text()).get("project", {})
+        if proj.get("license") != ours:
+            problems.add("pyproject.toml", f"[project].license is {proj.get('license')!r}, models.json license is {ours!r}")
+        if "LICENSE" not in proj.get("license-files", []):
+            problems.add("pyproject.toml", "[project].license-files does not list LICENSE")
+    for m in reg["models"]:
+        up, where = m["upstream"], f"models.json {m['id']}"
+        f, want = repo / "licenses" / m["id"] / "LICENSE", up.get("license_sha256")
+        if f.is_file() and not want:
+            problems.add(where, f"upstream.license_sha256 missing (the sha256 of licenses/{m['id']}/LICENSE as pinned)")
+        elif want and not f.is_file():
+            problems.add(where, f"licenses/{m['id']}/LICENSE missing (copy the upstream file unchanged)")
+        elif want and _sha256(f) != want:
+            problems.add(f"licenses/{m['id']}/LICENSE", "differs from the pinned upstream file (upstream.license_sha256); never edit it")
+        pins = _upstream_pins(repo, m)
+        if pins is not None and up["hf"] in pins and pins[up["hf"]] != up.get("revision"):
+            problems.add(where, f"upstream.revision differs from upstream.json ({str(pins[up['hf']])[:12]})")
+        for c in up.get("components", []):
+            src = c.get("hf") or c.get("github") or "?"
+            for key in ("license", "revision"):
+                if str(c.get(key) or "").strip().lower() in UNCONFIRMED:
+                    problems.add(where, f"upstream.components {src}: {key} is empty")
+            if pins is not None and pins.get(src) != c.get("revision"):
+                problems.add(where, f"upstream.components {src}: revision differs from upstream.json ({str(pins.get(src))[:12]})")
+    files = []
+    for g in LICENCE_GLOBS:
+        files += [f for f in sorted(repo.glob(g)) if f.is_file() and f not in files]
+    for f in files:
+        rel = f.relative_to(repo).as_posix()
+        if rel in LICENCE_HISTORY:
+            continue
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            if re.search(r"(?i)licen[cs]e", line) and LICENCE_UNSTATED_RE.search(line):
+                problems.add(f"{rel}:{i}", "licence wording says not chosen, pending or reserved; models.json states it")
 
 
 # ---------------------------------------------------------------- online
@@ -640,6 +775,12 @@ def check_online(reg, views, fetch, problems):
             continue
         where = f"hf {m['hf_repo']}"
         st, body = fetch.get(f"https://huggingface.co/api/models/{m['hf_repo']}")
+        if m.get("launch"):  # coming soon: private (401/403 without a token) or absent, never public before its launch
+            if st == 200 and not (json.loads(body).get("private") or json.loads(body).get("gated")):
+                problems.add(where, f"public before its launch ({m['launch']})")
+            elif st not in (200, 401, 403, 404):
+                problems.add(where, f"cannot read the repo state (HTTP {st})")
+            continue
         if st != 200:
             problems.add(where, f"repo not found (HTTP {st})")
             continue
@@ -662,6 +803,13 @@ def check_online(reg, views, fetch, problems):
             problems.add(where, f"card not readable at {rev[:12]} (HTTP {st})")
         elif want is not None and card.strip() != want.strip():
             problems.add(where, "card on Hugging Face differs from the card rendered from models.json")
+        lic_sha = m["upstream"].get("license_sha256")
+        if lic_sha:  # the upstream LICENSE travels with our conversion, unchanged (Apache-2.0 section 4)
+            st, text = fetch.get(f"https://huggingface.co/{m['hf_repo']}/raw/{rev}/LICENSE")
+            if st != 200:
+                problems.add(where, f"no LICENSE at {rev[:12]} (HTTP {st}): upload licenses/{m['id']}/LICENSE unchanged")
+            elif hashlib.sha256(text.encode()).hexdigest() != lic_sha:
+                problems.add(where, f"LICENSE at {rev[:12]} differs from the pinned upstream file")
     gh = reg["github"]
     st, _ = fetch.get(f"https://api.github.com/repos/{gh['org']}/{gh['repo']}/git/ref/tags/v{reg['version']}")
     if st != 200:
@@ -725,6 +873,7 @@ def main(argv=None):
             problems.add(key, "rendered view missing on disk (run render --write)")
         elif path.read_text() != text:
             problems.add(key, "differs from the view rendered from models.json (run render --write)")
+    check_licences(reg, repo, problems)
     if a.org_defaults:
         for name in ("CONTRIBUTING.md", "SECURITY.md"):
             mine, theirs = repo / name, Path(a.org_defaults) / name

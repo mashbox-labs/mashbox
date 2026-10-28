@@ -6,6 +6,14 @@ Responses, for Codex); stream true or false. See agents.py for the coding-agent 
 Requests sent together (within GATHER_S of the first) run as one batch of up to S rows (the engine's slot count), so
 several users share each decode step. Requests that arrive while a batch is running wait for it to finish, then run
 together as the next batch. Send "merge": false to run a request alone.
+
+Who may call it (runtime/guard.py): a request must name the server as localhost, 127.0.0.1, [::1], another IP address
+or its own --host (a DNS-rebinding page names its own domain and is refused); a browser request must come from the
+server's own origin; a POST must be Content-Type application/json, so a web page cannot send one without a CORS
+preflight, which this server never approves. Clients that are not browsers (curl, SDKs, coding agents) pass as before.
+With API keys (cli.py: --api-key-file or MASHBOX_API_KEY; made for you when --host is not loopback) every /v1 request
+needs one (Authorization: Bearer or x-api-key), and each key's prompts have a prefix cache of their own: a cached prompt
+is reused, and reported as cached_tokens, only for requests made with the same key.
 """
 import collections
 import json
@@ -18,6 +26,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import agents as A
+from . import guard as G
 from .agents import BadRequest, TooLong
 
 GATHER_S = 0.02      # how long the first request of a batch waits for others sent at the same time
@@ -135,6 +144,8 @@ class Server:
                     j["stream"].put((ids[i][:j["max_new"]], fin[i] is not None or len(ids[i]) >= j["max_new"], fin[i]))
         try:
             kw = dict(marks=[j.get("mark") for j in batch]) if getattr(self.engine, "prefix_cache", False) else {}
+            if kw and any(j.get("scope") is not None for j in batch):     # API keys: each key's cache is its own
+                kw["scopes"] = [j.get("scope") for j in batch]
             r = self.engine.generate([j["ids"] for j in batch], max_new=mx, stop_ids=self.chat.stop_ids,
                                      samp=[j["samp"] for j in batch], on_step=tap, **kw)
             for i, j in enumerate(batch):
@@ -149,7 +160,7 @@ class Server:
             if j.get("stream") is not None:
                 j["stream"].put(None)
 
-    def submit(self, ids, k, merge, stream, mark=None, clamp=False):
+    def submit(self, ids, k, merge, stream, mark=None, clamp=False, scope=None):
         room = self.engine.CTX - len(ids)
         if clamp:
             if room < 1:
@@ -159,7 +170,7 @@ class Server:
         if len(ids) + k["max_tokens"] > self.engine.CTX:
             raise BadRequest(f"prompt ({len(ids)} tokens) + max_tokens ({k['max_tokens']}) is over the context of {self.engine.CTX}")
         job = dict(ids=ids, max_new=k["max_tokens"], samp=samp_of(k), merge=merge, ev=threading.Event(),
-                   stream=queue.Queue() if stream else None, mark=mark)
+                   stream=queue.Queue() if stream else None, mark=mark, scope=scope)
         self.q.put(job)
         return job
 
@@ -186,10 +197,10 @@ class Server:
         return dict(object="list", data=[dict(id=self.model_id, object="model", owned_by="mashbox-labs", created=0,
                                               max_model_len=self.engine.CTX, **self.info)])
 
-    def complete(self, b, chat, write_sse=None):
+    def complete(self, b, chat, write_sse=None, meta=None):
         k = knobs_of(b)
         ids = self.prompt_ids(b, chat)
-        job = self.submit(ids, k, bool(b.get("merge", True)), write_sse is not None)
+        job = self.submit(ids, k, bool(b.get("merge", True)), write_sse is not None, scope=(meta or {}).get("scope"))
         rid = ("chatcmpl-" if chat else "cmpl-") + uuid.uuid4().hex[:24]
         created = int(time.time())
         obj = "chat.completion" if chat else "text_completion"
@@ -229,7 +240,7 @@ class Server:
         finish = "stop" if (r["finish"] == "stop" or tx.done) else "length"
         n_out = len(r["ids"])
         choice = dict(index=0, finish_reason=finish)
-        choice.update(message=dict(role="assistant", content=text) if chat else dict(text=text))
+        choice.update(dict(message=dict(role="assistant", content=text)) if chat else dict(text=text))
         return dict(id=rid, object=obj, created=created, model=self.model_id, choices=[choice],
                     usage=dict(prompt_tokens=len(ids), completion_tokens=n_out, total_tokens=len(ids) + n_out),
                     system_fingerprint=f"seed-{k['seed']}")
@@ -253,7 +264,7 @@ class Server:
             ids = self.chat.chat_ids(msgs, think, tools or None)
         except Exception as e:
             raise BadRequest(f"chat template: {e}")
-        job = self.submit(ids, k, merge, True, mark=self.mark_of(ids), clamp=True)
+        job = self.submit(ids, k, merge, True, mark=self.mark_of(ids), clamp=True, scope=(meta or {}).get("scope"))
         if on_start is not None:
             on_start(len(ids))
         par, tx = A.OutParser(tools, think), Text(self.chat, k["stop"])
@@ -540,11 +551,44 @@ class SSE:
             self.done()
 
 
-def serve(server, host="127.0.0.1", port=8000, log=print):
+def key_scope(headers, keys):
+    """The index of the API key a request carries (Authorization: Bearer or x-api-key), None when it carries none of them.
+    Every key is compared in full, in constant time."""
+    a = headers.get("Authorization") or ""
+    given = [g for g in (a[7:].strip() if a[:7].lower() == "bearer " else None, headers.get("x-api-key")) if g]
+    hit = None
+    for i, k in enumerate(keys):
+        for g in given:
+            if G._same(g, k) and hit is None:
+                hit = i
+    return hit
+
+
+def serve(server, host="127.0.0.1", port=8000, log=print, keys=None):
+    """keys: API keys a request must carry on /v1 (None or empty: no key). Each key is its own prefix cache scope.
+    /health stays open, as llama-server's public endpoints."""
     S = server
+    keys = [k for k in (keys or []) if k]
+    guard = G.Guard(hosts=[host])
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        scope = None
+
+        def _gate(self, key=True):
+            """Host, Origin and Content-Type for every request, and the API key when `key`. True = answered (refused)."""
+            err = guard.check(self.command, self.path, self.headers, auth=False)
+            if err is None and keys and key:
+                self.scope = key_scope(self.headers, keys)
+                if self.scope is None:
+                    err = (401, "missing or wrong API key: send Authorization: Bearer <key> or x-api-key: <key>")
+            if err is None:
+                return False
+            anth = self.path.startswith("/v1/messages")
+            typ = {401: "authentication_error", 403: "permission_error"}.get(err[0], "invalid_request_error")
+            self._err(err[0], err[1], typ, anth=anth)
+            self.close_connection = True
+            return True
 
         def _send(self, code, obj):
             body = json.dumps(obj).encode()
@@ -561,12 +605,16 @@ def serve(server, host="127.0.0.1", port=8000, log=print):
             self._send(code, dict(error=dict(message=msg, type=typ)))
 
         def do_HEAD(self):
+            if self._gate(key=False):
+                return
             self.send_response(200 if S.ready else 503)
             self.send_header("Content-Length", "0")
             self.end_headers()
 
         def do_GET(self):
             path = self.path.split("?")[0].rstrip("/") or "/"
+            if self._gate(key=path not in ("/health", "/v1/health", "/")):      # /health needs no key
+                return
             if path in ("/health", "/v1/health", "/"):
                 return self._send(200 if S.ready else 503, dict(status="ok" if S.ready else "loading"))
             if path == "/v1/models":
@@ -581,6 +629,8 @@ def serve(server, host="127.0.0.1", port=8000, log=print):
             api = {"/v1/chat/completions": "chat", "/v1/completions": "completions", "/v1/messages": "anthropic",
                    "/v1/messages/count_tokens": "count_tokens", "/v1/responses": "responses"}.get(path)
             anth = api in ("anthropic", "count_tokens")
+            if self._gate():
+                return
             if api is None:
                 return self._err(404, f"not found: POST {path}", anth=anth)
             try:
@@ -592,7 +642,7 @@ def serve(server, host="127.0.0.1", port=8000, log=print):
                 return self._err(400, f"bad JSON body: {e}", anth=anth)
             if not S.ready:
                 return self._err(503, "model is loading", "unavailable" if not anth else "overloaded_error", anth=anth)
-            meta = dict(api=api, ua=(self.headers.get("User-Agent") or "")[:80])
+            meta = dict(api=api, ua=(self.headers.get("User-Agent") or "")[:80], scope=self.scope)
             if os.environ.get("MASHBOX_DUMP_DIR"):        # debugging client compatibility: keep each request body
                 try:
                     with open(os.path.join(os.environ["MASHBOX_DUMP_DIR"], f"{time.time():.3f}-{api}.json"), "w") as f:
@@ -605,7 +655,7 @@ def serve(server, host="127.0.0.1", port=8000, log=print):
                 if api == "count_tokens":
                     return self._send(200, S.count_tokens(b))
                 if api == "completions":
-                    return self.legacy(b, False)
+                    return self.legacy(b, False, meta)
                 fn = dict(chat=S.openai_chat, anthropic=S.anthropic, responses=S.responses)[api]
                 r = fn(b, sse, meta)
                 if sse is None:
@@ -623,7 +673,7 @@ def serve(server, host="127.0.0.1", port=8000, log=print):
                     return sse.error(f"{type(e).__name__}: {e}", anth, "server_error" if not anth else "api_error")
                 return self._err(500, f"{type(e).__name__}: {e}", "server_error" if not anth else "api_error", anth=anth)
 
-        def legacy(self, b, chat):
+        def legacy(self, b, chat, meta=None):
             if b.get("stream"):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -636,13 +686,13 @@ def serve(server, host="127.0.0.1", port=8000, log=print):
                     self.wfile.write(b"data: " + json.dumps(o).encode() + b"\n\n")
                     self.wfile.flush()
                 try:
-                    S.complete(b, chat, write)
+                    S.complete(b, chat, write, meta)
                 except BadRequest as e:
                     write(dict(error=dict(message=str(e), type="invalid_request_error")))
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
                 return
-            return self._send(200, S.complete(b, chat))
+            return self._send(200, S.complete(b, chat, meta=meta))
 
         def log_message(self, *a):
             pass

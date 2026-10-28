@@ -112,6 +112,31 @@ def test_views_match_models_json():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_licence_check_catches_drift(tmp_path):
+    """The licence check (report only, never edits) fails on each kind of mismatch with models.json: the package licence,
+    an upstream LICENSE that is not the pinned file, and a page that says a licence is not chosen."""
+    import importlib.util
+    import shutil
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    reg = json.loads((ROOT / "models.json").read_text())
+    problems = sc.Problems()
+    sc.check_licences(reg, ROOT, problems)
+    assert not problems, problems
+    shutil.copy(ROOT / "LICENSE", tmp_path / "LICENSE")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\nlicense = "MIT"\nlicense-files = ["LICENSE"]\n')
+    mid = next(m["id"] for m in reg["models"] if m["upstream"].get("license_sha256"))
+    (tmp_path / "licenses" / mid).mkdir(parents=True)
+    (tmp_path / "licenses" / mid / "LICENSE").write_text("edited\n")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "x.md").write_text("Our code: licence not chosen yet.\n")
+    problems = sc.Problems()
+    sc.check_licences(reg, tmp_path, problems)
+    text = " ".join(problems)
+    assert "pyproject.toml" in text and f"licenses/{mid}/LICENSE" in text and "docs/x.md:1" in text, text
+
+
 def test_run_stops_cleanly_for_a_model_without_its_runtime(capsys):
     from mashbox import cli
     reg = json.loads((ROOT / "models.json").read_text())
@@ -120,3 +145,72 @@ def test_run_stops_cleanly_for_a_model_without_its_runtime(capsys):
             assert cli.main(["run", m["id"]]) == 2
             assert cli.main(["download", m["id"]]) == 2
             assert "not in mashbox" in capsys.readouterr().err
+
+
+KNOWN_WITHOUT_KERNEL_CHECK = {"qwen3-8-27b"}        # Qwen lane adds tests/tpu/qwen3_8_27b_kernel_check.py; this set only shrinks
+
+
+def test_every_kernel_bundle_has_a_chip_check():
+    """A model that ships compiled kernels for a chip needs tests/tpu/<id>_kernel_check.py and its tolerance file, or
+    the chip tier (T2) never compares those kernels with plain JAX and a broken bundle ships green."""
+    missing = set()
+    for m in json.loads((ROOT / "models.json").read_text())["models"]:
+        a = m["id"].replace("-", "_")
+        if m.get("kernels") and not all((ROOT / "tests" / "tpu" / f).is_file() for f in (f"{a}_kernel_check.py", f"{a}_kernel_tolerances.json")):
+            missing.add(m["id"])
+    assert missing <= KNOWN_WITHOUT_KERNEL_CHECK, f"kernel bundles with no chip check: {sorted(missing - KNOWN_WITHOUT_KERNEL_CHECK)}"
+
+
+def test_path_filter_runs_what_a_change_can_break():
+    """tools/ci_select.py: a wrong rule silently skips the tests a change can break, so the rules that matter are pinned."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ci_select", ROOT / "tools" / "ci_select.py")
+    cs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cs)
+    areas = cs.model_areas()
+    every = sorted(set(areas) | ({"core"} if cs.core_has_t1_tests(areas) else set()))
+    a = areas[0]
+    assert cs.select(["README.md", "docs/faq.md", f"hf/{a}/README.md", "licenses/x"], areas) == []
+    assert cs.select([f"src/mashbox/models/{a}/x.py"], areas) == [a]
+    assert cs.select([f"tests/cpu/test_{a}_x.py"], areas) == [a]
+    assert cs.select(["src/mashbox/cli.py"], areas) == every
+    assert cs.select(["some/new/kind/of/file.cfg"], areas) == every
+    for p in (ROOT / "tests" / "tpu").glob("*"):                       # a tests/tpu file a CPU test reads runs that test
+        readers = {cs.test_area(t.name, areas) for t in (ROOT / "tests" / "cpu").glob("*.py") if p.name in t.read_text()}
+        assert readers <= set(cs.select([f"tests/tpu/{p.name}"], areas)), p.name
+
+
+def test_sync_online_coming_soon_model():
+    """The nightly --online check passes a coming-soon model whose HF repo is private (401/403) or absent (404), and
+    fails one that is public before its launch or whose state cannot be read (fixtures, no network)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    reg = {"hf": {"org": "mashbox-labs"}, "github": {"org": "mashbox-labs", "repo": "mashbox"}, "version": "0.1.1",
+           "models": [{"id": "soon", "hf_repo": "mashbox-labs/Soon-TPU", "hf_revision": "", "launch": "coming soon"}]}
+
+    class Fetch:
+        def __init__(self, repo_state):
+            self.repo_state = repo_state
+
+        def get(self, url):
+            if url == "https://huggingface.co/api/models?author=mashbox-labs&limit=1000":
+                return 200, "[]"
+            if url == "https://huggingface.co/api/models/mashbox-labs/Soon-TPU":
+                return self.repo_state
+            if url == "https://api.github.com/repos/mashbox-labs/mashbox/git/ref/tags/v0.1.1":
+                return 200, "{}"
+            return 404, ""
+
+    def problems(repo_state):
+        p = sc.Problems()
+        sc.check_online(reg, {}, Fetch(repo_state), p)
+        return [str(x) for x in p]
+
+    assert problems((401, "")) == []
+    assert problems((403, "")) == []
+    assert problems((404, "")) == []
+    assert problems((200, json.dumps({"private": True}))) == []
+    assert any("public before its launch" in x for x in problems((200, json.dumps({"private": False}))))
+    assert any("cannot read the repo state" in x for x in problems((500, "")))

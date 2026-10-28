@@ -44,4 +44,4 @@ ${kernels_section}
 
 ## Licence
 
-The weights keep the original licence: ${license_text}. MASHBOX code: ${our_license}. ${kernels_license}
+${weights_licence}; code: ${our_license} (MASHBOX Labs). ${upstream_licence_file}${kernels_license}

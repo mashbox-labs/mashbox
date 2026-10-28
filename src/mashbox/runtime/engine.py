@@ -9,6 +9,8 @@ token ids its state holds at up to two points (`mark`, usually the start of the 
 prompt), with a host copy of the slot's linear-attention state at each point (the full-attention K/V stay in the slot).
 A new prompt that starts with one of those token lists goes to that slot and prefills only the tokens after it.
 Agents resend the whole conversation every turn, so each turn prefills only what is new.
+Scopes (generate(scopes=...), the server's API keys): every saved point belongs to the scope of the request that made
+it, and a prompt resumes only from points of its own scope. Without scopes everything is one scope, as before.
 """
 import time
 
@@ -150,10 +152,11 @@ class Engine:
         return (ck, cv), nxt, last
 
     # ------------------------------------------------------------------------------------------------------- prefix cache
-    def _place(self, prompts):
-        """-> slot per prompt, cached snapshot (or None) per prompt. Longest cached prefix first, then empty or least
-        recently used slots (lowest index first, so one user decodes on the smallest batch)."""
+    def _place(self, prompts, scopes=None):
+        """-> slot per prompt, cached snapshot (or None) per prompt. Longest cached prefix of the prompt's own scope first,
+        then empty or least recently used slots (lowest index first, so one user decodes on the smallest batch)."""
         n, S = len(prompts), self.S
+        sc = list(scopes or [None] * n)
         slot, snap = [None] * n, [None] * n
         if self.prefix_cache and self.state is not None:
             hits = []
@@ -161,7 +164,7 @@ class Engine:
                 for s_ in range(S):
                     for sn in self.snaps[s_]:
                         L = len(sn["ids"])
-                        if L < len(p) and sn["ids"] == tuple(p[:L]):
+                        if L < len(p) and sn.get("scope") == sc[i] and sn["ids"] == tuple(p[:L]):
                             hits.append((L, i, s_, sn))
             for L, i, s_, sn in sorted(hits, key=lambda h: -h[0]):
                 if slot[i] is None and s_ not in slot:
@@ -172,26 +175,29 @@ class Engine:
                 slot[i] = free.pop(0)
         return slot, snap
 
-    def _snap(self, state, s, ids):
+    def _snap(self, state, s, ids, scope=None):
         r, c = self.take(state[1], s)
-        return dict(ids=tuple(int(t) for t in ids), r=np.asarray(r), c=np.asarray(c))
+        return dict(ids=tuple(int(t) for t in ids), r=np.asarray(r), c=np.asarray(c), scope=scope)
 
     def reset_cache(self):
         self.state, self.snaps = None, [[] for _ in range(self.S)]
 
     # ------------------------------------------------------------------------------------------------------- generate
-    def generate(self, prompts, max_new=128, stop_ids=(), samp=None, on_step=None, marks=None):
+    def generate(self, prompts, max_new=128, stop_ids=(), samp=None, on_step=None, marks=None, scopes=None):
         try:
-            return self._generate(prompts, max_new, stop_ids, samp, on_step, marks)
+            return self._generate(prompts, max_new, stop_ids, samp, on_step, marks, scopes)
         except BaseException:
             if self.prefix_cache:      # the slot state may be half written or donated: start clean
                 self.reset_cache()
             raise
 
-    def _generate(self, prompts, max_new=128, stop_ids=(), samp=None, on_step=None, marks=None):
+    def _generate(self, prompts, max_new=128, stop_ids=(), samp=None, on_step=None, marks=None, scopes=None):
         """prompts: up to S lists of token ids. samp[i]: None (greedy) or dict(temperature, top_k, top_p, min_p, seed,
         repetition_penalty, frequency_penalty, presence_penalty). on_step(ids, finish) streams after every device call.
         marks[i]: with the prefix cache, a second point to remember inside prompt i (the start of its last message).
+        scopes[i]: with the prefix cache, the cache scope of prompt i (any hashable; None = the shared scope). A prompt
+        resumes only from points of its own scope, so one API key's prompts are never served from, or reported as cached
+        by, another key's.
         -> dict(ids, finish, timing, cached (prompt tokens served from the prefix cache, per prompt))."""
         n, S, CTX, V = len(prompts), self.S, self.CTX, self.c.V
         if not 0 < n <= S:
@@ -204,7 +210,8 @@ class Engine:
                       for r in samp)
         t0 = time.perf_counter()
         pc = self.prefix_cache
-        slot, snap = self._place(prompts)
+        sc = list(scopes or [None] * n)
+        slot, snap = self._place(prompts, sc)
         if pc and self.state is None:
             self.state = self.new_state()
         state = self.state if pc else self.new_state()
@@ -214,7 +221,7 @@ class Engine:
         if pc:
             for i in range(n):
                 s_ = slot[i]
-                keep = [x for x in self.snaps[s_] if snap[i] is not None and len(x["ids"]) <= start[i]
+                keep = [x for x in self.snaps[s_] if snap[i] is not None and len(x["ids"]) <= start[i] and x.get("scope") == sc[i]
                         and x["ids"] == tuple(prompts[i][:len(x["ids"])])]
                 new_snaps[s_] = keep
                 if snap[i] is not None:
@@ -225,12 +232,12 @@ class Engine:
                 state, _, _ = self.prefill(state, [prompts[i] for i in idx], [slot[i] for i in idx], [start[i] for i in idx],
                                            [mk[i] for i in idx])
                 for i in idx:
-                    new_snaps[slot[i]].append(self._snap(state, slot[i], prompts[i][:mk[i]]))
+                    new_snaps[slot[i]].append(self._snap(state, slot[i], prompts[i][:mk[i]], sc[i]))
                     start[i] = mk[i]
         state, nxt, last = self.prefill(state, prompts, slot, start)
         if pc:
             for i in range(n):
-                new_snaps[slot[i]].append(self._snap(state, slot[i], prompts[i]))
+                new_snaps[slot[i]].append(self._snap(state, slot[i], prompts[i], sc[i]))
         stop = set(stop_ids)
         ids, fin = [[] for _ in range(n)], [None] * n
         row = {slot[i]: i for i in range(n)}

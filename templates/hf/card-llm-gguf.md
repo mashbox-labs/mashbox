@@ -32,4 +32,4 @@ ${results_charts}
 
 ## Licence
 
-The weights keep the original licence: ${license_text}.
+${weights_licence}. ${upstream_licence_file}

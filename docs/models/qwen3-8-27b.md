@@ -2,7 +2,7 @@
 
 [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) by Qwen, running on a single Google Cloud TPU v6e chip, with an OpenAI-compatible server. The model code is plain JAX in [src/mashbox/models/qwen3_8_27b](../../src/mashbox/models/qwen3_8_27b). The weights come as one BSHJ file from [mashbox-labs/Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU), and decoding uses our compiled TPU kernels (Culet).
 
-> Status: staging. On 28 October 2026 this page ran on a new TPU v6e-1 as a first-time user would follow it: install, first answer, the server through an SSH tunnel and 8 users at once. The package goes to PyPI and the weights repo goes public at release.
+> On 28 October 2026 this page ran on a new TPU v6e-1 as a first-time user would follow it: install, first answer, the server through an SSH tunnel and 8 users at once.
 
 ## What it is
 
@@ -77,6 +77,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/
 | `--seed N` | 0 | seed for sampled answers |
 | `--host H` | 127.0.0.1 | server address; keep it on 127.0.0.1 and use the SSH tunnel |
 | `--port N` | 8000 | server port |
+| `--api-key-file FILE` | none | require an API key from FILE (one per line; each key has its own prompt cache) on `/v1` requests; also `MASHBOX_API_KEY=k1,k2`. Default: no key on 127.0.0.1; on any other `--host` a key is made in `~/.config/mashbox/api-key` |
 | `--ctx N` | 2048 | tokens per request (prompt plus answer) |
 | `--slots N` | 8 | requests decoded together; the kernel bundle is built for 8, other values run plain JAX |
 | `--steps N` | 8 | decode steps per device call |
@@ -173,7 +174,8 @@ The last five rows are errors we hit ourselves, following this page on a new TPU
 
 | Version | Date | What changed |
 |---|---|---|
-| 0.1.0 | staging, not released | First release: one TPU v6e chip, OpenAI-compatible server, compiled kernels for 8 request slots, compile cache for TPU v6e. |
+| 0.1.1 | 28 Oct 2026 | Server: `/v1/completions` without streaming returns `choices[0].text`, as OpenAI does. `mashbox tpu`: a failed chip list shows Google's error instead of reading as no chips; the tunnel stops when the chip is gone; the max lifetime runs on a wall-clock timer; a create that may have reached Google before an error (such as an expired sign-in) is deleted by name, or `up` prints its name and the delete command. Docs: settings for long Claude Code, Codex and Pi sessions, and installing on your own computer. |
+| 0.1.0 | 28 Oct 2026 | First release: one TPU v6e chip, OpenAI-compatible server, compiled kernels for 8 request slots, compile cache for TPU v6e. |
 
 ## Credits and licences
 

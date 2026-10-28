@@ -15,10 +15,16 @@ It installs mashbox on the chip with this package's install.sh, starts the model
 Max lifetime (--max-hours, default 8, 0 = off): life.sh goes into the chip's metadata as its startup script. At boot it
 arms a timer on the chip, and at the deadline the chip deletes itself through the TPU API with its own service account,
 so it works with this machine closed. `up` probes whether that service account may delete TPUs and says so when not.
+
+The tunnel: this process binds the local port itself and keeps it for the whole session (tunnel drops included), and
+relays each connection to the SSH forward, which listens on a Unix socket in a private (0700) directory. So no other
+user of this machine can take the port or the forward and answer in the chip's place, and "Server ready" means the chip's
+server answered through our own SSH process. Chip names, zones and projects are checked before any gcloud call.
 """
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -41,6 +47,19 @@ PRICE_NOTE = "ESTIMATE: Google's on-demand list price per chip-hour, US regions,
 SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 STATE = os.path.join(os.path.expanduser("~"), ".config", "mashbox", "tpu.json")
 REMOTE_MB = "~/.local/bin/mashbox"
+NAME = re.compile(r"[a-z]([-a-z0-9]{0,61}[a-z0-9])?")                    # a TPU node name (RFC 1035 label)
+ZONE = re.compile(r"[a-z]+-[a-z]+[0-9]+-[a-z]")                           # us-east5-b, europe-west4-a, asia-northeast1-b
+PROJECT = re.compile(r"([a-z][-a-z0-9.]{0,62}:)?[a-z][-a-z0-9]{4,28}[a-z0-9]")   # my-project, example.com:my-project
+
+
+def checked(rx, what):
+    """An argparse type: the value must match rx in full, so it can never be read as a gcloud option or another chip."""
+    def check(v):
+        if not rx.fullmatch(v):
+            raise argparse.ArgumentTypeError(f"not a valid {what}: {v!r}")
+        return v
+    check.__name__ = what
+    return check
 
 
 class Stop(Exception):
@@ -105,15 +124,26 @@ def kind(err):
         return "api"
     if "billing" in e:
         return "billing"
-    if any(s in e for s in ("gcloud auth login", "reauthentication", "no credentialed accounts", "active account")):
+    if any(s in e for s in ("gcloud auth login", "reauthentication", "no credentialed accounts", "active account",
+                            "unauthenticated", "invalid authentication credentials")):
         return "auth"
     return "other"
+
+
+def gerr(err):
+    """One readable line from a gcloud error: its JSON "message" when it has one (the last line is often just "}")."""
+    e = (err or "").strip()
+    msgs = re.findall(r'"message":\s*"((?:[^"\\]|\\.)*)"', e)
+    if msgs:
+        return msgs[-1].replace('\\"', '"')[:300]
+    lines = [x.strip() for x in e.splitlines() if x.strip().strip("{}[],")]
+    return ([x for x in lines if x.startswith("ERROR:")] or lines or ["(no message)"])[-1][:300]
 
 
 def fix(k, project, zone=None, acc=None):
     return {
         "api": f"the Cloud TPU API is off. Run: gcloud services enable tpu.googleapis.com --project {project}",
-        "auth": "gcloud is not signed in. Run: gcloud auth login",
+        "auth": "gcloud is not signed in (or its sign-in expired). Run: gcloud auth login",
         "billing": f"project {project} has no billing account. Link one: https://console.cloud.google.com/billing/linkedaccount?project={project}",
         "quota": f"no TPU quota for {acc} in {zone}. Ask for it: https://console.cloud.google.com/iam-admin/quotas?project={project} (filter: {acc.split('-')[0] if acc else 'tpu'}, {zone})",
         "no-access": f"project {project} may not create on-demand {acc} in {zone} (no quota there). Ask for quota: https://console.cloud.google.com/iam-admin/quotas?project={project}",
@@ -211,14 +241,27 @@ def qr_node(q):
     return spec.get("nodeId"), spec.get("node") or {}
 
 
-def scan(project, zones):
+def scan(project, zones, unchanged=True):
     """Every mashbox node and queued request in these zones: ([(zone, node)], [(zone, qr)])."""
-    out, lock = ([], []), threading.Lock()
+    out, lock, errs = ([], []), threading.Lock(), []
     mine = set(load_state())
 
+    def listed(what, z):
+        for _ in range(2):                              # one retry: a single failed call must not read as "nothing up"
+            r = gc(["compute", "tpus", what, "list", "--zone", z, "--format=json"], project)
+            if r.returncode == 0:
+                try:
+                    return json.loads(r.stdout or "[]")
+                except ValueError:
+                    r = subprocess.CompletedProcess(r.args, 1, "", "unreadable gcloud output")
+        with lock:
+            errs.append((z, r.stderr))
+        return None
+
     def one(z):
-        ns = gj(["compute", "tpus", "tpu-vm", "list", "--zone", z], project) or []
-        qs = gj(["compute", "tpus", "queued-resources", "list", "--zone", z], project) or []
+        ns, qs = listed("tpu-vm", z), listed("queued-resources", z)
+        if ns is None or qs is None:
+            return
         with lock:
             out[0].extend((z, n) for n in ns if (n.get("labels") or {}).get("mashbox") or short(n.get("name")) in mine)
             for q in qs:
@@ -230,6 +273,14 @@ def scan(project, zones):
         t.start()
     for t in ts:
         t.join()
+    if errs:                                            # never report "no chips" (or forget one) on a failed list
+        k = next((kind(e) for _, e in errs if kind(e) in ("auth", "api", "billing")), None)
+        last = gerr(errs[0][1])
+        raise Stop((fix(k, project) + "\n" if k else "") + "could not list chips in " + ", ".join(sorted({z for z, _ in errs}))
+                   + f", so this cannot say what runs and bills (gcloud: {last}). "
+                   + ("Nothing was changed. " if unchanged else "")
+                   + "To look in one zone only, add --zone ZONE. "
+                   + f"The console lists them too: https://console.cloud.google.com/compute/tpus?project={project}")
     return out
 
 
@@ -241,8 +292,8 @@ def prune(nodes, qrs, zones):
             save_state(name)
 
 
-def find(project, name, zones):
-    nodes, qrs = scan(project, zones)
+def find(project, name, zones, unchanged=True):
+    nodes, qrs = scan(project, zones, unchanged)
     n = next(((z, x) for z, x in nodes if short(x.get("name")) == name), None)
     q = next(((z, x) for z, x in qrs if qr_node(x)[0] == name), None)
     return n, q
@@ -265,13 +316,14 @@ def create_args(m, a, project, zone, name, qr, script_path):
 
 
 def wait_ready_node(project, zone, name, timeout=900):
-    t0 = now()
+    t0, misses = now(), 0
     while now() - t0 < timeout:
         x = gj(["compute", "tpus", "tpu-vm", "describe", name, "--zone", zone], project)
         st = (x or {}).get("state")
         if st == "READY":
             return x
-        if x is None or st in ("PREEMPTED", "TERMINATED", "STOPPED", "STOPPING", "DELETING"):
+        misses = misses + 1 if x is None else 0          # 3 failed describes in a row: gone (one can be a blip)
+        if misses >= 3 or st in ("PREEMPTED", "TERMINATED", "STOPPED", "STOPPING", "DELETING"):
             return None
         time.sleep(min(POLL, 10))
     return None
@@ -292,19 +344,27 @@ def get_chip(m, a, project, name):
             r = gc(["compute", "tpus", "tpu-vm", "create", name, "--version", c["runtime"]]
                    + create_args(m, a, project, z, name, None, script), project)
             k = "ok" if r.returncode == 0 else kind(r.stderr)
-            if k in ("ok", "exists"):
+            if k == "exists":                                   # not made by this command: never waited for, used or deleted
+                raise Stop(f"a TPU named {name} already exists in {z} and was not made by this command; it is left as "
+                           "it is. Choose another name with --name (mashbox tpu status lists the chips mashbox made)")
+            # Google may hold a node of ours in z after any answer that is not a clear refusal: seen 10-28, the
+            # sign-in expired during a 9 min create, the command stopped and Google went on creating the chip.
+            sent = k in ("ok", "auth", "other")
+            if k == "ok":
                 if wait_ready_node(project, z, name):
                     say(f"  {z}: chip created ({mins(now() - t0)})")
                     return z, None
                 k = "capacity"                                  # created, then gone before READY: seen 10-28
             tried[z] = k
             say(f"  {z}: {dict(capacity='no free chip', quota='no quota', other='failed').get(k, k)} ({mins(now() - t0)})")
+            if k == "other":
+                say("    Google said: " + gerr(r.stderr))
+            if sent and not drop_node(project, z, name):
+                raise Stop(left_behind(project, z, name, k))
             if k in ("api", "auth", "billing"):
                 raise Stop(fix(k, project))
             if k in ("quota", "no-access"):
                 say("    " + fix(k, project, z, c["accelerator"]))
-            if k == "other":
-                say("    " + (r.stderr.strip().splitlines() or ["(no message)"])[-1])
         if a.queue_minutes <= 0:
             raise Stop("no chip in the zones tried, and queued requests are off (--queue-minutes 0)")
         qz = [z for z in zones if tried.get(z) not in ("quota", "no-access")][:QUEUE_ZONES]
@@ -313,6 +373,24 @@ def get_chip(m, a, project, name):
         return queue(m, a, project, name, qz, script)
     finally:
         os.unlink(script)
+
+
+def drop_node(project, zone, name):
+    """Delete, by its exact name, a node that a create of this command may have made. True when it is gone or never was."""
+    r = gc(["compute", "tpus", "tpu-vm", "delete", name, "--zone", zone, "--quiet"], project)
+    if r.returncode == 0:
+        say(f"  {zone}: {name} deleted (the create had gone through)")
+        return True
+    if "not found" in (r.stderr or "").lower():
+        return True
+    say(f"  {zone}: {name} NOT deleted: {gerr(r.stderr)}")
+    return False
+
+
+def left_behind(project, zone, name, k):
+    return (f"the create of {name} in {zone} may have reached Google, and a chip bills until it is deleted. "
+            + (fix(k, project) + ", then delete it: " if k == "auth" else "Delete it: ")
+            + f"mashbox tpu down {name} (or: gcloud compute tpus tpu-vm delete {name} --zone {zone} --project {project} --quiet)")
 
 
 def queue(m, a, project, name, zones, script):
@@ -327,15 +405,21 @@ def queue(m, a, project, name, zones, script):
                     "--valid-until-duration", f"{max(1, int(a.queue_minutes))}m"]
                    + create_args(m, a, project, z, name, qr, script), project)
             k = "ok" if r.returncode == 0 else kind(r.stderr)
-            if k in ("ok", "exists"):
+            if k == "ok":
                 made.append(z)
                 say(f"  {z}: queued request {qr} made")
+            elif k in ("auth", "other"):                          # not a clear refusal: it may have been made, so it
+                made.append(z)                                    # is watched like the others and deleted at the end
+                say(f"  {z}: queued request {qr}: error ({gerr(r.stderr)}); it may have been made, so it counts as made "
+                    "(watched, and deleted by name when this command ends)")
+            elif k == "exists":                                   # not made by this command: never used or deleted
+                say(f"  {z}: a queued request named {qr} already exists (not made by this command); left as it is")
             else:
                 say(f"  {z}: queued request refused ({k}) " + fix(k, project, z, c["accelerator"]))
-                if k in ("api", "auth", "billing"):
-                    raise Stop(fix(k, project))
+            if k in ("api", "auth", "billing"):
+                raise Stop(fix(k, project))
         if not made:
-            raise Stop("Google refused every queued request (messages above)")
+            raise Stop("no queued request is waiting (messages above)")
         last = 0
         while True:
             for z in list(made):
@@ -372,8 +456,11 @@ def queue(m, a, project, name, zones, script):
 
 def delete_qr(project, zone, qr):
     r = gc(["compute", "tpus", "queued-resources", "delete", qr, "--zone", zone, "--force", "--quiet"], project)
-    say(f"  {zone}: queued request {qr} " + ("deleted" if r.returncode == 0 else "NOT deleted: " + r.stderr.strip()[-200:]))
-    return r.returncode == 0
+    gone = r.returncode == 0 or "not found" in (r.stderr or "").lower()
+    say(f"  {zone}: queued request {qr} " + ("deleted" if r.returncode == 0 else "not there" if gone else
+        f"NOT deleted: {gerr(r.stderr)}. Delete it: gcloud compute tpus queued-resources delete {qr} --zone {zone} "
+        f"--project {project} --force --quiet"))
+    return gone
 
 
 # ------------------------------------------------------------------------------------------------------------- the chip
@@ -499,22 +586,98 @@ def sa_fix(project):
 
 
 # --------------------------------------------------------------------------------------------------------------- tunnel
-def free_port(p):
-    for q in range(p, p + 20):
-        with socket.socket() as s:
+class Port:
+    """127.0.0.1:port, bound by this process from the first check to the end of the session, and relayed to the SSH
+    forward's Unix socket (self.sock, in a 0700 directory of this user). Another local user can neither bind the port
+    (it is never released, not even while a dropped tunnel is reopened) nor reach or replace the socket."""
+
+    def __init__(self, port):
+        self.dir = tempfile.mkdtemp(prefix="mbx-")                          # mode 0700
+        self.sock = os.path.join(self.dir, "s")
+        self.ls = socket.socket()
+        self.ls.bind(("127.0.0.1", port))
+        self.ls.listen(64)
+        self.port = port
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def accept(self):
+        while True:
             try:
-                s.bind(("127.0.0.1", q))
-                return q
+                c, _ = self.ls.accept()
             except OSError:
-                continue
+                return                                                      # closed
+            threading.Thread(target=self.relay, args=(c,), daemon=True).start()
+
+    def relay(self, c):
+        u = socket.socket(socket.AF_UNIX)
+        try:
+            u.connect(self.sock)
+        except OSError:                                                     # no forward yet (starting, reopening)
+            u.close()
+            c.close()
+            return
+
+        def pipe(a, b):
+            try:
+                while True:
+                    d = a.recv(65536)
+                    if not d:
+                        break
+                    b.sendall(d)
+            except OSError:
+                pass
+            for x in (b, a):
+                try:
+                    x.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+        t = threading.Thread(target=pipe, args=(u, c), daemon=True)
+        t.start()
+        pipe(c, u)
+        t.join()
+        u.close()
+        c.close()
+
+    def close(self):
+        try:
+            self.ls.shutdown(socket.SHUT_RDWR)                              # wakes the accept() thread (Linux)
+        except OSError:
+            pass
+        self.ls.close()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def free_port(p):
+    """A Port on the first free local port from p (up to p + 19); it stays bound by this process."""
+    for q in range(p, p + 20):
+        try:
+            return Port(q)
+        except OSError:
+            continue
     raise Stop(f"ports {p} to {p + 19} on 127.0.0.1 are all in use here")
 
 
-def open_tunnel(project, zone, name, rport, lport):
+TUNNEL_FAIL = ("forwarding failed", "cannot listen", "address already in use", "bind:", "port forwarding failed")
+
+
+def open_tunnel(project, zone, name, rport, lp):
     cmd = [gcloud(), "compute", "tpus", "tpu-vm", "ssh", name, "--zone", zone, "--project", project, "--quiet", "--",
-           "-N", "-L", f"127.0.0.1:{lport}:127.0.0.1:{rport}", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30"]
-    log = open(os.path.join(tempfile.gettempdir(), f"mashbox-tunnel-{name}.log"), "a")   # ssh says "connect failed"
-    return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log)       # until the server listens
+           "-N", "-L", f"{lp.sock}:127.0.0.1:{rport}", "-o", "ExitOnForwardFailure=yes", "-o", "StreamLocalBindUnlink=yes",
+           "-o", "ServerAliveInterval=30"]
+    log = os.path.join(lp.dir, "tunnel.log")                                # ssh says "connect failed" until the server listens
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=open(log, "a"), stderr=subprocess.STDOUT)
+    p.log = log
+    return p
+
+
+def forward_failed(tun):
+    """The SSH forward could not be set up (ExitOnForwardFailure): the lines of its log that say so, else None."""
+    try:
+        with open(tun.log) as f:
+            bad = [x.strip() for x in f.read().splitlines() if any(w in x.lower() for w in TUNNEL_FAIL)]
+    except OSError:
+        return None
+    return bad[-1][:300] if bad else None
 
 
 def up_http(url):
@@ -533,14 +696,20 @@ def remote_tail(project, zone, name):
     return alive, [x for x in r.stdout.splitlines() if not x.startswith("MBX_ALIVE")]
 
 
-def wait_server(project, zone, name, m, lport):
+def wait_server(project, zone, name, m, lp):
+    """Ready = our SSH process is running and the chip's server answered through its forward (our Port relays to our
+    socket only). A forward SSH could not set up stops here with its message, never a silent retry."""
     c = m["cloud"]
-    url = f"http://127.0.0.1:{lport}{c.get('health', '/')}"
-    tun, t0, last = open_tunnel(project, zone, name, c["port"], lport), now(), now()
+    url = f"http://127.0.0.1:{lp.port}{c.get('health', '/')}"
+    tun, t0, last = open_tunnel(project, zone, name, c["port"], lp), now(), now()
     say(f"Starting the server on the chip (first start downloads the model; measured times: docs/models/{m['id']}.md).")
-    while not up_http(url):
+    while not (tun.poll() is None and up_http(url)):
         if tun.poll() is not None:
-            tun = open_tunnel(project, zone, name, c["port"], lport)
+            bad = forward_failed(tun)
+            if bad:
+                raise Stop(f"the SSH tunnel could not open its forward ({bad}). The chip is still up and billing: "
+                           f"mashbox tpu down {name}")
+            tun = open_tunnel(project, zone, name, c["port"], lp)
         if now() - last >= 60:
             alive, tail = remote_tail(project, zone, name)
             line = next((x for x in reversed(tail) if x.strip()), "")
@@ -559,16 +728,37 @@ def wait_server(project, zone, name, m, lport):
     return tun
 
 
-def hold(tun, project, zone, name, m, lport, deadline):
-    """Keep the tunnel open until Ctrl-C; reopen it if it drops; at the deadline take the chip down from here too."""
+def node_gone(project, zone, name):
+    """True only when gcloud says the node does not exist (or is being deleted); an error of any other kind is not 'gone'."""
+    r = gc(["compute", "tpus", "tpu-vm", "describe", name, "--zone", zone, "--format=value(state)"], project)
+    if r.returncode:
+        return "not_found" in r.stderr.lower() or "was not found" in r.stderr.lower()
+    return r.stdout.strip() in ("DELETING", "PREEMPTED", "TERMINATED")
+
+
+def hold(tun, project, zone, name, m, lp, deadline):
+    """Keep the tunnel open until Ctrl-C; reopen it if it drops; stop when the chip is gone (down from another
+    terminal, its max lifetime); at the deadline take the chip down from here too."""
+    reopened = 0.0
     try:
         while True:
             if deadline and now() > deadline + 600:
                 say("Max lifetime reached and the chip is still here: taking it down from this machine.")
                 tun.terminate()
-                return take_down(project, [(zone, name)])
-            if tun.poll() is not None:
-                tun = open_tunnel(project, zone, name, m["cloud"]["port"], lport)
+                try:
+                    return take_down(project, [(zone, name)])
+                except Stop as e:
+                    raise Stop(f"{e}\n{name} ({zone}) may still be running and billing. Take it down: "
+                               f"mashbox tpu down {name}") from None
+            if tun.poll() is not None:                 # the tunnel dropped: chip gone, or a network blip
+                if node_gone(project, zone, name):
+                    say(f"\n{name} is gone (taken down, or deleted by its max lifetime). Nothing of it bills now. "
+                        "Tunnel closed.")
+                    save_state(name)
+                    return 0
+                if now() - reopened < 10:              # at most one reopen every 10 s
+                    time.sleep(10 - (now() - reopened))
+                tun, reopened = open_tunnel(project, zone, name, m["cloud"]["port"], lp), now()
             time.sleep(POLL)
     except KeyboardInterrupt:
         tun.terminate()
@@ -659,7 +849,7 @@ def cmd_up(a):
             say(f"  the server was already running ({res['args']}); --restart starts it again with this command's options")
         say(f"  done in {mins(res['seconds'])}; disk for the model: {res.get('have_gb')} GB (needs {c.get('disk_gb')}); "
             f"server {res.get('server')}")
-        n, _ = find(project, name, [zone])
+        n, _ = find(project, name, [zone], unchanged=False)
         mh = int(((n[1].get("metadata") or {}).get("mashbox-max-seconds") or 0)) / 3600 if n else a.max_hours
         deadline = (created(n[1]) or now()) + mh * 3600 if n and mh else None
         life = "off"
@@ -673,13 +863,15 @@ def cmd_up(a):
                         f"the deadline, while it stays open. To let the chip delete itself in this project: {sa_fix(project)}")
             save_state(name, life=ok)
             say(f"  max lifetime: {life}")
-        lport = free_port(c["port"])
-        tun = wait_server(project, zone, name, m, lport)
+        lp = free_port(c["port"])
+        tun = wait_server(project, zone, name, m, lp)
     except KeyboardInterrupt:
         say(f"\nStopped. The chip is still running and billing. Take it down: mashbox tpu down {name}")
         return 130
-    info(m, name, zone, acc, a.spot, lport, deadline, life, agents=a.agents)
-    return hold(tun, project, zone, name, m, lport, deadline)
+    except Stop as e:
+        raise Stop(f"{e}\n{name} ({zone}) is still running and billing. Take it down: mashbox tpu down {name}") from None
+    info(m, name, zone, acc, a.spot, lp.port, deadline, life, agents=a.agents)
+    return hold(tun, project, zone, name, m, lp, deadline)
 
 
 def pick(project, name, zones):
@@ -711,9 +903,14 @@ def take_down(project, targets, nodes=None, qrs=None):
                 continue                                         # deleted with its queued request
             r = gc(["compute", "tpus", "tpu-vm", "delete", name, "--zone", z, "--quiet"], project)
             if r.returncode and "not found" not in r.stderr.lower():
-                say(f"  NOT deleted: {r.stderr.strip()[-300:]}")
+                say(f"  NOT deleted: {gerr(r.stderr)}")
                 rc = 1
-        left, lq = scan(project, list(dict.fromkeys([z for z, _ in n + q])))
+        try:
+            left, lq = scan(project, list(dict.fromkeys([z for z, _ in n + q])), unchanged=False)
+        except Stop as e:
+            say(f"{name}: delete sent, but the check failed: {e}\nCheck with: mashbox tpu status")
+            rc = 1
+            continue
         still = [short(x.get("name")) for _, x in left if short(x.get("name")) == name] + \
                 [qr_node(x)[0] for _, x in lq if qr_node(x)[0] == name]
         if still:
@@ -727,7 +924,7 @@ def take_down(project, targets, nodes=None, qrs=None):
 
 def cmd_down(a):
     project = preflight(a.project)
-    zones = list(dict.fromkeys(([a.zone] if a.zone else []) + all_zones()))
+    zones = [a.zone] if a.zone else all_zones()
     names, nodes, qrs = pick(project, a.name, zones)
     prune(nodes, qrs, zones)
     if not names:
@@ -743,14 +940,14 @@ def cmd_down(a):
 
 def cmd_status(a):
     project = preflight(a.project)
-    zones = list(dict.fromkeys(([a.zone] if a.zone else []) + all_zones()))
+    zones = [a.zone] if a.zone else all_zones()
     nodes, qrs = scan(project, zones)
     prune(nodes, qrs, zones)
     if not nodes and not qrs:
         say(f"No mashbox chips or queued requests in project {project} (zones checked: {', '.join(zones)}).")
         return 0
     total, rate = 0.0, 0.0
-    say(f"{'NAME':<24} {'ZONE':<18} {'TYPE':<12} {'STATE':<10} {'AGE':>8} {'$/HOUR':>8} {'SO FAR':>9}  DELETES ITSELF")
+    say(f"{'NAME':<28} {'ZONE':<18} {'TYPE':<12} {'STATE':<21} {'AGE':>8} {'$/HOUR':>8} {'SO FAR':>9}  DELETES ITSELF")
     for z, x in nodes:
         acc, age = x.get("acceleratorType", "?"), now() - (created(x) or now())
         p = price(acc) if "-" in acc else None
@@ -761,13 +958,13 @@ def cmd_status(a):
             life += " (NOT ACTIVE)"
         total += (p or 0) * age / 3600
         rate += p or 0
-        say(f"{short(x.get('name')):<24} {z:<18} {acc + (' spot' if spot else ''):<12} {x.get('state', '?'):<10} "
+        say(f"{short(x.get('name')):<28} {z:<18} {acc + (' spot' if spot else ''):<12} {x.get('state', '?'):<21} "
             f"{mins(age):>8} {money(p):>8} {money((p or 0) * age / 3600):>9}  {life}")
     for z, x in qrs:
         st = (x.get("state") or {}).get("state", "?")
         if st != "ACTIVE":
-            say(f"{qr_node(x)[0] + ' (queued)':<24} {z:<18} {(qr_node(x)[1].get('acceleratorType') or '?'):<12} "
-                f"{st[:10]:<10} {mins(now() - (created(x) or now())):>8} {'$0.00':>8} {'$0.00':>9}  (no chip yet)")
+            say(f"{qr_node(x)[0] + ' (queued)':<28} {z:<18} {(qr_node(x)[1].get('acceleratorType') or '?'):<12} "
+                f"{st:<21} {mins(now() - (created(x) or now())):>8} {'$0.00':>8} {'$0.00':>9}  (no chip yet)")
     say(f"Running now: {money(rate)} per hour, about {money(total)} so far. {PRICE_NOTE}.")
     say("Take one down: mashbox tpu down <name>")
     return 0
@@ -793,13 +990,13 @@ def cmd_tunnel(a):
     project, zone, x = target(a)
     name = short(x.get("name"))
     m = model((x.get("labels") or {}).get("mashbox-model") or load_state().get(name, {}).get("model") or "")
-    lport = free_port(m["cloud"]["port"])
+    lp = free_port(m["cloud"]["port"])
     ms = int((x.get("metadata") or {}).get("mashbox-max-seconds") or 0)
     deadline = (created(x) or now()) + ms if ms else None
-    tun = wait_server(project, zone, name, m, lport)
+    tun = wait_server(project, zone, name, m, lp)
     life = {True: "checked at up", False: "NOT ACTIVE (see mashbox tpu status)"}.get(load_state().get(name, {}).get("life"), "set at up")
-    info(m, name, zone, x.get("acceleratorType", m["cloud"]["accelerator"]), False, lport, deadline, life, agents=None)
-    return hold(tun, project, zone, name, m, lport, deadline)
+    info(m, name, zone, x.get("acceleratorType", m["cloud"]["accelerator"]), False, lp.port, deadline, life, agents=None)
+    return hold(tun, project, zone, name, m, lp, deadline)
 
 
 def main(argv):
@@ -808,9 +1005,9 @@ def main(argv):
     u = sub.add_parser("up", help="create a chip for a model, install, start the server, open a tunnel",
                        usage="mashbox tpu up MODEL [options] [-- options for mashbox run on the chip]")
     u.add_argument("model")
-    u.add_argument("--zone", help="only this zone (default: the model's zones in order)")
+    u.add_argument("--zone", type=checked(ZONE, "zone"), help="only this zone (default: the model's zones in order)")
     u.add_argument("--spot", action="store_true", help="a spot chip: cheaper, Google can stop it at any time")
-    u.add_argument("--name", help="chip name (default mashbox-<model>)")
+    u.add_argument("--name", type=checked(NAME, "chip name"), help="chip name (default mashbox-<model>)")
     u.add_argument("--max-hours", type=float, default=8.0, help="the chip deletes itself this long after it starts (default 8; 0 = off)")
     u.add_argument("--queue-minutes", type=float, default=60.0, help="how long to wait for a queued chip (default 60; 0 = no queued requests)")
     u.add_argument("--yes", action="store_true", help="create without asking")
@@ -819,12 +1016,12 @@ def main(argv):
     for n in ("down", "status", "ssh", "tunnel"):
         p = sub.add_parser(n)
         if n != "status":
-            p.add_argument("name", nargs="?")
-        p.add_argument("--zone")
+            p.add_argument("name", nargs="?", type=checked(NAME, "chip name"))
+        p.add_argument("--zone", type=checked(ZONE, "zone"), help="this zone only" if n in ("down", "status") else None)
         if n == "down":
             p.add_argument("--all", action="store_true", help="every mashbox chip and queued request in the project")
     for p in sub.choices.values():
-        p.add_argument("--project", help="Google Cloud project (default: gcloud's)")
+        p.add_argument("--project", type=checked(PROJECT, "project id"), help="Google Cloud project (default: gcloud's)")
     argv = list(argv)
     cut = argv.index("--") if "--" in argv else len(argv)     # after --: options for `mashbox run` on the chip
     a = ap.parse_args(argv[:cut])

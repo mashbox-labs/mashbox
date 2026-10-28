@@ -1,8 +1,10 @@
 """`mashbox tpu` against a fake gcloud (tests/cpu/fake_gcloud.py), and install.sh checks. No cloud, no network."""
 import hashlib
+import inspect
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from importlib import resources
@@ -14,6 +16,7 @@ import pytest
 from mashbox import tpu
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REAL_HOLD = tpu.hold                                                 # the fixture replaces tpu.hold
 Z = ["us-east5-b", "europe-west4-a", "us-east5-a", "asia-northeast1-b", "us-south1-a", "us-east1-d", "us-central1-b"]
 
 
@@ -36,6 +39,8 @@ def cloud(tmp_path, monkeypatch):
         held.append(a)
         tun.terminate()
         tun.wait()
+        if hasattr(a[4], "close"):                    # the held local port (tpu.Port)
+            a[4].close()
         return 0
     monkeypatch.setattr(tpu, "hold", hold)
 
@@ -67,6 +72,14 @@ def test_zone_exhaustion_moves_to_next_zone(cloud, capsys):
     assert re.search(r"Local URL +http://127\.0\.0\.1:80\d\d/v1 ", out) and "mashbox tpu down mashbox-qwen3-8-27b" in out
 
 
+def test_internal_error_shows_googles_message_and_continues(cloud, capsys):
+    """Seen for real 2026-10-28 (europe-west4-a, after 3 min): code 13 JSON error; the user saw only "}"."""
+    read = cloud(plain={Z[0]: "internal", Z[1]: "ok"})
+    assert up() == 0 and creates(read()) == Z[:2]
+    out = capsys.readouterr().out
+    assert "Google said: an internal error has occurred" in out and "\n    }\n" not in out
+
+
 def test_quota_error_prints_fix_and_continues(cloud, capsys):
     read = cloud(plain={Z[0]: "no-access", Z[1]: "quota", Z[2]: "ok"})
     assert up() == 0
@@ -92,6 +105,144 @@ def test_queued_fallback_keeps_first_grant_deletes_others(cloud, capsys):
     q = [c for c in S["calls"] if c[2:4] == ["queued-resources", "create"]][0]
     assert "--spot" not in q and q[q.index("--valid-until-duration") + 1] == "60m"
     assert "granted after" in capsys.readouterr().out
+
+
+def test_create_accepted_then_sign_in_expired_names_the_chip(cloud, capsys):
+    """Seen for real 2026-10-28: the sign-in expired during a 9 min create; `up` stopped and Google kept creating."""
+    read = cloud(plain={Z[0]: "accepted-auth", Z[1]: "ok"})
+    assert up() == 2
+    S = read()
+    assert creates(S) == Z[:1] and list(S["nodes"]) == [f"{Z[0]}/mashbox-qwen3-8-27b"]   # no second chip
+    deletes = [c for c in S["calls"] if c[2:4] == ["tpu-vm", "delete"]]
+    assert [d[d.index("--zone") + 1] for d in deletes] == [Z[0]]                          # tried by its exact name
+    err = capsys.readouterr().err
+    assert "gcloud auth login, then delete it: mashbox tpu down mashbox-qwen3-8-27b" in err
+    assert f"gcloud compute tpus tpu-vm delete mashbox-qwen3-8-27b --zone {Z[0]} --project p1 --quiet" in err
+
+
+def test_create_accepted_then_error_is_deleted_before_the_next_zone(cloud, capsys):
+    read = cloud(plain={Z[0]: "accepted-internal", Z[1]: "ok"})
+    assert up() == 0
+    S = read()
+    assert list(S["nodes"]) == [f"{Z[1]}/mashbox-qwen3-8-27b"]
+    order = [(c[3], c[c.index("--zone") + 1]) for c in S["calls"] if c[2] == "tpu-vm" and c[3] in ("create", "delete")]
+    assert order[:3] == [("create", Z[0]), ("delete", Z[0]), ("create", Z[1])]
+    assert f"{Z[0]}: mashbox-qwen3-8-27b deleted" in capsys.readouterr().out
+
+
+def test_queued_request_after_an_error_counts_as_made(cloud, capsys):
+    read = cloud(plain={}, qr_create={Z[0]: "accepted-internal"}, grant={Z[1]: 2})
+    assert up() == 0
+    assert list(read()["qrs"]) == [f"{Z[1]}/mashbox-qwen3-8-27b-q"]        # the one made with an error is deleted
+    assert "it may have been made" in capsys.readouterr().out
+
+
+def test_queued_request_after_an_error_is_watched_and_can_win(cloud, capsys):
+    read = cloud(plain={}, qr_create={Z[0]: "accepted-internal"}, grant={Z[0]: 1})
+    assert up() == 0
+    S = read()
+    assert list(S["qrs"]) == [f"{Z[0]}/mashbox-qwen3-8-27b-q"] and list(S["nodes"]) == [f"{Z[0]}/mashbox-qwen3-8-27b"]
+
+
+def test_existing_queued_request_of_that_name_is_left_alone(cloud):
+    read = cloud(plain={}, grant={Z[1]: 1})
+    S = read()
+    S["qrs"] = {f"{Z[0]}/mashbox-qwen3-8-27b-q": {"name": f"projects/p/locations/{Z[0]}/queuedResources/mashbox-qwen3-8-27b-q",
+                "state": {"state": "WAITING_FOR_RESOURCES"}, "describes": 0, "args": [],
+                "tpu": {"nodeSpec": [{"nodeId": "someone-else", "node": {}}]}}}           # no mashbox label
+    open(os.environ["FAKE_GCLOUD_STATE"], "w").write(json.dumps(S))
+    assert up() == 0
+    assert f"{Z[0]}/mashbox-qwen3-8-27b-q" in read()["qrs"]
+
+
+def test_queued_request_then_sign_in_expired_prints_the_delete(cloud, capsys):
+    read = cloud(plain={}, qr_create={Z[0]: "accepted-auth"})
+    assert up() == 2
+    assert list(read()["qrs"]) == [f"{Z[0]}/mashbox-qwen3-8-27b-q"]        # Google holds it; the user is told how
+    out, err = capsys.readouterr()
+    assert (f"gcloud compute tpus queued-resources delete mashbox-qwen3-8-27b-q --zone {Z[0]} --project p1 --force --quiet"
+            in out) and "gcloud auth login" in err
+
+
+def test_existing_node_of_that_name_is_never_deleted(cloud, capsys):
+    read = cloud(plain={Z[0]: "ok"})
+    S = read()
+    S["nodes"] = {f"{Z[0]}/mine": {"name": f"projects/p/locations/{Z[0]}/nodes/mine", "state": "STOPPED"}}   # no mashbox label
+    open(os.environ["FAKE_GCLOUD_STATE"], "w").write(json.dumps(S))
+    tpu.main(["up", "qwen3-8-27b", "--yes", "--name", "mine", "--queue-minutes", "0"])
+    S = read()
+    assert f"{Z[0]}/mine" in S["nodes"] and not [c for c in S["calls"] if c[2:4] == ["tpu-vm", "delete"]]
+
+
+def test_existing_ready_node_of_that_name_is_never_used(cloud, monkeypatch, capsys):
+    read = cloud(plain={Z[0]: "ok"})
+    S = read()
+    S["nodes"] = {f"{Z[0]}/mine": {"name": f"projects/p/locations/{Z[0]}/nodes/mine", "state": "READY"}}     # no mashbox label
+    open(os.environ["FAKE_GCLOUD_STATE"], "w").write(json.dumps(S))
+    touched = []
+    monkeypatch.setattr(tpu, "wait_ready_node", lambda *a, **k: touched.append(("wait", a)))
+    monkeypatch.setattr(tpu, "remote_setup", lambda *a, **k: touched.append(("setup", a)))
+    assert tpu.main(["up", "qwen3-8-27b", "--yes", "--name", "mine", "--queue-minutes", "0"]) == 2
+    S = read()
+    assert not touched and f"{Z[0]}/mine" in S["nodes"] and creates(S) == Z[:1]
+    assert not [c for c in S["calls"] if c[2:4] == ["tpu-vm", "delete"]] and "mine" not in tpu.load_state()
+    assert "already exists in " + Z[0] in capsys.readouterr().err
+
+
+def test_one_failed_describe_is_not_gone(cloud, monkeypatch):
+    read = cloud(plain={Z[0]: "ok"})
+    real, n = tpu.gj, {"i": 0}
+
+    def gj(args, project=None):
+        if args[3] == "describe" and n["i"] < 2:
+            n["i"] += 1
+            return None
+        return real(args, project)
+    monkeypatch.setattr(tpu, "gj", gj)
+    assert up("--queue-minutes", "0") == 0 and creates(read()) == Z[:1] and f"{Z[0]}/mashbox-qwen3-8-27b" in read()["nodes"]
+
+
+def test_stop_after_the_chip_exists_names_it(cloud, monkeypatch, capsys):
+    cloud(plain={Z[0]: "ok"})
+
+    def setup(*a, **k):
+        raise tpu.Stop("install failed")
+    monkeypatch.setattr(tpu, "remote_setup", setup)
+    assert up() == 2
+    err = capsys.readouterr().err
+    assert "install failed" in err and "still running and billing. Take it down: mashbox tpu down mashbox-qwen3-8-27b" in err
+
+
+def test_down_goes_on_when_the_check_list_fails(cloud, monkeypatch, capsys):
+    read = cloud(plain={Z[0]: "ok"})
+    assert up() == 0
+    real, n = tpu.scan, {"i": 0}
+
+    def scan(project, zones, unchanged=True):
+        n["i"] += 1
+        if n["i"] == 2:                                              # the check list after the delete
+            raise tpu.Stop("could not list chips in " + zones[0])
+        return real(project, zones, unchanged)
+    monkeypatch.setattr(tpu, "scan", scan)
+    capsys.readouterr()
+    assert tpu.main(["down", "mashbox-qwen3-8-27b"]) == 1
+    out = capsys.readouterr().out
+    assert read()["nodes"] == {} and "delete sent, but the check failed" in out and "Nothing was changed" not in out
+
+
+def test_down_with_zone_looks_only_there(cloud, capsys):
+    read = cloud(plain={Z[0]: "ok"})
+    assert up() == 0
+    S = read()
+    S["list_error"] = {Z[3]: "other"}                                # a zone whose list always fails
+    open(os.environ["FAKE_GCLOUD_STATE"], "w").write(json.dumps(S))
+    assert tpu.main(["down", "mashbox-qwen3-8-27b"]) == 2 and "add --zone ZONE" in capsys.readouterr().err
+    assert tpu.main(["down", "mashbox-qwen3-8-27b", "--zone", Z[0]]) == 0 and read()["nodes"] == {}
+
+
+def test_googles_message_with_quotes_is_read_whole():
+    e = 'ERROR: (gcloud) {"code": 3, "message": "Invalid value for field \\"node.runtime_version\\": v9"}'
+    assert tpu.gerr(e) == 'Invalid value for field "node.runtime_version": v9'
 
 
 def test_queue_skips_zones_without_quota(cloud):
@@ -161,6 +312,37 @@ def test_chip_gone_elsewhere_is_forgotten(cloud, capsys):
     open(os.environ["FAKE_GCLOUD_STATE"], "w").write(json.dumps(S))
     assert tpu.main(["status"]) == 0 and "No mashbox chips" in capsys.readouterr().out
     assert json.load(open(tpu.STATE)) == {}
+
+
+@pytest.mark.parametrize("err,says", [("auth", "gcloud auth login"), ("other", "could not list chips in us-east5-a")])
+def test_failed_list_never_reads_as_nothing_up(cloud, capsys, err, says):
+    read = cloud(plain={Z[0]: "ok"})
+    assert up() == 0
+    S = read()
+    S["list_error"] = {Z[2]: err}                                    # one zone's list fails; the chip is in Z[0]
+    open(os.environ["FAKE_GCLOUD_STATE"], "w").write(json.dumps(S))
+    capsys.readouterr()
+    for cmd in (["status"], ["down"]):
+        assert tpu.main(cmd) == 2
+        o = capsys.readouterr()
+        assert says in o.err and "Nothing was changed" in o.err and "No mashbox chips" not in o.out + o.err
+    assert read()["nodes"] and "mashbox-qwen3-8-27b" in json.load(open(tpu.STATE))   # not deleted, not forgotten
+
+
+def test_held_tunnel_stops_when_the_chip_is_gone(cloud, capsys, monkeypatch):
+    """Seen for real 2026-10-28: `down` in a second terminal left the first one reopening a tunnel to a deleted chip
+    while it still said the chip bills. hold() must notice the chip is gone and stop."""
+    read = cloud(plain={Z[0]: "ok"})
+    assert up() == 0
+    S = read()
+    S["nodes"] = {}                                                  # taken down from another terminal
+    open(os.environ["FAKE_GCLOUD_STATE"], "w").write(json.dumps(S))
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    m = tpu.model("qwen3-8-27b")
+    assert REAL_HOLD(dead, "p1", Z[0], "mashbox-qwen3-8-27b", m, 8000, None) == 0
+    assert "is gone" in capsys.readouterr().out
+    assert "mashbox-qwen3-8-27b" not in json.load(open(tpu.STATE))
 
 
 def test_down_queued_chip_deletes_request_and_node(cloud):
@@ -278,3 +460,22 @@ def test_install_sh_refuses(tmp_path, uname_s, uname_m, uid, msg):
     r = subprocess.run(["sh", install_sh()], capture_output=True, text=True,
                        env=dict(PATH=f"{b}:/usr/bin:/bin", HOME=str(tmp_path)))
     assert r.returncode == 1 and msg in r.stderr and "uv" not in r.stdout
+
+
+def test_tunnel_port_is_held_and_its_forward_is_private():
+    """The local port stays bound by mashbox for the whole session, so another
+    local user cannot bind it before ssh does (or after a drop) and answer in the chip's place; the SSH forward and its
+    log live in a 0700 directory of this user, never a shared /tmp name."""
+    lp = tpu.free_port(18950)
+    try:
+        port = lp.port if hasattr(lp, "port") else lp
+        other = socket.socket()
+        with pytest.raises(OSError):
+            other.bind(("127.0.0.1", port))                 # the old free_port released it here
+        other.close()
+        assert os.stat(lp.dir).st_mode & 0o777 == 0o700 and lp.sock.startswith(lp.dir)
+        src = inspect.getsource(tpu.open_tunnel)
+        assert "lp.dir" in src and "gettempdir" not in src
+    finally:
+        if hasattr(lp, "close"):
+            lp.close()

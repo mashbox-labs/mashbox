@@ -1,12 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mashbox"
-version = "0.1.0"
+version = "0.1.1"
 description = "Open models that run faster and cheaper, from MASHBOX Labs"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "LICENSE-KERNELS"]
 requires-python = ">=3.12"
 dependencies = ["numpy", "ml_dtypes", "tokenizers", "jinja2==3.1.6", "huggingface_hub", "flatbuffers"]
 
@@ -18,6 +20,12 @@ hy-nomas = ["torch>=2.5", "transformers==4.57.1", "pyyaml", "scipy", "imageio-ff
 
 [project.scripts]
 mashbox = "mashbox.cli:main"
+
+[project.urls]
+Homepage = "https://mashbox.gg"
+Documentation = "https://mashbox.gg/docs"
+Source = "https://github.com/mashbox-labs/mashbox"
+Issues = "https://github.com/mashbox-labs/mashbox/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

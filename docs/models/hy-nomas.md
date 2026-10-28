@@ -190,4 +190,4 @@ Point your agent (Claude Code, Codex, Gemini CLI or any other) at this repo and 
 
 Hy-Nomas is made by Tencent Hunyuan: [tencent/Hy-Nomas](https://huggingface.co/tencent/Hy-Nomas). Tencent licenses Hy-Nomas under Apache-2.0; third-party components keep their own licences. Their LICENSE file is kept unchanged in [licenses/hy-nomas/LICENSE](../../licenses/hy-nomas/LICENSE).
 
-Our code in this repo: licence not chosen yet (see [LICENSE](../../LICENSE)). Compiled kernels: see [LICENSE-KERNELS](../../LICENSE-KERNELS).
+Our code in this repo: Apache-2.0 (see [LICENSE](../../LICENSE)). Compiled kernels: see [LICENSE-KERNELS](../../LICENSE-KERNELS).
