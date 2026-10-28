@@ -1,0 +1,1 @@
+Qwen3-30B-A3B: quality vs file size, 20 files. Measured 2026-10-27 07:15 UTC on a frozen llama.cpp CPU scorer (16 threads, AMD EPYC 7502P / 7B13) vs the same scorer and the same 10,240 positions for every rival file. MASHBOX measurement ledger CH-04.

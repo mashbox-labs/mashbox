@@ -1,0 +1,1 @@
+Qwen3.8-27B on one TPU v6e-1: weights in chip memory. Measured 2026-10-28 03:53-04:27 UTC on one TPU v6e-1, 31.24 GiB HBM vs the same TPU v6e-1 (vLLM-TPU 0.32.0). MASHBOX measurement ledger CH-03.

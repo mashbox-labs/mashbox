@@ -1,0 +1,432 @@
+{
+  "schema": 1,
+  "github": {
+    "org": "mashbox-labs",
+    "repo": "mashbox"
+  },
+  "hf": {
+    "org": "mashbox-labs"
+  },
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "models": [
+    {
+      "id": "hy-nomas",
+      "name": "Hy-Nomas",
+      "kind": "world",
+      "version": "0.1.0",
+      "launch": "coming soon",
+      "summary": "Tencent's open video world model, playable in the browser from a TPU v6e-4.",
+      "in": "text and movement keys",
+      "out": "video",
+      "path": "src/mashbox/models/hy_nomas",
+      "run": "~/.local/bin/mashbox run hy-nomas --ui",
+      "upstream": {
+        "name": "Hy-Nomas",
+        "maker": "Tencent Hunyuan",
+        "hf": "tencent/Hy-Nomas",
+        "github": "Tencent-Hunyuan/Hy-Nomas",
+        "license": "apache-2.0",
+        "license_link": "https://huggingface.co/tencent/Hy-Nomas/blob/main/LICENSE",
+        "revision": "4b8b4ed8ac67bf7ed82a5b80e953af548d82bd8f"
+      },
+      "hf_repo": "mashbox-labs/Hy-Nomas-TPU",
+      "hf_revision": "9cb5c622a60a17458ecb444d6e46633f0aa3f06c",
+      "pipeline_tag": null,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "date": "2026-10-28",
+          "note": "v6e-4 only; v6e-1 not supported yet"
+        },
+        "v5e": {
+          "status": "not supported",
+          "reason": "needs more than 16 GB per chip as laid out"
+        }
+      },
+      "results": [
+        {
+          "chip": "TPU v6e-4",
+          "metric": "Compute per second of video, quality preset, Tencent decoder (1.00 = real time)",
+          "value": "1.045 s (median of 87 and of 27 windows on two chips)",
+          "baseline": "0.93 s: our 26 October live demo code on the same chip type",
+          "date": "2026-10-28"
+        },
+        {
+          "chip": "TPU v6e-4",
+          "metric": "Compute per second of video, quality preset, MASHBOX Fast decoder",
+          "value": "0.689 s (median of 11 windows)",
+          "baseline": "1.045 s with Tencent's decoder, same chip and run",
+          "date": "2026-10-28"
+        },
+        {
+          "chip": "TPU v6e-4",
+          "metric": "First start on a new chip, command to first frame on screen (weights already downloaded; compiling included)",
+          "value": "13 min 10 s",
+          "baseline": "n/a",
+          "date": "2026-10-28"
+        },
+        {
+          "chip": "TPU v6e-4",
+          "metric": "Later starts, command to first frame on screen",
+          "value": "1 min 58 s",
+          "baseline": "n/a",
+          "date": "2026-10-28"
+        }
+      ],
+      "files": [],
+      "kernels": [
+        {
+          "file": "kernels/mashbox_hy_nomas_kernels-0.1.0-py3-none-any.whl",
+          "sha256": "94ae100fa7a42c30b565099e26610ef2ace8557df43676150e96704c71240dda",
+          "jax": "0.11.2",
+          "jaxlib": "0.11.2",
+          "libtpu": "0.0.48.*",
+          "chips": [
+            "v6e"
+          ],
+          "form": "exported"
+        }
+      ],
+      "plain_jax": {
+        "status": "tested",
+        "note": "CPU tests on a tiny model of the same architecture, checked against the code of the 26 October live demo; chip runs in the release tests"
+      },
+      "cloud": {
+        "accelerator": "v6e-4",
+        "runtime": "v2-alpha-tpuv6e",
+        "extras": "tpu,hy-nomas",
+        "disk_gb": 92,
+        "port": 8790,
+        "health": "/",
+        "url_path": "/",
+        "zones": [
+          "asia-northeast1-b",
+          "europe-west4-a",
+          "us-east5-b",
+          "us-east5-a",
+          "us-south1-a",
+          "us-east1-d",
+          "us-central1-b"
+        ]
+      }
+    },
+    {
+      "id": "qwen3-8-27b",
+      "name": "Qwen3.8-27B",
+      "kind": "llm-tpu",
+      "version": "0.1.0",
+      "summary": "Qwen's 27B hybrid-attention language model on one Google Cloud TPU v6e chip, with an OpenAI-compatible server.",
+      "path": "src/mashbox/models/qwen3_8_27b",
+      "run": "~/.local/bin/mashbox run qwen3-8-27b",
+      "in": "text",
+      "out": "text",
+      "upstream": {
+        "name": "Qwen3.8-27B",
+        "maker": "Qwen",
+        "hf": "Qwen/Qwen3.8-27B",
+        "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+        "license": "apache-2.0",
+        "license_link": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE"
+      },
+      "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
+      "hf_revision": "0c9dd4437aae3bbfee52245f9cc282795d7e0c0c",
+      "base_model_relation": "quantized",
+      "pipeline_tag": "text-generation",
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "date": "2026-10-28"
+        },
+        "v5e": {
+          "status": "not supported",
+          "reason": "the weights alone are about 27 GB and a v5e chip has 16 GB"
+        }
+      },
+      "headline": [
+        {
+          "results": [
+            5
+          ],
+          "big": "38.1 vs 31.4 tok/s",
+          "label": "vs vLLM on the same chip, 1 request at a time",
+          "readme": true
+        },
+        {
+          "results": [
+            8
+          ],
+          "big": "130.1 vs 1,606.7 s",
+          "label": "first start to ready, weights on disk, vs vLLM on the same chip",
+          "readme": true
+        },
+        {
+          "results": [
+            9
+          ],
+          "big": "258 tok/s total",
+          "label": "8 users at once on one chip (37.45 for 1 user)"
+        },
+        {
+          "results": [
+            4
+          ],
+          "big": "9.8 s",
+          "label": "to ready after the download, with the shipped compile cache (25.7 s without)"
+        }
+      ],
+      "headline_note": "vLLM comparisons ran both sides on the same Google Cloud TPU v6e-1: ours with Qwen3.8-27B-BQ8_R.bshj (26.94 GB, 8.01 bits per weight), vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8), since Qwen's bf16 weights do not fit one chip. Measured 2026-10-28 (UTC). Every measurement and its method: [Results](#results).",
+      "results": [
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Decode speed, 1 request (64-token prompt, 128 new tokens, greedy)",
+          "value": "38.6 tokens/s (26.1 ms per token)",
+          "baseline": "n/a: Qwen's bf16 weights (55.6 GB) do not fit one v6e chip (32 GB)",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Decode speed, 1 request",
+            "ours": "38.6 tok/s",
+            "vs": "n/a",
+            "notes": [
+              "64-token prompt, 128 new tokens, greedy."
+            ],
+            "vs_notes": [
+              "Qwen's bf16 weights (55.6 GB) do not fit one v6e chip (32 GB)."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Decode speed, 8 requests at once (same prompt length and output)",
+          "value": "269 tokens/s total (33.6 per request)",
+          "baseline": "n/a: Qwen's bf16 weights (55.6 GB) do not fit one v6e chip (32 GB)",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Decode speed, 8 requests at once",
+            "ours": "269 tok/s total (33.6 each)",
+            "vs": "n/a",
+            "notes": [
+              "Same prompt length and output for every request."
+            ],
+            "vs_notes": [
+              "Qwen's bf16 weights (55.6 GB) do not fit one v6e chip (32 GB)."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Start to ready, first run (weights file on disk; sha256 check and compiling included)",
+          "value": "44.0 s",
+          "baseline": "n/a",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Start to ready, first run",
+            "ours": "44.0 s",
+            "vs": "n/a",
+            "notes": [
+              "Weights file already on disk; sha256 check and compiling included."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Start to ready, later runs",
+          "value": "7.1 s",
+          "baseline": "n/a",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Start to ready, later runs",
+            "ours": "7.1 s",
+            "vs": "n/a"
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Start to ready on a new chip, first run (26.94 GB download from Hugging Face and sha256 check included)",
+          "value": "138 s (9.8 s after the download and check)",
+          "baseline": "166.6 s without the compile cache (25.7 s after the download and check), same chip and day",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Start to ready on a new chip, first run",
+            "ours": "138 s (9.8 s after the download)",
+            "vs": "166.6 s (25.7 s) without the compile cache",
+            "notes": [
+              "Includes the 26.94 GB download from Hugging Face and its sha256 check; the number in brackets counts from the end of the download and check. Same chip and day for both."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Server speed, 1 request at a time (short chat prompts, 256 new tokens, greedy), vs vLLM on the same chip",
+          "value": "38.1 tokens/s",
+          "baseline": "vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1: 31.4 tokens/s",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Server speed, 1 request at a time",
+            "ours": "38.1 tok/s",
+            "vs": "vLLM: 31.4 tok/s",
+            "notes": [
+              "Short chat prompts, 256 new tokens, greedy."
+            ],
+            "vs_notes": [
+              "vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Server speed, 1 request at a time (790-token prompts, 256 new tokens, greedy), vs vLLM on the same chip",
+          "value": "37.0 tokens/s",
+          "baseline": "vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1: 31.0 tokens/s",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Server speed, 1 request at a time, long prompts",
+            "ours": "37.0 tok/s",
+            "vs": "vLLM: 31.0 tok/s",
+            "notes": [
+              "790-token prompts, 256 new tokens, greedy."
+            ],
+            "vs_notes": [
+              "vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Server speed, 1 request at a time, sampled (temperature 0.7, top_p 0.8, top_k 20), vs vLLM on the same chip",
+          "value": "33.0 tokens/s",
+          "baseline": "vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1: 23.7 tokens/s",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Server speed, 1 request at a time, sampled",
+            "ours": "33.0 tok/s",
+            "vs": "vLLM: 23.7 tok/s",
+            "notes": [
+              "Temperature 0.7, top_p 0.8, top_k 20."
+            ],
+            "vs_notes": [
+              "vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Start to ready, weights already on disk, empty compile caches, vs vLLM on the same chip",
+          "value": "130.1 s",
+          "baseline": "vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1: 1,606.7 s; it starts only with 3 memory flags, and Qwen's bf16 weights do not fit",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Start to ready, empty compile caches",
+            "ours": "130.1 s",
+            "vs": "vLLM: 1,606.7 s",
+            "notes": [
+              "Weights already on disk."
+            ],
+            "vs_notes": [
+              "vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1.",
+              "vLLM starts this model only with 3 memory flags, and Qwen's bf16 weights do not fit."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Server speed, 8 users at once (closed loop for 60 s through the OpenAI-compatible server, chat prompts of 29 to 33 tokens, 128 new tokens, greedy)",
+          "value": "258.0 tokens/s total",
+          "baseline": "1 user, same server and chip: 37.45 tokens/s",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Server speed, 8 users at once",
+            "ours": "258.0 tok/s total",
+            "vs": "1 user: 37.45 tok/s",
+            "notes": [
+              "Closed loop for 60 s through the OpenAI-compatible server, chat prompts of 29 to 33 tokens, 128 new tokens, greedy."
+            ],
+            "vs_notes": [
+              "Same server and chip."
+            ]
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "Qwen3.8-27B-BQ8_R.bshj",
+          "kind": "weights",
+          "format": "BSHJ",
+          "quant_type": "BQ8_R",
+          "default": true,
+          "variant": true,
+          "bytes": 26940995584,
+          "sha256": "6860b7e154a56be49f680aeb4c645940bab7a1cbbcd6744fa48d596db4f2ab90",
+          "gb": 26.94,
+          "bpw": 8.013,
+          "quality": "mean KL 0.00065, top-1 agreement 99.72% vs bf16 (8 prompts x 32 tokens, measured 2026-10-27)",
+          "speed": "38.6 tokens/s for 1 request, 269 tokens/s for 8 (TPU v6e-1)",
+          "date": "2026-10-28"
+        },
+        {
+          "name": "xla-cache/v6e-jax0.11.2-libtpu0.0.48.1.tar",
+          "kind": "xla-cache",
+          "format": "XLA compile cache (tar)",
+          "default": false,
+          "variant": false,
+          "bytes": 47267840,
+          "sha256": "532fd38f2c2a6b9d4317448df9127609918b453417a6d05fc415225a2a174dee",
+          "gb": 0.05,
+          "chips": [
+            "v6e"
+          ],
+          "jax": "0.11.2",
+          "jaxlib": "0.11.2",
+          "libtpu": "0.0.48.1",
+          "quality": "n/a (compiled programs, not weights)",
+          "speed": "first start on TPU v6e-1: ready 9.8 s after the weights download, 25.7 s without it",
+          "date": "2026-10-28"
+        }
+      ],
+      "kernels": [
+        {
+          "file": "kernels/mashbox_qwen3_8_27b_kernels-0.1.0-py3-none-any.whl",
+          "sha256": "eeddc7804afa95236ed85b5c6b305979585b5657d3a32983d0332ddacf229c09",
+          "jax": "0.11.2",
+          "jaxlib": "0.11.2",
+          "libtpu": "0.0.48.*",
+          "chips": [
+            "v6e"
+          ],
+          "form": "exported"
+        }
+      ],
+      "plain_jax": {
+        "status": "tested",
+        "note": "CPU tests on a tiny model of the same architecture; chip runs in the release tests"
+      },
+      "cloud": {
+        "accelerator": "v6e-1",
+        "runtime": "v2-alpha-tpuv6e",
+        "extras": "tpu",
+        "disk_gb": 30,
+        "port": 8000,
+        "health": "/health",
+        "url_path": "/v1",
+        "zones": [
+          "us-east5-b",
+          "europe-west4-a",
+          "us-east5-a",
+          "asia-northeast1-b",
+          "us-south1-a",
+          "us-east1-d",
+          "us-central1-b"
+        ],
+        "agents": {
+          "run_args": [
+            "--ctx",
+            "32768",
+            "--slots",
+            "1"
+          ],
+          "guide": "https://mashbox.gg/docs/agents-on-tpu"
+        }
+      }
+    }
+  ]
+}

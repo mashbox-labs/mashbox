@@ -1,0 +1,26 @@
+# MASHBOX
+
+> MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming. This repo is the Python package and CLI `mashbox`; the models in it run on Google Cloud TPU. Coding agents: read AGENTS.md first. docs/google-cloud.md goes from a Google account with no Cloud setup to a running model and a deleted chip.
+
+Model code is open. Each model's TPU kernels ship compiled, as one bundle that `mashbox run` downloads and checks; models that list plain JAX as tested also run without it. A chip bills from create to delete.
+
+## Start
+
+- [AGENTS.md](https://raw.githubusercontent.com/mashbox-labs/mashbox/main/AGENTS.md): rules and steps for coding agents
+- [Google Cloud setup](https://raw.githubusercontent.com/mashbox-labs/mashbox/main/docs/google-cloud.md): account, project, billing, chip, run, delete
+- [README](https://raw.githubusercontent.com/mashbox-labs/mashbox/main/README.md): quickstart and the models table
+- [Chips](https://raw.githubusercontent.com/mashbox-labs/mashbox/main/docs/chips.md): TPU v6e and v5e differences
+- [Use with coding agents](https://raw.githubusercontent.com/mashbox-labs/mashbox/main/docs/agents-on-tpu.md): Claude Code, Codex and Pi on a model you serve
+
+## Models
+
+<!-- models:start -->
+- [Qwen3.8-27B](https://mashbox.gg/docs/models/qwen3-8-27b): text in, text out. LLM.
+- Hy-Nomas: coming soon. World model.
+<!-- models:end -->
+
+## Optional
+
+- [models.json](https://raw.githubusercontent.com/mashbox-labs/mashbox/main/models.json): every model with its chips, results and files, machine-readable
+- [CONTRIBUTING.md](https://raw.githubusercontent.com/mashbox-labs/mashbox/main/CONTRIBUTING.md): how to send fixes
+- [Hugging Face](https://huggingface.co/mashbox-labs): weights

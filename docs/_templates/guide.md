@@ -1,0 +1,64 @@
+<!--
+Guide template: a task the reader does once, start to finish, often outside our tools (Google Cloud console, Hugging
+Face, GitHub). Copy to docs/<slug>.md and add it to docs/SUMMARY.md. Keep the "## " headings below in this order.
+Numbered steps are "## <n>. <verb phrase>". Every step where the reader leaves our tools gets a real screenshot
+(media standard: 1440 wide PNG, numbered 8-bit callouts, Gaussian blur on personal details, checked at full size) in
+docs/media/, and a numbered list whose numbers match the callouts. Every step also gives the terminal command when one
+exists, and what the reader sees when it worked. Untested parts: one "Pending" line plus
+  <!- - TODO source="<test record or release run>" - ->   (no spaces in the real marker)
+Words follow docs/glossary.md.
+-->
+# <The task, in plain words>
+
+<One paragraph: where the reader starts, where they end up, which systems the commands are for.>
+
+## What it costs
+
+<Only when something bills. List price per hour with the date it was read, and what a short run and a forgotten run cost.>
+
+## Before you start
+
+- <Account the reader needs.>
+- <Tool the reader needs, with the version we tested.>
+- <How long it took us, measured, with the date.>
+
+## 1. <First step>
+
+Open [<page title>](<https://link to the exact page>).
+
+<!-- Media slot: one screenshot per action. -->
+![<Page name>: 1 <first callout>, 2 <second callout>](media/<guide>-01-<what>.png)
+
+1. <What callout 1 is and what to do there.>
+2. <What callout 2 is and what to do there.>
+
+Or from the terminal:
+
+```bash
+<command>
+```
+
+<What the reader sees when it worked.>
+
+## 2. <Next step>
+
+<Same shape as step 1.>
+
+## Check it worked
+
+<One command or screen that proves the whole guide worked, and what it prints.>
+
+## Clean up
+
+<Only when something bills: how to delete it, and how to check that it is gone. If deleting is the last numbered
+step, that step is the clean-up and this section links to it.>
+
+## Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| <the exact error or screen from our own test runs> | <the fix, with the step it sends the reader back to> |
+
+## Next
+
+- [<Page>](<link>): <what it does for the reader>

@@ -1,0 +1,22 @@
+name: Model request
+description: Ask for an open model on TPU
+labels: [model request]
+body:
+  - type: input
+    id: link
+    attributes:
+      label: Hugging Face link to the model
+      placeholder: https://huggingface.co/<org>/<model>
+    validations:
+      required: true
+  - type: textarea
+    id: use
+    attributes:
+      label: What you want to do with it
+    validations:
+      required: true
+  - type: dropdown
+    id: chip
+    attributes:
+      label: Chip you want to run it on
+      options: [TPU v6e, TPU v5e, either]

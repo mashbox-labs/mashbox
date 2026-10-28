@@ -1,0 +1,51 @@
+MASHBOX Kernel Licence, version 1.0 (28 October 2026)
+
+Copyright 2026 MASHBOX Labs. hello@mashbox.gg
+
+1. What this covers
+
+This licence covers the compiled files MASHBOX Labs ships with each model
+release: the kernel bundles (files under kernels/ in a model's Hugging Face
+repo, our Culet kernels) and the precompiled XLA compile cache (files under
+compile-cache/). Together they are "the Kernels". The source code in this
+repository is not covered here; it is under the Apache License 2.0 in LICENSE.
+Model weights keep their makers' licences.
+
+2. What you may do, free of charge
+
+You may download, install, run and copy the Kernels, unmodified, to run the
+models they ship with, through the mashbox package or your own code, for:
+  a. personal use;
+  b. research, teaching and evaluation;
+  c. any use, including commercial production, by a person or organisation
+     whose total annual revenue (including affiliates) is under
+     US$1,000,000.
+
+You may redistribute the Kernels unmodified, as part of a model release or a
+copy of this repository, if this licence goes with them.
+
+3. When you need a commercial licence
+
+An organisation with total annual revenue (including affiliates) of
+US$1,000,000 or more needs a commercial licence from MASHBOX Labs to use the
+Kernels in production. Evaluation and research are free at any size. Write to
+hello@mashbox.gg.
+
+4. What you may not do
+
+  a. Sell the Kernels on their own, or offer them as a separate product.
+  b. Remove or change this licence or the copyright line.
+  c. Use the MASHBOX name or marks to endorse your product without written
+     permission.
+
+5. No warranty
+
+THE KERNELS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN
+NO EVENT SHALL MASHBOX LABS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY ARISING FROM THE KERNELS OR THEIR USE.
+
+6. Ending
+
+This licence ends automatically if you break its terms. It comes back if you
+fix the breach within 30 days of learning of it.

@@ -1,0 +1,75 @@
+name: CI
+# T0 runs on every change in seconds. T1 runs the CPU tests of the areas a change touches (tools/ci_select.py);
+# a docs-only change runs T0 alone. The chip tier (T2) runs on our own TPUs, outside GitHub. See CI.md.
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  t0:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      any: ${{ steps.select.outputs.any }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install -q pytest==9.0.2 ruff==0.14.3
+      - name: Registry, copies, views, imports, docstrings
+        run: PYTHONPATH=src python3 -m pytest -q -p no:cacheprovider -m t0 tests/cpu/test_core.py
+      - name: Syntax errors and undefined names
+        run: ruff check --no-cache --select E9,F63,F7,F82 --output-format github .
+      - name: Pick the T1 areas
+        id: select
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: python3 tools/ci_select.py --base "$BASE" --head "$HEAD" --github-output
+      - name: Every commit is signed off
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          for c in $(git rev-list "$BASE..$HEAD"); do
+            git log -1 --format=%B "$c" | grep -q '^Signed-off-by: ' || { echo "commit $c is not signed off (git commit -s)"; exit 1; }
+          done
+
+  t1:
+    needs: t0
+    if: needs.t0.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.t0.outputs.matrix) }}
+    name: t1 (${{ matrix.area }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install (CPU torch, no CUDA wheels)
+        env:
+          EXTRA: ${{ matrix.extra }}
+        run: |
+          python3 -m pip install -q uv==0.13.6
+          uv pip install --system -q torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --system -q -e ".[dev]" $EXTRA
+      - name: CPU tests of ${{ matrix.area }}
+        env:
+          AREA: ${{ matrix.area }}
+        run: python3 -m pytest tests/cpu -p no:cacheprovider -m "$AREA and not t0 and not quarantine" --durations=15 -rs

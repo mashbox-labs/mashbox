@@ -1,0 +1,332 @@
+"""Qwen3.8-27B (Hugging Face model_type qwen3_5_text) in plain JAX.
+
+Layers come in groups of `full_attention_interval`: (FI - 1) gated delta rule linear-attention layers, then one gated
+full-attention layer. All math follows the Hugging Face reference: zero-centred RMSNorm, partial rotary embedding, causal
+depthwise conv + SiLU in front of the linear attention, gated RMSNorm on its output.
+
+Weights: every big linear is either a bf16 array (out, in) or {"q": int8 (out, in), "s": f32 (out,)} with y = (x . q) * s.
+
+State per slot (S slots + 1 scratch slot used by padding rows):
+  full attention   K, V caches (NG, S + 1, CTX, KV, HD) bf16
+  linear attention recurrent state (NG, FI - 1, S + 1, Hv, Dk, Dv) f32 and conv tail (NG, FI - 1, S + 1, K - 1, conv dim) bf16
+"""
+import json
+import os
+
+import numpy as np
+import jax
+import jax.numpy as jnp
+from jax import lax
+
+f32, bf16 = jnp.float32, jnp.bfloat16
+HI = lax.Precision.HIGHEST
+CHUNK = 64
+NEG = -1e30
+
+
+class Config:
+    """Shapes from the model's config.json (nested text_config or flat). Anything this port does not implement is refused."""
+
+    def __init__(self, model_dir, layers=None):
+        raw = json.load(open(os.path.join(model_dir, "config.json")))
+        c = raw.get("text_config") or raw
+        if c.get("model_type") not in ("qwen3_5_text", "qwen3_5"):
+            raise NotImplementedError(f"model_type {c.get('model_type')}")
+        rp = c.get("rope_parameters") or {}
+        if rp.get("rope_type", "default") != "default":
+            raise NotImplementedError(f"rope {rp}")
+        if c.get("hidden_act", "silu") != "silu" or not c.get("attn_output_gate", True):
+            raise NotImplementedError("hidden_act / attn_output_gate")
+        if c.get("attention_bias"):
+            raise NotImplementedError("attention_bias")
+        self.L, self.D, self.F = c["num_hidden_layers"], c["hidden_size"], c["intermediate_size"]
+        self.H, self.KV, self.HD = c["num_attention_heads"], c["num_key_value_heads"], c["head_dim"]
+        self.V = c["vocab_size"]
+        self.theta = float(rp.get("rope_theta") or c.get("rope_theta") or 10000.0)
+        self.prf = float(rp.get("partial_rotary_factor", c.get("partial_rotary_factor", 1.0)))
+        self.RD = int(self.HD * self.prf)
+        self.eps = float(c.get("rms_norm_eps", 1e-6))
+        self.tie = bool(raw.get("tie_word_embeddings", c.get("tie_word_embeddings", False)))
+        self.HK, self.HV = c["linear_num_key_heads"], c["linear_num_value_heads"]
+        self.DK, self.DV, self.CK = c["linear_key_head_dim"], c["linear_value_head_dim"], c["linear_conv_kernel_dim"]
+        self.CONV = 2 * self.HK * self.DK + self.HV * self.DV
+        self.FI = int(c.get("full_attention_interval", 4))
+        want = [("full_attention" if (i + 1) % self.FI == 0 else "linear_attention") for i in range(self.L)]
+        if (c.get("layer_types") or want) != want or self.L % self.FI:
+            raise NotImplementedError("layer_types is not (FI-1) x linear + 1 x full, repeated")
+        if layers is not None:                      # tests only: the first `layers` layers (a multiple of FI)
+            assert layers % self.FI == 0 and 0 < layers <= self.L
+            self.L = layers
+        self.NG = self.L // self.FI
+        self.types = want[:self.L]
+
+
+# ---------------------------------------------------------------------------------------------------------------- math
+def linear(x, w):
+    """(.., in) x (out, in) with f32 accumulation, rounded to x.dtype. w = bf16 array or {"q": int8, "s": f32 (out,)}."""
+    if isinstance(w, dict):
+        y = lax.dot_general(x, w["q"].astype(x.dtype), (((x.ndim - 1,), (1,)), ((), ())), preferred_element_type=f32)
+        return (y * w["s"]).astype(x.dtype)
+    return lax.dot_general(x, w, (((x.ndim - 1,), (1,)), ((), ())), preferred_element_type=f32).astype(x.dtype)
+
+
+def rms_norm(x, w, eps):
+    """Zero-centred RMSNorm: normalise in f32, times (1 + w) in f32, cast back."""
+    x32 = x.astype(f32)
+    return (x32 * lax.rsqrt(jnp.mean(x32 * x32, -1, keepdims=True) + eps) * (1.0 + w.astype(f32))).astype(x.dtype)
+
+
+def rms_norm_gated(x, z, w, eps):
+    """Gated RMSNorm: normalise in f32, cast back, times the weight, times silu(z) in f32, cast back."""
+    x32 = x.astype(f32)
+    h = w * (x32 * lax.rsqrt(jnp.mean(x32 * x32, -1, keepdims=True) + eps)).astype(x.dtype)
+    return (h.astype(f32) * jax.nn.silu(z.astype(f32))).astype(x.dtype)
+
+
+def rope_partial(x, cos, sin, rd):
+    xr, xp = x[..., :rd], x[..., rd:]
+    h = rd // 2
+    xr = xr * cos + jnp.concatenate([-xr[..., h:], xr[..., :h]], -1) * sin
+    return jnp.concatenate([xr, xp], -1)
+
+
+def l2norm(x):
+    return x * lax.rsqrt(jnp.sum(x * x, -1, keepdims=True) + 1e-6)
+
+
+def softplus(x):   # torch softplus(beta=1, threshold=20)
+    return jnp.where(x > 20.0, x, jnp.log1p(jnp.exp(jnp.minimum(x, 20.0))))
+
+
+def embed(E, toks):
+    if isinstance(E, dict):
+        return (E["q"][toks].astype(f32) * E["s"][toks][..., None]).astype(bf16)
+    return E[toks]
+
+
+def gated_delta_chunk(q, k, v, g, beta, s0, CH=CHUNK):
+    """Gated delta rule, chunked form (the Hugging Face torch reference algorithm), f32 at HIGHEST precision.
+    q, k (B,T,H,Dk) l2-normalised, v (B,T,H,Dv), g / beta (B,T,H) (0 / 0 at padded positions), s0 (B,H,Dk,Dv)
+    -> o (B,T,H,Dv), s1 (B,H,Dk,Dv)."""
+    B, T, Hh, Dk = k.shape
+    Dv = v.shape[-1]
+    tr = lambda x: jnp.swapaxes(x, 1, 2)
+    q, k, v, beta, g = tr(q), tr(k), tr(v), tr(beta), tr(g)
+    q = q * (Dk ** -0.5)
+    pad = (-T) % CH
+    if pad:
+        q, k, v = (jnp.pad(x, ((0, 0), (0, 0), (0, pad), (0, 0))) for x in (q, k, v))
+        beta, g = (jnp.pad(x, ((0, 0), (0, 0), (0, pad))) for x in (beta, g))
+    N = (T + pad) // CH
+    vb, kb = v * beta[..., None], k * beta[..., None]
+    ch = lambda x: x.reshape(B, Hh, N, CH, x.shape[-1])
+    q, k, kb, vb = ch(q), ch(k), ch(kb), ch(vb)
+    cum = jnp.cumsum(g.reshape(B, Hh, N, CH), -1)
+    up = jnp.triu(jnp.ones((CH, CH), bool), 1)
+    pdec = jnp.exp(jnp.where(up, -jnp.inf, cum[..., :, None] - cum[..., None, :]))
+    ein = lambda s, a, b: jnp.einsum(s, a, b, precision=HI, preferred_element_type=f32)
+    ut = ein("bhncd,bhned->bhnce", kb, k) * pdec
+    intra = ein("bhncd,bhned->bhnce", q, k) * pdec
+    dkb = kb * jnp.exp(cum)[..., None]
+    nv = lax.linalg.triangular_solve(ut, vb, left_side=True, lower=True, unit_diagonal=True)
+    kcd = lax.linalg.triangular_solve(ut, dkb, left_side=True, lower=True, unit_diagonal=True)
+    q2 = q * jnp.exp(cum)[..., None]
+    k2 = k * jnp.exp(cum[..., -1:] - cum)[..., None]
+    cd = jnp.exp(cum[..., -1])
+
+    def step(s, xs):
+        nv_i, kcd_i, q2_i, in_i, k2_i, cd_i = xs
+        vn = nv_i - ein("bhcd,bhde->bhce", kcd_i, s)
+        o = ein("bhcd,bhde->bhce", q2_i, s) + ein("bhce,bhed->bhcd", in_i, vn)
+        s = s * cd_i[..., None, None] + ein("bhcd,bhce->bhde", k2_i, vn)
+        return s, o
+    mv = lambda x: jnp.moveaxis(x, 2, 0)
+    s1, o = lax.scan(step, s0, (mv(nv), mv(kcd), mv(q2), mv(intra), mv(k2), mv(cd)))
+    o = jnp.moveaxis(o, 0, 2).reshape(B, Hh, N * CH, Dv)[:, :, :T]
+    return tr(o), s1
+
+
+def gated_delta_step(q, k, v, g, beta, s):
+    """One recurrent step: q, k (B,H,Dk), v (B,H,Dv), g / beta (B,H), s (B,H,Dk,Dv) f32."""
+    q = q / (q.shape[-1] ** 0.5)
+    s = s * jnp.exp(g)[..., None, None]
+    kv = jnp.einsum("bhkv,bhk->bhv", s, k, precision=HI, preferred_element_type=f32)
+    u = (v - kv) * beta[..., None]
+    s = s + k[..., :, None] * u[..., None, :]
+    o = jnp.einsum("bhkv,bhk->bhv", s, q, precision=HI, preferred_element_type=f32)
+    return o, s
+
+
+def gated_delta(qr, kr, v, g, beta, s0):
+    """qr, kr (B,T,Hk,Dk) before l2norm, v (B,T,Hv,Dv), g / beta (B,T,Hv) f32, s0 (B,Hv,Dk,Dv) f32 -> o (B,T,Hv,Dv) f32, s1.
+    Value head h reads key head h // (Hv / Hk)."""
+    rep = v.shape[2] // qr.shape[2]
+    q = jnp.repeat(l2norm(qr.astype(f32)), rep, axis=2)
+    k = jnp.repeat(l2norm(kr.astype(f32)), rep, axis=2)
+    v = v.astype(f32)
+    if q.shape[1] == 1:
+        o, s1 = gated_delta_step(q[:, 0], k[:, 0], v[:, 0], g[:, 0], beta[:, 0], s0)
+        return o[:, None], s1
+    return gated_delta_chunk(q, k, v, g, beta, s0)
+
+
+# ---------------------------------------------------------------------------------------------------------------- state
+def new_state(c, S, CTX):
+    """Zeroed per-slot state for S slots (+1 scratch slot)."""
+    kv = (c.NG, S + 1, CTX, c.KV, c.HD)
+    return ((jnp.zeros(kv, bf16), jnp.zeros(kv, bf16)),
+            (jnp.zeros((c.NG, c.FI - 1, S + 1, c.HV, c.DK, c.DV), f32),
+             jnp.zeros((c.NG, c.FI - 1, S + 1, c.CK - 1, c.CONV), bf16)))
+
+
+# ---------------------------------------------------------------------------------------------------------------- forward
+def make_forward(c, decode_kernels=None):
+    """-> forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False) -> dict(ck, cv, nxt, lg).
+
+    toks (B, T) int32 at positions p0 + 0..T-1 (lens = valid tokens per row, rows padded on the right), slots (B,) = state
+    slot per row. Tc (static) = how many cached positions full attention reads. contig (static) = slots are arange(B).
+    nxt = greedy next token per row, lg = its logits as f32 (all positions when all_logits).
+    decode_kernels: optional {B: fn(q, k, v, g, beta, pool, slots, layer) -> (o, pool)} compiled linear-attention decode
+    for a batch of B rows; used only for one-token steps with contig slots. Without it, decode runs on plain JAX."""
+    L, D, H, KV, HD, V = c.L, c.D, c.H, c.KV, c.HD, c.V
+    FI, NG, RD = c.FI, c.NG, c.RD
+    HK, HV, DK, DV, CK = c.HK, c.HV, c.DK, c.DV, c.CK
+    KD, VD = HK * DK, HV * DV
+    G, scale, eps = H // KV, HD ** -0.5, c.eps
+    inv = (1.0 / (np.float32(c.theta) ** (np.arange(0, RD, 2, dtype=np.int64).astype(np.float32) / np.float32(RD)))).astype(np.float32)
+
+    def at(t, i):
+        """position i inside a layer group: a list by index, a stacked array by its leading axis"""
+        if isinstance(t, list):
+            return t[i]
+        if isinstance(t, dict) and set(t) != {"q", "s"}:
+            return {k: at(v, i) for k, v in t.items()}
+        return jax.tree_util.tree_map(lambda a: a[i], t)
+
+    def forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False):
+        B, T = toks.shape
+        Kc, Vc = ck
+        R0, C0 = cv
+        kern = decode_kernels.get(B) if (decode_kernels and contig and T == 1) else None
+        pos = p0[:, None] + jnp.arange(T, dtype=jnp.int32)[None]
+        valid = jnp.arange(T)[None] < lens[:, None]
+        fr = pos.astype(f32)[..., None] * jnp.asarray(inv)
+        emb = jnp.concatenate([fr, fr], -1)
+        cos, sin = jnp.cos(emb).astype(bf16)[:, :, None], jnp.sin(emb).astype(bf16)[:, :, None]
+        m2 = (jnp.arange(T)[None, :, None] >= jnp.arange(T)[None, None, :]) & valid[:, None, :]
+        if Tc:
+            m1 = jnp.broadcast_to((jnp.arange(Tc)[None, :] < p0[:, None])[:, None, :], (B, T, Tc))
+            mask = jnp.concatenate([m1, m2], -1)
+        else:
+            mask = m2
+        fresh = p0 == 0
+        x = embed(W["embed"], toks)
+
+        def lin_attn(h, w, r0, c0, pool=None, layer=None):
+            qkv = linear(h, w["qkv"])
+            z = linear(h, w["z"]).reshape(B, T, HV, DV)
+            bb, aa = linear(h, w["b"]), linear(h, w["a"])
+            xe = jnp.concatenate([c0, qkv], 1)
+            cw = w["conv"].astype(f32)
+            acc = xe[:, 0:T].astype(f32) * cw[:, 0]
+            for t_ in range(1, CK):
+                acc = acc + xe[:, t_:t_ + T].astype(f32) * cw[:, t_]
+            co = jax.nn.silu(acc.astype(bf16).astype(f32)).astype(bf16)
+            c1 = jnp.take_along_axis(xe, (lens[:, None] + jnp.arange(CK - 1)[None])[..., None], 1)
+            qr, kr = co[..., :KD].reshape(B, T, HK, DK), co[..., KD:2 * KD].reshape(B, T, HK, DK)
+            v = co[..., 2 * KD:].reshape(B, T, HV, DV)
+            beta = jax.nn.sigmoid(bb.astype(f32)).astype(bf16).astype(f32)
+            gg = -jnp.exp(w["A"].astype(f32)) * softplus(aa.astype(f32) + w["dt"])
+            vm = valid[..., None]
+            beta, gg = jnp.where(vm, beta, 0.0), jnp.where(vm, gg.astype(f32), 0.0)
+            if pool is not None:
+                o, r1 = kern(qr[:, 0], kr[:, 0], v[:, 0], gg[:, 0], beta[:, 0], pool, jnp.arange(B, dtype=jnp.int32), layer)
+                o = o[:, None]
+            else:
+                o, r1 = gated_delta(qr, kr, v, gg, beta, r0)
+            o = rms_norm_gated(o.astype(bf16), z, w["nw"], eps).reshape(B, T, VD)
+            return linear(o, w["out"]), r1, c1
+
+        def full_attn(h, w, g):
+            qg = linear(h, w["wq"]).reshape(B, T, H, 2 * HD)
+            q, gate = qg[..., :HD], qg[..., HD:].reshape(B, T, H * HD)
+            k, v = linear(h, w["wk"]).reshape(B, T, KV, HD), linear(h, w["wv"]).reshape(B, T, KV, HD)
+            q, k = rms_norm(q, w["qn"], eps), rms_norm(k, w["kn"], eps)
+            q, k = rope_partial(q, cos, sin, RD), rope_partial(k, cos, sin, RD)
+            if Tc:
+                kk, vv = jnp.concatenate([Kc[g][slots, :Tc], k], 1), jnp.concatenate([Vc[g][slots, :Tc], v], 1)
+            else:
+                kk, vv = k, v
+            s = jnp.einsum("btkgd,bskd->bkgts", q.reshape(B, T, KV, G, HD), kk, preferred_element_type=f32) * scale
+            p = jax.nn.softmax(jnp.where(mask[:, None, None], s, NEG), -1).astype(bf16)
+            o = jnp.einsum("bkgts,bskd->btkgd", p, vv, preferred_element_type=f32).astype(bf16).reshape(B, T, H * HD)
+            o = o * jax.nn.sigmoid(gate.astype(f32)).astype(bf16)
+            return linear(o, w["wo"]), k, v
+
+        def mlp(x, wm, i):
+            h = rms_norm(x, wm["ln2"][i], eps)
+            a = jax.nn.silu(linear(h, at(wm["wg"], i)).astype(f32)).astype(bf16) * linear(h, at(wm["wu"], i))
+            return x + linear(a, at(wm["wd"], i))
+
+        def group(carry, xg):
+            x, R, C = carry
+            g, w = xg["g"], xg["w"]
+            rl, cl = [], []
+            if contig:
+                Cg = lax.dynamic_slice(C, (g, 0, 0, 0, 0), (1, FI - 1, B) + C.shape[3:])[0]
+                if kern is not None:
+                    Rg = [None] * (FI - 1)
+                    Cg = lax.optimization_barrier(Cg)
+                else:
+                    Rg = lax.dynamic_slice(R, (g, 0, 0, 0, 0, 0), (1, FI - 1, B) + R.shape[3:])[0]
+                    Rg, Cg = lax.optimization_barrier((Rg, Cg))
+                    Rg = jnp.where(fresh[None, :, None, None, None], 0.0, Rg)
+                Cg = jnp.where(fresh[None, :, None, None], jnp.zeros((), C.dtype), Cg)
+            else:
+                gi = jnp.full((FI - 1, B), g, jnp.int32)
+                ii = jnp.broadcast_to(jnp.arange(FI - 1, dtype=jnp.int32)[:, None], (FI - 1, B))
+                si = jnp.broadcast_to(slots[None, :], (FI - 1, B))
+                Rg, Cg = lax.optimization_barrier((R[gi, ii, si], C[gi, ii, si]))
+                Rg = jnp.where(fresh[None, :, None, None, None], 0.0, Rg)
+                Cg = jnp.where(fresh[None, :, None, None], jnp.zeros((), C.dtype), Cg)
+            for i in range(FI):
+                h = rms_norm(x, w["mlp"]["ln1"][i], eps)
+                if i < FI - 1:
+                    if kern is not None:
+                        o, R, c1 = lin_attn(h, at(w["lin"], i), None, Cg[i], pool=R, layer=g * (FI - 1) + i)
+                    else:
+                        o, r1, c1 = lin_attn(h, at(w["lin"], i), Rg[i], Cg[i])
+                        rl.append(r1.astype(R0.dtype))
+                    cl.append(c1.astype(C0.dtype))
+                else:
+                    o, k, v = full_attn(h, w["full"], g)
+                x = mlp(x + o, w["mlp"], i)
+            if kern is not None:
+                C = lax.dynamic_update_slice(C, lax.optimization_barrier(jnp.stack(cl))[None], (g, 0, 0, 0, 0))
+                return (x, R, C), dict(k=k, v=v)
+            Rn, Cn = lax.optimization_barrier((jnp.stack(rl), jnp.stack(cl)))
+            if contig:
+                R = lax.dynamic_update_slice(R, Rn[None], (g, 0, 0, 0, 0, 0))
+                C = lax.dynamic_update_slice(C, Cn[None], (g, 0, 0, 0, 0))
+            else:
+                R, C = R.at[gi, ii, si].set(Rn), C.at[gi, ii, si].set(Cn)
+            return (x, R, C), dict(k=k, v=v)
+
+        xs = dict(w=W["g"], g=jnp.arange(NG, dtype=jnp.int32))
+        if kern is not None:
+            (x, R1, C1), ys = lax.scan(group, (x, R0.reshape((NG * (FI - 1),) + R0.shape[2:]), C0), xs)
+            R1 = R1.reshape(R0.shape)
+        else:
+            (x, R1, C1), ys = lax.scan(group, (x, R0, C0), xs)
+        Kc = Kc.at[:, slots[:, None], pos].set(ys["k"], mode="drop")
+        Vc = Vc.at[:, slots[:, None], pos].set(ys["v"], mode="drop")
+        out = dict(ck=(Kc, Vc), cv=(R1, C1))
+        if all_logits:
+            out["lg"] = linear(rms_norm(x, W["norm"], eps), W["head"]).astype(f32)
+            return out
+        hl = rms_norm(x[jnp.arange(B), jnp.maximum(lens - 1, 0)], W["norm"], eps)
+        lg = linear(hl, W["head"])               # bf16 logits; argmax takes the first index on a tie
+        out.update(nxt=jnp.argmax(lg, -1).astype(jnp.int32), lg=lg.astype(f32))
+        return out
+
+    return forward

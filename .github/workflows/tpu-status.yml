@@ -1,0 +1,32 @@
+name: TPU status
+# Chip runs happen on our own on-demand TPUs and push status/tpu-<chip>.json to the status branch.
+# This daily job turns a badge grey when its run is older than 14 days or older than the latest release,
+# and fails when a badge disagrees with its run record.
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Refresh badges
+        run: |
+          latest=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          git ls-remote --exit-code --heads origin status >/dev/null || { echo "no status branch yet: no chip run recorded, nothing to refresh"; exit 0; }
+          git fetch origin status
+          git worktree add ../status origin/status
+          python3 tools/tpu_status.py refresh --status-dir ../status --latest-tag "$latest"
+          cd ../status
+          if ! git diff --quiet; then
+            git -c user.name="MASHBOX Labs" -c user.email="hello@mashbox.gg" commit -am "Refresh TPU badges"
+            git push origin HEAD:status
+          fi

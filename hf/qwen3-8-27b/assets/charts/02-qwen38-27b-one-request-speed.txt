@@ -1,0 +1,1 @@
+Qwen3.8-27B: one request at a time, same TPU v6e-1. Measured 2026-10-28 03:55-05:47 UTC on one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1. MASHBOX measurement ledger CH-02.

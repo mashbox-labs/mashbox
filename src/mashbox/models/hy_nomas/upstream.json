@@ -1,0 +1,110 @@
+{
+ "note": "Upstream files this model downloads, pinned by revision and checked by sha256 before use. Nothing here is re-uploaded.",
+ "code": {
+  "repo": "Tencent-Hunyuan/Hy-Nomas",
+  "commit": "911cea6458a89c2663513ff7099561ec190dd491",
+  "archive": "https://codeload.github.com/Tencent-Hunyuan/Hy-Nomas/tar.gz/{commit}",
+  "keep": [
+   "hymm",
+   "configs"
+  ],
+  "tree_sha256": "738e608a9396668baaedf7c28d3a80a81fa5b0ad5204584c76cce0f475d5efa9",
+  "files": 162
+ },
+ "repos": {
+  "tencent": {
+   "hf": "tencent/Hy-Nomas",
+   "revision": "4b8b4ed8ac67bf7ed82a5b80e953af548d82bd8f",
+   "files": [
+    {
+     "name": "DiT/distilled/diffusion_pytorch_model_ema_0_995.safetensors",
+     "bytes": 34213991280,
+     "sha256": "73819bcf3b82b090116dd1a1748795de95eef703c304e7443963d00ea8aa4d70"
+    },
+    {
+     "name": "DiT/lora_weights/cinematic/adapter.safetensors",
+     "bytes": 6122591632,
+     "sha256": "765426a6c417eed70a57d72f67cfe002076cfc92b6b35fe185091012ba80c7c2"
+    },
+    {
+     "name": "DiT/lora_weights/cinematic/adapter_config.json",
+     "bytes": 704,
+     "sha256": "f656c2866953e7a90a785a5c51ce127a79ea61c4217ef30e3cd2d69afcd3d998"
+    },
+    {
+     "name": "VAE/PixelUMM_FT/diffusion_pytorch_model.safetensors",
+     "bytes": 31553868864,
+     "sha256": "0bbfe8fd44bd2ebf1059fe65079caba50fd6f52ea8e1b5b35393e3050b9b8378"
+    }
+   ]
+  },
+  "text_encoder": {
+   "hf": "Qwen/Qwen2.5-VL-7B-Instruct",
+   "revision": "cc594898137f460bfe9f0759e9844b3ce807cfb5",
+   "files": [
+    {
+     "name": "config.json",
+     "bytes": 1374,
+     "sha256": "77d9ec7321cc572e3579e2c84799c9cadaded63c49ce93b101733349fc330c43"
+    },
+    {
+     "name": "tokenizer.json",
+     "bytes": 7031645,
+     "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"
+    },
+    {
+     "name": "tokenizer_config.json",
+     "bytes": 5702,
+     "sha256": "4abd3520120e266da84c0864fee064d1fb10806f02225911a47253dd38dc5f56"
+    },
+    {
+     "name": "vocab.json",
+     "bytes": 2776833,
+     "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    },
+    {
+     "name": "merges.txt",
+     "bytes": 1671839,
+     "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"
+    },
+    {
+     "name": "model.safetensors.index.json",
+     "bytes": 57619,
+     "sha256": "73b333b0b16e5286ddba615d2caebcd495cf7e616f52eb217a81781393d79de9"
+    },
+    {
+     "name": "model-00001-of-00005.safetensors",
+     "bytes": 3900233256,
+     "sha256": "e97b877e47fde53a6c6e77aafb36e58e91ee9d95c4a3eeac6f1b5c0e6a1c986e"
+    },
+    {
+     "name": "model-00002-of-00005.safetensors",
+     "bytes": 3864726320,
+     "sha256": "a9a300a43b4724eee2abe7c18ceb26768d0ab011eb0cad19d9bfd2476a24d024"
+    },
+    {
+     "name": "model-00003-of-00005.safetensors",
+     "bytes": 3864726424,
+     "sha256": "111223d173e00bbee81cba1216fad28668df3476706b7fd26f4d5b50f8b3a507"
+    },
+    {
+     "name": "model-00004-of-00005.safetensors",
+     "bytes": 3864733680,
+     "sha256": "ef47f634fa57d46ee134edcc09f34085a47da1e16c12a2abe0d67118be6d72ed"
+    }
+   ]
+  },
+  "mashbox": {
+   "hf": "mashbox-labs/Hy-Nomas-TPU",
+   "revision": "84fd8a1f90e74f21ed10e6b72e042c3ba06d2ae9",
+   "note": "our own files: the MASHBOX Fast Decoder (optional, --decoder fast or the Decoder switch in the app)",
+   "files": [
+    {
+     "name": "decoders/hy-nomas-fast-decoder-v1.safetensors",
+     "bytes": 41845008,
+     "sha256": "2f19309bce5eb04d20c26a7762ea084ff27ad14e6f203b5975263954a6340baa"
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,19 @@
+{
+ "chips": "v6e-4",
+ "layout": {"dit_chips": [0, 1, 2, 3], "decoder_chips": [1, 2, 3], "text_encoder_chips": [0, 1, 2, 3]},
+ "resolution": [704, 1280],
+ "fps": 24,
+ "window_seconds": 5,
+ "text_buckets": [256, 512],
+ "preset": "quality",
+ "presets": {
+  "quality": {"steps": 3, "history": "separate pass", "passes_per_window": 4},
+  "live": {"steps": 4, "history": "from the last step", "passes_per_window": 4}
+ },
+ "decoder": {"split_latent_frames": [10, 10, 10], "overlap_latent_frames": 1, "crossfade_frames": 4},
+ "decoders": {"full": "Tencent's pixel decoder (default, sharpest)", "fast": "MASHBOX Fast Decoder: our own small decoder, much faster, softer picture"},
+ "decoder_default": "full",
+ "camera": {"move_units_per_s": 2.8, "turn_deg_per_s": 25.0, "rotation_scale": 2.5, "pitch_limit_deg": 60, "pitch_limit_max_deg": 85},
+ "controls": ["describe or Tencent JSON prompt", "preset worlds", "timed actions", "W A S D and arrow keys", "turn rate", "move speed", "rotation scale", "pitch limit", "pause", "restart", "hide UI (H)"],
+ "server": {"host": "127.0.0.1", "port": 8790}
+}

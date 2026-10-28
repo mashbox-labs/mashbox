@@ -1,0 +1,12 @@
+{
+ "check": "tests/tpu/hy_nomas_kernel_check.py: each compiled kernel vs the plain JAX version of the same op, same chip, same inputs (seeded)",
+ "set_from": "verified run 2026-10-28T04:36:49Z on v6e: jax/jaxlib 0.11.2, libtpu 0.0.48 (build 1), bundle sha256 94ae100f, 28 of 28 kernels checked, no non-finite values",
+ "rule": "tolerance = about 3x the measured maximum on that run, rounded up; inputs are seeded, so the margin covers run-to-run variation only. Loosen only with the measured cause written here.",
+ "rules": {
+  "dit_qk_norm_rope": {"rel_l2": 4e-5, "measured_max": 1.31e-5},
+  "dit_attention fast": {"rel_l2": 1e-2, "measured_max": 3.18e-3},
+  "dit_attention exact": {"rel_l2": 1e-3, "measured_max": 2.83e-4},
+  "dec_qk_norm_rope": {"bit_exact": true, "measured": "bit-exact on all 4 shapes"},
+  "dec_local_attention": {"rel_l2": 3e-4, "measured_max": 9.3e-5}
+ }
+}

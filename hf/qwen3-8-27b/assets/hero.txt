@@ -1,0 +1,1 @@
+A first-time user on a new TPU v6e-1 (28 October 2026): install, weights download, first answer. Sped up 10x, pauses over 2 s cut to 2 s.
