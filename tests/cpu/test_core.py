@@ -209,6 +209,71 @@ def test_sync_check_catches_typed_drift(tmp_path):
         assert len(problems) == 1 and "CATALOG_URL" in problems[0], problems
 
 
+@pytest.mark.parametrize("case", ["a submodule re-imported", "a submodule first imported, then every module dropped",
+                                  "a submodule first imported after a re-import"])
+def test_the_module_guard_leaves_one_copy_of_each_mashbox_module(tmp_path, case):
+    """tests/conftest.py put_back_mashbox_modules (the _mashbox_modules_kept guard) after a test that re-imported mashbox
+    modules: each submodule a package holds is the one sys.modules has, and a module imported again takes its names from
+    the modules put back, so the tests after it get one copy. On a stub package (any install): a submodule dropped and
+    imported again (the import set the kept parent's attribute to the new copy); a submodule first imported in the
+    test, then every module dropped (the kept package still holds it); a submodule first imported after a re-import
+    (it took NotReady from the new copy)."""
+    import importlib
+    import importlib.util
+    import types
+    spec = importlib.util.spec_from_file_location("conftest_guard", pathlib.Path(__file__).resolve().parents[1] / "conftest.py")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    pkg = tmp_path / "src" / "mashbox"
+    (pkg / "runtime").mkdir(parents=True)
+    for rel, text in {"__init__.py": "", "runtime/__init__.py": "", "runtime/server.py": "",
+                      "runtime/agents.py": "class NotReady(Exception):\n    pass\n",
+                      "late.py": "from mashbox.runtime.agents import NotReady\n"}.items():
+        (pkg / rel).write_text(text)
+
+    def two_copies():
+        bad = []
+        for n, m in guard.mashbox_modules().items():
+            parent, _, child = n.rpartition(".")
+            if parent and getattr(sys.modules.get(parent), child, m) is not m:
+                bad.append(n)
+            bad += [v.__name__ for k, v in vars(m).items()
+                    if isinstance(v, types.ModuleType) and v.__name__ == f"{n}.{k}" and sys.modules.get(v.__name__) is not v]
+        return sorted(bad)
+
+    keep = guard.mashbox_modules()
+    try:
+        for n in keep:
+            del sys.modules[n]
+        sys.path.insert(0, str(tmp_path / "src"))
+        try:
+            importlib.import_module("mashbox.runtime.server")
+            importlib.import_module("mashbox.runtime.agents")
+            before = guard.mashbox_modules()
+            if case == "a submodule first imported, then every module dropped":
+                importlib.import_module("mashbox.late")
+                for n in list(guard.mashbox_modules()):
+                    del sys.modules[n]
+                importlib.import_module("mashbox.runtime.server")
+                want = sorted(before)
+            else:
+                del sys.modules["mashbox.runtime.agents"]
+                importlib.import_module("mashbox.runtime.agents")
+                if case == "a submodule first imported after a re-import":
+                    importlib.import_module("mashbox.late")
+                want = ["mashbox.runtime.agents"]
+            assert guard.put_back_mashbox_modules(before) == want
+            assert two_copies() == []
+            assert importlib.import_module("mashbox.late").NotReady is before["mashbox.runtime.agents"].NotReady
+            assert two_copies() == []
+        finally:
+            sys.path.remove(str(tmp_path / "src"))
+    finally:
+        for n in list(guard.mashbox_modules()):
+            del sys.modules[n]
+        sys.modules.update(keep)
+
+
 def test_an_allow_line_covers_every_place_its_words_appear_on_a_line():
     """tools/docs_lint_allow.txt: an allow line covers each hit inside its words wherever on the line they appear (a
     support table row prints a chip's cell once per chip, e.g. "Not tested yet" three times); a hit outside those words,
@@ -744,3 +809,27 @@ def test_runs_only_on_claim_follows_measured_rows(tmp_path):
     sc.check_numbers(reg, ROOT, problems, nmap["pages"] if nmap else None)
     assert not [p for p in problems if "only on" in p], problems
     assert "runs only on a TPU v6e-4" not in (ROOT / "AGENTS.md").read_text()
+
+
+def test_every_test_server_takes_its_port_from_the_bind():
+    """A check script that hands serve() a port it chose itself (a fixed number, or one made from its pid) can reach
+    another process on that port: on a shared host a plain HTTP server held the batching check's port and answered its
+    POSTs with 501 (Unsupported method), and every server gate of that check failed. Every test server that runs
+    mashbox.runtime.server.serve starts through api_stub_engine.serve_on_free_port (port 0, picked at the bind);
+    tests/cert/tiny_server.py is the one process whose port its parent picks and holds (cert_lib)."""
+    root = pathlib.Path(__file__).resolve().parents[2]
+    bad = []
+    for py in sorted((root / "tests").rglob("*.py")):
+        rel = py.relative_to(root).as_posix()
+        if rel in ("tests/cpu/api_stub_engine.py", "tests/cert/tiny_server.py"):
+            continue
+        tree = ast.parse(py.read_text())
+        names = {a.asname or a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)
+                 and n.module == "mashbox.runtime.server" for a in n.names if a.name == "serve"}
+        for n in ast.walk(tree):
+            if names and isinstance(n, ast.Call) and (
+                    (isinstance(n.func, ast.Name) and n.func.id in names)
+                    or any(k.arg == "target" and isinstance(k.value, ast.Name) and k.value.id in names
+                           for k in n.keywords)):
+                bad.append(f"{rel}:{n.lineno}")
+    assert bad == [], f"start these through api_stub_engine.serve_on_free_port: {bad}"

@@ -16,7 +16,6 @@ import os
 import struct
 import sys
 import threading
-import time
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 if "xla_force_host_platform_device_count" not in os.environ.get("XLA_FLAGS", ""):      # T10: 2 CPU devices, T11: 4
@@ -290,19 +289,19 @@ if TOKDIR:
     R["T8"] = dict(equal=eq)
     R["T8_pass"] = all(eq)
 
-    from mashbox.runtime.server import Server, serve
+    from mashbox.runtime.server import Server
     import urllib.request
+    import api_stub_engine as STUB
 
     class TinyChat(Chat):         # the real template, ids folded into the tiny vocabulary
         def encode(self, text):
             return [t % 512 for t in super().encode(text)]
     srv = Server(eng, TinyChat(TOKDIR), "tiny", {})
     srv.ready = True
-    threading.Thread(target=serve, args=(srv, "127.0.0.1", 18765, lambda s: None), daemon=True).start()
-    time.sleep(1.0)
+    port = STUB.serve_on_free_port(srv)   # port 0, picked at the bind: a fixed port can hold another process's server
 
     def post(body):
-        rq = urllib.request.Request("http://127.0.0.1:18765/v1/chat/completions", json.dumps(body).encode(),
+        rq = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", json.dumps(body).encode(),
                                     {"Content-Type": "application/json"})
         return urllib.request.urlopen(rq, timeout=600).read().decode()
     body = dict(messages=[dict(role="user", content="Hello")], max_tokens=10)

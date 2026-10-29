@@ -273,7 +273,8 @@ R["C5_pass"] = (g["lens"] == [5, 20, 11] and g["fins"] == ["length"] * 3 and gat
 
 print(json.dumps(R, default=str), file=sys.stderr, flush=True)
 # C6 ------------------------------------------------------------------------------------------------------------------
-from mashbox.runtime.server import Server, serve   # noqa: E402
+from mashbox.runtime.server import Server          # noqa: E402
+import api_stub_engine as STUB                     # noqa: E402
 
 
 class IdChat:
@@ -293,9 +294,7 @@ class IdChat:
 e6 = Engine(cfg, W, Q, CTX=512, S=2, K=4)
 srv = Server(e6, IdChat(), "tiny", {}, log=lambda m: None)
 srv.ready = True
-port = 18000 + os.getpid() % 1000
-threading.Thread(target=serve, args=(srv, "127.0.0.1", port, lambda m: None), daemon=True).start()
-time.sleep(0.5)
+port = STUB.serve_on_free_port(srv)   # port 0, picked at the bind: a port chosen here can hold another process's server
 prompts6 = [P[i % 4][:20 + 3 * i] for i in range(6)]
 solo6 = [Engine(cfg, W, Q, CTX=512, S=2, K=4).generate([p], max_new=120)["ids"][0] for p in prompts6]
 

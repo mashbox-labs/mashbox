@@ -12,11 +12,15 @@ Markers a test can set itself:
   tests, STD_FAMILY=- the standards tests that take no family. In a run that selects the marker (-m standards ...), a
   skip inside it is a FAIL, at collection too: a missing dependency or an unbuilt feature never reads green (an unbuilt
   feature is a strict xfail naming the code that must change).
+Every test leaves each mashbox module that was loaded when it started as the same object (_mashbox_modules_kept): a test
+that drops or re-imports one fails at its teardown, by name.
 """
 import datetime
 import importlib.util
 import os
 import pathlib
+import sys
+import types
 
 import pytest
 
@@ -111,3 +115,52 @@ def pytest_runtest_makereport(item, call):
             and _standards_run(item.config)):
         rep.outcome = "failed"
         rep.longrepr = f"a skip inside the standards marker is a FAIL: {rep.longrepr}"
+
+
+def mashbox_modules():
+    """{name: module} of every loaded mashbox module (mashbox and mashbox.*)."""
+    return {n: m for n, m in list(sys.modules.items()) if n == "mashbox" or n.startswith("mashbox.")}
+
+
+def put_back_mashbox_modules(before):
+    """Make the mashbox modules exactly `before` again (a mashbox_modules() taken earlier); returns the names that were
+    dropped or replaced since. Only when one was: each package put back holds its own submodules again (importing the
+    other copy of a submodule sets the kept parent's attribute to it), and the mashbox modules loaded since then are
+    dropped from sys.modules and from the packages put back (each may be of the other copy or hold names taken from it),
+    so the next import makes them again under the modules put back."""
+    changed = sorted(n for n, m in before.items() if sys.modules.get(n) is not m)
+    if changed:
+        for n in mashbox_modules():
+            if n not in before:
+                del sys.modules[n]
+        sys.modules.update(before)
+        for n, m in before.items():
+            if not isinstance(m, types.ModuleType):
+                continue
+            parent, _, child = n.rpartition(".")
+            held = getattr(before.get(parent), child, None)
+            if isinstance(held, types.ModuleType) and held.__name__ == n:
+                setattr(before[parent], child, m)
+            for k, v in list(vars(m).items()):
+                if isinstance(v, types.ModuleType) and v.__name__ == f"{n}.{k}" and v.__name__ not in before:
+                    delattr(m, k)
+    return changed
+
+
+@pytest.fixture(autouse=True)
+def _mashbox_modules_kept():
+    """A test that drops or re-imports a mashbox module that was loaded when it started leaves the tests after it two
+    copies of that module: what was made from the old copy (a Front raising the old agents.NotReady) no longer matches
+    the new copy (the server's `except NotReady` misses it and answers 500, not 503). Such a test fails here at its
+    teardown, naming the modules; the old modules are put back for the tests after it. Not caught here: importlib.reload
+    (the module object stays, its classes are new), a drop at collection or in a module- or session-scoped fixture
+    (before the test's own snapshot), and a test that puts sys.modules back itself but leaves a package's attribute on
+    the other copy."""
+    before = mashbox_modules()
+    yield
+    changed = put_back_mashbox_modules(before)
+    if changed:
+        pytest.fail(f"this test dropped or re-imported {len(changed)} mashbox module(s) loaded before it: "
+                    f"{', '.join(changed[:8])}{' ...' if len(changed) > 8 else ''} (the tests after it would get a "
+                    "second copy of each)",
+                    pytrace=False)
