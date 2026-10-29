@@ -6,8 +6,9 @@ batching spec §13.13):
         or within one bf16 step of its top logit; the near-tie count (committed tokens that are not the argmax) is
         recorded. Token-for-token MTP on == off is information here, not the gate: exact on the near-bigram model; on the
         random model 2 of 4 prompts differ at a bf16 tie (top-2 gap 0 or one bf16 step: the verify width and the one-token
-        decode width round differently; measured on CPU), kept as a strict xfail for a later opt-in
-        exact mode (fixed-order verify ops, not built).
+        decode width round differently; measured on CPU), kept as an xfail for a later opt-in exact mode (fixed-order
+        verify ops, not built); not strict, because whether a tie flips depends on the runner's CPU rounding, so these
+        rows pass on some runners and fail on others.
   G-D2  rows that join and leave while others decode, with different k (0 for draft=False rows), a stop token and a
         cancel mid-answer, at 1, 8 and 64 users: the base batched rule (as C1-C5): the run and
         its replay in a fresh engine give every row the same tokens, slot and finish, every row keeps its own rules, both
@@ -148,10 +149,11 @@ def prompts(n, seed=5, lo=3, hi=60):
     return [rng.integers(1, V, int(rng.integers(lo, hi))).tolist() for _ in range(n)]
 
 
-EXACT_TIE = pytest.mark.xfail(strict=True, reason="exact mode (not G-D1): bf16 ties flip greedy tokens "
+EXACT_TIE = pytest.mark.xfail(strict=False, reason="exact mode (not G-D1): bf16 ties flip greedy tokens "
                                "between verify and decode widths (random model, prompts of 3 and 7 tokens, gap 0.0625 and 0.0; "
                                "same on main's whole-batch MTP); needs fixed-order ops at the verify widths (batching "
-                               "spec §6 risk), a later opt-in mode")
+                               "spec §6 risk), a later opt-in mode; outcome depends on the runner (whether a tie flips "
+                               "follows the CPU's rounding), so not strict")
 
 
 @pytest.mark.parametrize("tag", [pytest.param("random", marks=EXACT_TIE), "bigram"])
