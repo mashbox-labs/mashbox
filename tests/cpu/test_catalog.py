@@ -385,6 +385,160 @@ def test_no_app_add_on_words_in_any_view():
     assert not any(word.search(t) for t in texts)
 
 
+@pytest.mark.parametrize("src", ["none", "imports", "fails", "on path"],
+                         ids=["tree without src", "tree with src", "src fails to import", "src already on sys.path"])
+def test_package_import_leaves_sys_path_as_it_found_it(tmp_path, src):
+    # _package() imports mashbox from <tree>/src for the docs views and must not leave that folder on sys.path: the
+    # numbers check calls it on a test's tmp tree, and test_b3_sigint later built its worker's PYTHONPATH from
+    # sys.path[:3], which three such folders pushed the real src out of ("No module named mashbox" in the worker)
+    pkg = tmp_path / "src" / "mashbox"
+    if src != "none":
+        (pkg / "runtime").mkdir(parents=True)
+        for rel in ("__init__.py", "cli.py", "tpu.py", "catalog.py", "runtime/__init__.py", "runtime/openapi.py"):
+            (pkg / rel).write_text("")
+        (pkg / "late.py").write_text("WHERE = 'tmp tree'\n")
+        if src == "fails":
+            (pkg / "tpu.py").write_text("raise ImportError('this tree is broken')\n")
+    cached = {n: m for n, m in sys.modules.items() if n == "mashbox" or n.startswith("mashbox.")}
+    outer = list(sys.path)
+    if src == "on path":    # the caller's own entry stays where it was
+        sys.path.insert(1, str(pkg.parent.resolve()))
+    before = list(sys.path)
+    try:
+        problems = SC.Problems()
+        mods = SC._package(tmp_path, problems)
+        assert sys.path == before
+        if src in ("imports", "on path"):
+            # the import still came from the tree asked for, and so does a submodule imported after the call returns
+            # (through mashbox.__path__, not sys.path), as the docs views import theirs
+            assert mods is not None and Path(mods[""].__file__).resolve().parent == pkg.resolve()
+            assert importlib.import_module("mashbox.late").WHERE == "tmp tree"
+        else:
+            want = "cannot import the package" if src == "fails" else "mashbox imported from"
+            assert mods is None and len(problems) == 1 and want in problems[0]
+    finally:
+        sys.path[:] = outer
+        for n in [n for n in sys.modules if n == "mashbox" or n.startswith("mashbox.")]:
+            del sys.modules[n]
+        sys.modules.update(cached)
+
+
+@pytest.mark.parametrize("call", ["docs_views", "check_commands", "check_numbers"])
+@pytest.mark.parametrize("src", ["none", "stub"], ids=["tree without src", "tree with a stub src"])
+def test_a_check_on_another_tree_leaves_the_loaded_mashbox_as_it_found_it(tmp_path, src, call):
+    # The docs views, the command check and the numbers check import mashbox from the tree they check (_package), which
+    # first drops a different loaded mashbox from sys.modules. They must put it back when they return: test_core's
+    # numbers check on a tmp tree left new copies of every mashbox module behind, and test_hf_safetensors' native BF16
+    # tests then patched the dense16 they had imported while the code ran the new copy (3 failed after test_core in one
+    # process, 4 passed alone)
+    import mashbox.ops.dense16  # noqa: F401  (a submodule a later test holds and patches)
+    found = {n: m for n, m in sys.modules.items() if n == "mashbox" or n.startswith("mashbox.")}
+    if src == "stub":    # imports, then stops the check part way (no parsers, no pyproject): the other way out
+        pkg = tmp_path / "src" / "mashbox"
+        (pkg / "runtime").mkdir(parents=True)
+        for rel in ("__init__.py", "cli.py", "tpu.py", "catalog.py", "runtime/__init__.py", "runtime/openapi.py"):
+            (pkg / rel).write_text("")
+    (tmp_path / "docs").mkdir()
+    run = {"docs_views": SC.docs_views, "check_commands": SC.check_commands, "check_numbers": SC.check_numbers}[call]
+    try:
+        try:
+            run(REG, tmp_path, SC.Problems())
+        except (AttributeError, FileNotFoundError, KeyError):
+            assert src == "stub"
+        now = {n: m for n, m in sys.modules.items() if n == "mashbox" or n.startswith("mashbox.")}
+        assert sorted(set(now) ^ set(found)) == [] and [n for n in found if now[n] is not found[n]] == []
+    finally:
+        for n in [n for n in sys.modules if n == "mashbox" or n.startswith("mashbox.")]:
+            del sys.modules[n]
+        sys.modules.update(found)
+
+
+def _mashbox_modules():
+    return {n: m for n, m in sys.modules.items() if n == "mashbox" or n.startswith("mashbox.")}
+
+
+def _parents_disagree():
+    """the loaded mashbox modules whose parent package holds another object under the name, and the submodules a
+    loaded package holds that sys.modules does not (the next import of that name would make a second copy)"""
+    bad = []
+    for n, m in _mashbox_modules().items():
+        parent, _, child = n.rpartition(".")
+        if parent and getattr(sys.modules.get(parent), child, m) is not m:
+            bad.append(n)
+        bad += [v.__name__ for k, v in vars(m).items()
+                if isinstance(v, types.ModuleType) and v.__name__ == f"{n}.{k}" and sys.modules.get(v.__name__) is not v]
+    return sorted(bad)
+
+
+def _stub_tree(root):
+    """a tree whose src/mashbox imports and has none of the check's functions (the check stops part way)"""
+    pkg = root / "src" / "mashbox"
+    (pkg / "runtime").mkdir(parents=True)
+    for rel in ("__init__.py", "cli.py", "tpu.py", "catalog.py", "runtime/__init__.py", "runtime/openapi.py"):
+        (pkg / rel).write_text("")
+    (root / "docs").mkdir()
+
+
+@pytest.mark.parametrize("call", ["docs_views", "check_commands", "check_numbers"])
+def test_a_check_of_the_loaded_tree_keeps_what_it_found_and_what_it_imported(tmp_path, call):
+    # When the loaded mashbox is the checked tree's own, nothing is put back: the module objects found stay, and a
+    # submodule the check imports for the first time (runtime.openapi) stays loaded as its parent's attribute, as after
+    # any import. Putting back on every call would drop it from sys.modules while its parent still holds it, so the
+    # next import of that name would make a second copy
+    import importlib
+    keep = _mashbox_modules()
+    _stub_tree(tmp_path)
+    run = {"docs_views": SC.docs_views, "check_commands": SC.check_commands, "check_numbers": SC.check_numbers}[call]
+    try:
+        for n in keep:
+            del sys.modules[n]
+        sys.path.insert(0, str(tmp_path / "src"))
+        try:
+            for n in ("mashbox", "mashbox.cli", "mashbox.tpu", "mashbox.catalog", "mashbox.runtime"):
+                importlib.import_module(n)
+        finally:
+            sys.path.remove(str(tmp_path / "src"))
+        found = _mashbox_modules()
+        assert "mashbox.runtime.openapi" not in found and _parents_disagree() == []
+        try:
+            run(REG, tmp_path, SC.Problems())
+        except (AttributeError, FileNotFoundError, KeyError):
+            pass
+        now = _mashbox_modules()
+        assert [n for n in found if now.get(n) is not found[n]] == []
+        assert "mashbox.runtime.openapi" in now and _parents_disagree() == [], _parents_disagree()
+    finally:
+        for n in list(_mashbox_modules()):
+            del sys.modules[n]
+        sys.modules.update(keep)
+
+
+@pytest.mark.parametrize("call", ["docs_views", "check_commands", "check_numbers"])
+@pytest.mark.parametrize("src", ["none", "stub"], ids=["tree without src", "tree with a stub src"])
+def test_a_check_with_no_mashbox_loaded_leaves_none_loaded(tmp_path, src, call):
+    # A process with no mashbox loaded has none loaded after a check: the package the check imported is dropped on the
+    # way out, as a different one would be. Putting back only when something was found would leave the checked tree's
+    # modules behind for the next import of mashbox
+    keep = _mashbox_modules()
+    if src == "stub":
+        _stub_tree(tmp_path)
+    else:
+        (tmp_path / "docs").mkdir()
+    run = {"docs_views": SC.docs_views, "check_commands": SC.check_commands, "check_numbers": SC.check_numbers}[call]
+    try:
+        for n in keep:
+            del sys.modules[n]
+        try:
+            run(REG, tmp_path, SC.Problems())
+        except (AttributeError, FileNotFoundError, KeyError):
+            pass
+        assert sorted(_mashbox_modules()) == []
+    finally:
+        for n in list(_mashbox_modules()):
+            del sys.modules[n]
+        sys.modules.update(keep)
+
+
 def test_archs_read_without_importing_gguf_equals_ARCHS():
     """catalog.archs() reads ARCHS from the source (the docs check has no gguf package); it must equal the module's"""
     from mashbox.gguf import archs as GA

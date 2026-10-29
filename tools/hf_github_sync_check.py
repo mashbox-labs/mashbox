@@ -56,6 +56,7 @@ Exit status: 0 in sync, 1 out of sync or invalid, 2 usage error.
 """
 import argparse
 from decimal import Decimal, ROUND_HALF_UP
+import functools
 import hashlib
 import html
 import json
@@ -1052,29 +1053,56 @@ def _parser_of(main, argv):
 
 
 def _package(repo, problems):
-    """Import mashbox from <repo>/src (stdlib-only modules), or None with a problem."""
+    """Import mashbox from <repo>/src (stdlib-only modules), or None with a problem. sys.path is left as it was found:
+    the package's later imports go through mashbox.__path__, and a caller that hands sys.path to a child process (a test
+    run building a worker's PYTHONPATH) must not get this tree's src in front of its own."""
     import importlib
     sys.dont_write_bytecode = True      # never write __pycache__ into the tree being checked (a release export stays == its manifest)
     src = str((repo / "src").resolve())
-    if src not in sys.path:
+    added = src not in sys.path
+    if added:
         sys.path.insert(0, src)
-    cached = sys.modules.get("mashbox")
-    where = getattr(cached, "__file__", None)
-    if cached is not None and not (where and str(Path(where).resolve()).startswith(src)):
-        # an earlier call (another tree, or an installed copy) left a different mashbox in the module cache: drop it,
-        # else every later call refuses this tree's own package and renders no docs views
-        for name in [n for n in sys.modules if n == "mashbox" or n.startswith("mashbox.")]:
-            del sys.modules[name]
-        importlib.invalidate_caches()
     try:
-        mods = {n: importlib.import_module(f"mashbox{n}") for n in ("", ".cli", ".tpu", ".runtime.openapi", ".catalog")}
-    except Exception as e:
-        problems.add("src/mashbox", f"cannot import the package to render the docs: {type(e).__name__}: {e}")
-        return None
+        cached = sys.modules.get("mashbox")
+        where = getattr(cached, "__file__", None)
+        if cached is not None and not (where and str(Path(where).resolve()).startswith(src)):
+            # an earlier call (another tree, or an installed copy) left a different mashbox in the module cache: drop
+            # it, else every later call refuses this tree's own package and renders no docs views
+            for name in [n for n in sys.modules if n == "mashbox" or n.startswith("mashbox.")]:
+                del sys.modules[name]
+            importlib.invalidate_caches()
+        try:
+            mods = {n: importlib.import_module(f"mashbox{n}") for n in ("", ".cli", ".tpu", ".runtime.openapi", ".catalog")}
+        except Exception as e:
+            problems.add("src/mashbox", f"cannot import the package to render the docs: {type(e).__name__}: {e}")
+            return None
+    finally:
+        if added and src in sys.path:
+            sys.path.remove(src)
     if not str(Path(mods[""].__file__).resolve()).startswith(src):
         problems.add("src/mashbox", f"mashbox imported from {mods[''].__file__}, not {src}")
         return None
     return mods
+
+
+def _mashbox_as_found(check):
+    """A caller of _package() puts back the mashbox it found loaded, on every way out. _package() drops a different
+    loaded mashbox from sys.modules to import the tree checked; a process that runs the check in place (a test run)
+    keeps the module objects it imported before, and a later test that patches one of them must patch the one the code
+    runs. The checked tree's modules stay loaded until the caller returns: its later imports (a model's own parser)
+    come from that tree. When the loaded package is still the one found (the call checked that same tree), its newly
+    imported submodules stay, as after any import."""
+    @functools.wraps(check)
+    def run(*args, **kwargs):
+        found = {n: m for n, m in sys.modules.items() if n == "mashbox" or n.startswith("mashbox.")}
+        try:
+            return check(*args, **kwargs)
+        finally:
+            if sys.modules.get("mashbox") is not found.get("mashbox"):
+                for name in [n for n in sys.modules if n == "mashbox" or n.startswith("mashbox.")]:
+                    del sys.modules[name]
+                sys.modules.update(found)
+    return run
 
 
 def _subparsers(p):
@@ -1181,6 +1209,7 @@ def chips_block(reg):
     return table(["Model", "Runs on"] + [CHIP_LABEL[c] for c in CHIPS], rows)
 
 
+@_mashbox_as_found
 def docs_views(reg, repo, problems):
     """Generated docs files and blocks: {relative path: text}."""
     views = {}
@@ -1639,6 +1668,7 @@ def _guard_text(text):
     return text
 
 
+@_mashbox_as_found
 def _run_arg_values(reg, repo):
     """{flag or config key: values a page may show}: models.json run_args, and the `mashbox run` defaults."""
     out = {"--ctx": set(), "--slots": set()}
@@ -2166,6 +2196,7 @@ def _package_flags(repo, rel):
             for a in c.args if isinstance(a, ast.Constant) and str(a.value).startswith("-")}
 
 
+@_mashbox_as_found
 def check_commands(reg, repo, problems):
     """Every `mashbox ...` command in a page's code (blocks and inline) and every run_args list in models.json parses
     with the package's own parsers, and inline code made of flags names real flags (as vLLM checks its docs' commands).
