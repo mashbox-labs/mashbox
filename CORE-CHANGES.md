@@ -2,7 +2,7 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
-## 0.1.4
+## 0.1.5
 
 ### Chip status in `models.json`: a chip a model ran on is never "not supported"
 
@@ -11,6 +11,8 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 3. **`run_note`:** a `passing` or `measured` row may carry its measured speed and any condition in a few words; every number with a unit in it is a value of a dated results row on that chip. It prints after the chip in the `llms.txt` "Runs on" list (the chips are then separated by semicolons) and, for a `passing` row, after "Supported" in the README chips cell.
 
 Why: a chip a model ran on is never dropped, and agents and the package read the raw `models.json`, not only the pages. Compatible: `mashbox run` and every package reader treat a `measured` row as before (not `passing`); rows without `run_note` render as before.
+
+## 0.1.4
 
 ### Track2Rig, our own CPU model
 
