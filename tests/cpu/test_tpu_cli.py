@@ -24,7 +24,12 @@ Z = ["us-east5-b", "europe-west4-a", "us-east5-a", "asia-northeast1-b", "us-sout
 
 @pytest.fixture
 def cloud(tmp_path, monkeypatch):
-    """Returns setup(**scenario) -> state reader. Fake gcloud on MASHBOX_GCLOUD, state file in tmp_path."""
+    """Returns setup(**scenario) -> state reader. Fake gcloud on MASHBOX_GCLOUD, state file in tmp_path.
+    Local ports: `tpu up` and `tpu tunnel` take free_port(the model's cloud port), and a tpu.Port stays bound until its
+    process exits (by design: Port.release). In a test they get a port the test holds instead (bound with SO_REUSEADDR,
+    never listening, as api_stub_engine.held_port), and every tpu.Port the test made is closed when it ends, so tests
+    never use 8000 to 8019 (the model's range; several test copies on one host, or a server on 8000, ran it out:
+    'ports 8000 to 8019 on 127.0.0.1 are all in use here') and no port outlives its test."""
     st = tmp_path / "gcloud.json"
     g = tmp_path / "gcloud"
     g.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{HERE}/fake_gcloud.py" "$@"\n')
@@ -52,7 +57,35 @@ def cloud(tmp_path, monkeypatch):
         st.write_text(json.dumps(s))
         return lambda: json.loads(st.read_text())
     setup.held = held
-    return setup
+    made, kept = [], []
+    setup.ports = []                                  # each port handed to free_port in place of a model's port
+    setup.asked = []                                  # the model's cloud port each of those took the place of
+    real_port, real_free = tpu.Port, tpu.free_port
+    setup.model_port = {m["id"]: m["cloud"]["port"] for m in tpu.registry()["models"] if "port" in (m.get("cloud") or {})}
+    model_ports = set(setup.model_port.values())
+
+    class Port(real_port):
+        def __init__(self, port):
+            super().__init__(port)
+            made.append(self)
+
+    def free_port(p):
+        if p in model_ports:
+            setup.asked.append(p)
+            s = socket.socket()
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("127.0.0.1", 0))
+            kept.append(s)
+            p = s.getsockname()[1]
+            setup.ports.append(p)
+        return real_free(p)
+    monkeypatch.setattr(tpu, "Port", Port)
+    monkeypatch.setattr(tpu, "free_port", free_port)
+    yield setup
+    for x in made:
+        x.close()
+    for s in kept:
+        s.close()
 
 
 def creates(S, verb="tpu-vm"):
@@ -71,7 +104,8 @@ def test_zone_exhaustion_moves_to_next_zone(cloud, capsys):
     assert f"{Z[2]}/mashbox-qwen3-8-27b" in S["nodes"]
     out = capsys.readouterr().out
     assert out.count(": no free chip (") == 2 and "$2.70 per hour" in out and "estimate at Google's on-demand list price" in out
-    assert re.search(r"Local URL +http://127\.0\.0\.1:80\d\d/v1 ", out) and "mashbox tpu down mashbox-qwen3-8-27b" in out
+    assert cloud.asked == [cloud.model_port["qwen3-8-27b"]]                   # up asked for the port of its own model
+    assert re.search(rf"Local URL +http://127\.0\.0\.1:{cloud.ports[-1]}/v1 ", out) and "mashbox tpu down mashbox-qwen3-8-27b" in out
 
 
 def test_internal_error_shows_googles_message_and_continues(cloud, capsys):
@@ -406,7 +440,8 @@ def test_hy_nomas_row_and_staging_wheel(cloud, tmp_path, monkeypatch, capsys):
     cmd = [c for c in S["calls"] if "--command" in c and "mashbox-install.sh" in c[c.index("--command") + 1]][0]
     script = cmd[cmd.index("--command") + 1]
     assert "MASHBOX_EXTRAS=tpu,hy-nomas" in script and f'MASHBOX_WHEEL="$HOME"/{w.name}' in script and "-lt 92" in script
-    assert re.search(r"Open +http://127\.0\.0\.1:8[78]\d\d/ in your browser", capsys.readouterr().out)
+    assert cloud.asked == [cloud.model_port["hy-nomas"]]                      # up asked for the port of its own model
+    assert re.search(rf"Open +http://127\.0\.0\.1:{cloud.ports[-1]}/ in your browser", capsys.readouterr().out)
 
 
 def test_agents_settings_and_run_args_reach_the_chip(cloud, capsys):
