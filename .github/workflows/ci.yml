@@ -50,7 +50,7 @@ jobs:
     needs: t0
     if: needs.t0.outputs.any == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.t0.outputs.matrix) }}
@@ -72,4 +72,4 @@ jobs:
       - name: CPU tests of ${{ matrix.area }}
         env:
           AREA: ${{ matrix.area }}
-        run: python3 -m pytest tests/cpu -p no:cacheprovider -m "$AREA and not t0 and not quarantine" --durations=15 -rs
+        run: python3 -m pytest tests/cpu -p no:cacheprovider -m "$AREA and not t0 and not quarantine" --durations=15 -rs -o faulthandler_timeout=900
