@@ -1558,6 +1558,10 @@ CHIP_WORD_RE = re.compile(r"\b(?:TPU )?v[56][ep]\b")
 STATUS_WORD_RE = re.compile(r"(?i)\b(?:not supported|not yet|supported|passing|failing|too little memory|do(?:es)? not fit|"
                             r"needs? more than)\b")
 RUNS_ON_RE = re.compile(r"(?i)(?<!not )(?<!n't )\b(?:runs?|works?|fits?)(?: fine| well)? on (?:an? |one |the )?(?:single )?(?:TPU )?(v[56][ep](?:-\d+)?)\b")
+ONLY_ON_RE = re.compile(r"(?i)(?<!not )\bonly (?:(?:runs?|works?|fits?) )?on (?:an? |one |the )?(?:single )?(?:TPU )?"
+                        r"(v[56][ep](?:-\d+)?)\b|\b(?:runs?|works?|fits?) on (?:an? |one |the )?(?:single )?(?:TPU )?"
+                        r"(v[56][ep](?:-\d+)?) only\b")   # read on whitespace-joined text
+CHIP_TOKEN_RE = re.compile(r"\bv[56][ep](?:-\d+)?\b")
 ARG_RE = re.compile(r"(--(?:ctx|slots))[ =](\d+)|(model_context_window\s*=\s*|\"contextWindow\":\s*)(\d+)")
 ALLOWED = Path("tools") / "numbers_allowed.txt"
 
@@ -1666,6 +1670,39 @@ def bad_chip_claims(m, piece):
     return out
 
 
+def only_chip_claims(m, piece):
+    """[(chip, why)] for each chip a sentence says model m runs ONLY on ("runs only on a TPU v6e-4", "only runs on",
+    "works on a v6e-4 only") while m was measured on another chip (a results row, or a passing chips row) or has a chips
+    row nobody has run it on yet: "only" then claims what no run showed. A chip covers its slices: "only on a TPU v6e"
+    holds with results on v6e-1 and v6e-4; "only on a v6e-4" does not hold with a result on v6e-1."""
+    out = []
+    for said in (a or b for a, b in ONLY_ON_RE.findall(piece)):
+        inside = lambda c: c == said or c.startswith(said + "-")
+        row = said if said in CHIPS else said.split("-")[0]   # the chips row the chip belongs to, as bad_chip_claims
+        why = [f"it was measured on {r['chip']}" for r in m.get("results") or []
+               if any(not inside(c) for c in CHIP_TOKEN_RE.findall(r.get("chip") or ""))
+               or (r.get("chip") or "").lower().startswith("cpu")]
+        for key, c in (m.get("chips") or {}).items():
+            if key == row or inside(c.get("accelerator") or key):
+                continue
+            if c.get("status") == "passing":
+                why.append(f"its {key} chips row is passing")
+            elif c.get("status") == "pending":
+                why.append(f"its {key} chips row is Not tested yet")
+        if why:
+            out.append((said, "; ".join(dict.fromkeys(why))))
+    return out
+
+
+def sentences(text):
+    """The sentences of a page with each paragraph, list item, table row and heading joined across its line breaks (a
+    claim wrapped over two lines is read whole); a piece holding a chip marker (\x01) is left out."""
+    out = []
+    for block in re.split(r"\n\s*\n|\n(?=[ \t]*(?:[-*+|#>]|\d+[.)])\s)", text):
+        out += [p for p in re.split(r"(?<=[.!?])\s+", " ".join(block.split())) if p and "\x01" not in p]
+    return out
+
+
 def docstrings(repo):
     """(path, text) of every docstring in the package (module, class, function): help() and API references show them."""
     import ast
@@ -1721,6 +1758,11 @@ def check_numbers(reg, repo, problems, places=None):
                     for chip in bad_chip_claims(m, piece) if "\x01" not in line else []:
                         problems.add(rel, f"says {m['name']} runs on {chip} ({' '.join(piece.split())[:100]!r}), "
                                           f"but its models.json chips row is {chip_text(m, chip)!r}")
+        for piece in sentences(text):   # "Hy-Nomas runs only on a TPU v6e-4" while it was measured on one v6e chip
+            for m in ({names[w]["id"]: names[w] for w in name_re.findall(piece)} or ({own["id"]: own} if own else {})).values():
+                for chip, why in only_chip_claims(m, piece):
+                    problems.add(rel, f"says {m['name']} runs only on {chip} ({piece[:100]!r}), but {why}: say where it "
+                                      f"runs (the chips rows), not that it runs nowhere else")
         text = " ".join(text.replace("\x01", "").split())
         spans = [(mt.start(), mt.end(), k) for k in allowed if k[0] == rel
                  for mt in re.finditer(re.escape(k[1]).replace("<marker>", "\x00"), text)]
@@ -1767,6 +1809,8 @@ def check_numbers(reg, repo, problems, places=None):
                 for chip in bad_chip_claims(m, piece):
                     problems.add(rel, f"docstring says {m['name']} runs on {chip} ({piece[:100]!r}), "
                                       f"but its models.json chips row is {chip_text(m, chip)!r}")
+                for chip, why in only_chip_claims(m, piece):
+                    problems.add(rel, f"docstring says {m['name']} runs only on {chip} ({piece[:100]!r}), but {why}")
     which = re.compile(r"\b(first|later)\b", re.I)   # a result marker after "first start" must be a first-start result
     for f in number_pages(reg, repo):
         raw = _page(repo, f, places)
