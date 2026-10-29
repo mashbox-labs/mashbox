@@ -586,3 +586,173 @@ def test_kernel_planes_count_every_expert_of_a_stacked_weight(tmp_path, monkeypa
     want = sum(3 * int(np.prod(f.tensors[n].shape)) if (n in mult and f.tensors[n].type == 8) else f.tensors[n].nbytes
                for n in loaded)
     assert w == want, (w, want)
+
+
+_CALLS = ("jit", "pjit", "closed_call", "core_call", "remat", "checkpoint", "custom_jvp_call", "custom_vjp_call")
+
+
+def _plane_readers(jaxpr, pv, kernel):
+    """-> names of the ops that read any of the plane vars pv anywhere but in the kernel (a jit named `kernel`), looking
+    inside nested calls and lax.scan bodies: a plane var among a scan's consts maps to the body's const; among its carry
+    or xs, the scan itself reads (slices) it"""
+    readers = set()
+    for e in jaxpr.eqns:
+        hit = [i for i, v in enumerate(e.invars) if type(v).__name__ != "Literal" and v in pv]
+        if not hit:
+            continue
+        name = e.primitive.name
+        if name in ("jit", "pjit") and e.params.get("name") == kernel:
+            continue
+        if name == "scan":
+            body = e.params["jaxpr"].jaxpr
+            if "num_consts" in e.params:
+                nc = e.params["num_consts"]
+            else:                                   # JAX 0.11: ft_in = (consts, carry, xs) as flat trees
+                nc = len(list(e.params["ft_in"].elts[0].vals))
+            if any(i >= nc for i in hit):
+                readers.add("scan (slices the stack per step)")
+            readers |= _plane_readers(body, {body.invars[i] for i in hit if i < nc}, kernel)
+            continue
+        inner = e.params.get("jaxpr") or e.params.get("call_jaxpr")
+        if name in _CALLS and inner is not None:
+            ij = getattr(inner, "jaxpr", inner)
+            readers |= _plane_readers(ij, {ij.invars[i] for i in hit}, kernel)
+            continue
+        readers.add(name)
+    return readers
+
+
+def _layer_stub(name, picks_layer, calls):
+    """kernel package stub on Q8_0 (the reference math on the file's blocks; rows reversed as its 'layout'). Its kernel is
+    a jit named _stub_kq_kernel. picks_layer: matmul takes layer= (planes stacked on axis 0, the layer read inside the
+    kernel), as the TPU kernel package does; else planes must arrive as one tensor. calls: (planes ndim, layer given)."""
+    import types
+    from jax import lax
+    from mashbox import ops
+    stub = types.ModuleType(name)
+    stub.TYPES = (8,)
+    stub.repack = lambda t, raw, shape: {"w": raw[::-1], "meta": jnp.zeros((t, shape[-2], shape[-1], 0), jnp.int8)}
+    stub.dequant = lambda p: ops.reference.dequant(p["w"][..., ::-1, :], p["meta"].shape[-4], p["meta"].shape[-2])
+
+    def _stub_kq_kernel(x, p, layer):
+        w = p["w"] if layer is None else lax.dynamic_index_in_dim(p["w"], layer, 0, keepdims=False)
+        m = p["meta"]
+        return ops.qmatmul(x, ops.Raw(w[::-1], m.shape[-4], (m.shape[-3], m.shape[-2])))
+    kern = jax.jit(_stub_kq_kernel)
+    if picks_layer == "raises":                  # takes layer= but cannot run it (e.g. a payload for one tensor)
+        def matmul(x, p, layer=None):
+            if layer is not None:
+                raise ValueError("this kernel build has no stacked-planes program")
+            calls.append((p["w"].ndim, False))
+            return kern(x, p, None)
+    elif picks_layer:
+        def matmul(x, p, layer=None):
+            calls.append((p["w"].ndim, layer is not None))
+            return kern(x, p, layer)
+    else:
+        def matmul(x, p):
+            calls.append((p["w"].ndim, False))
+            return kern(x, p, None)
+    stub.matmul = matmul
+    return stub
+
+
+@pytest.mark.parametrize("arch", ["qwen35", "qwen35moe", "llama"])
+def test_kq_layer_is_picked_in_the_kernel(arch, tmp_path, monkeypatch):
+    """Weights stacked over layer groups run in one lax.scan. With a kernel package whose matmul takes layer=, every
+    stacked kernel weight reaches the kernel whole with the layer index, and no op of the engine reads a plane stack
+    (the scan does not slice it: on TPU a slice is a copy of the layer's planes at every call). (1) jaxpr walk of one
+    decode step: no reader of a stacked plane array outside the kernel. (2) calls: stacked planes + layer, and the
+    unstacked output weight without. (3) logits, prefill + decode, bit for bit those of a kernel without layer= (whose
+    planes the scan slices), and NMSE <= 1e-10 vs the exact path (the stub is the reference math). qwen35 and the dense
+    archs (llama here) share the scan helpers. qwen35moe: its expert stacks (a stack per group of a stack of experts) are
+    on kq too and stay scanned (layer= takes one stacked axis), while its other weights are picked in place."""
+    import sys
+    from mashbox import ops
+    from mashbox.gguf import open_model
+    if arch.startswith("qwen35"):
+        moe = dict(E=8, K=2, FE=32, FS=32) if arch == "qwen35moe" else None
+        q = FXT.write_qwen35(str(tmp_path / "q8.gguf"), seed=5, layers=8, quant=["Q8_0"], moe=moe)
+    else:
+        q = FXT.write_dense(str(tmp_path / "q8.gguf"), arch=arch, seed=5, layers=4, quant=["Q8_0"])
+    toks = list(range(3, 19))
+
+    def logits(use_kernels):
+        f, M, c = open_model(q, act=jnp.float32)
+        W, _ = M.load(f, c, use_kernels=use_kernels)
+        fwd0 = M.make_forward(c)
+        fwd = jax.jit(fwd0, static_argnames=("Tc", "contig", "all_logits"))
+        ck, cv = M.new_state(c, 1, 32)
+        i32, z, t = jnp.int32, jnp.zeros((1,), jnp.int32), jnp.asarray([toks], jnp.int32)
+        r = fwd(W, ck, cv, t[:, :8], z, jnp.asarray([8], i32), z, 0, all_logits=True)
+        out = [np.asarray(r["lg"][0])]
+        ck, cv = r["ck"], r["cv"]
+        for i in range(8, len(toks)):
+            r = fwd(W, ck, cv, t[:, i:i + 1], jnp.asarray([i], i32), jnp.asarray([1], i32), z, 32, all_logits=True)
+            ck, cv = r["ck"], r["cv"]
+            out.append(np.asarray(r["lg"][0]))
+        step = lambda W_: fwd0(W_, ck, cv, t[:, 8:9], jnp.asarray([8], i32), jnp.asarray([1], i32), z, 32)
+        return np.concatenate(out, 0), W, step
+
+    exact, _, _ = logits(False)
+    got = {}
+    for picks in (False, True):
+        calls = []
+        name = f"_stub_gguf_kernels_layer_{int(picks)}"
+        monkeypatch.setitem(sys.modules, name, _layer_stub(name, picks, calls))
+        try:
+            assert ops.load_kernels(module=name) == frozenset({8})
+            lg, W, step = logits(True)
+            if picks:
+                assert isinstance(W["g"], dict), "the fixture's layers are stacked for one lax.scan"
+                ps = [h for h in jax.tree_util.tree_leaves(W["g"], is_leaf=lambda v: isinstance(v, ops.Packed))
+                      if isinstance(h, ops.Packed)]
+                hs = [h for h in ps if len(h.shape) == 2]
+                assert hs and all(h.packed["w"].ndim == 3 for h in hs), hs
+                ex = [h for h in ps if len(h.shape) == 3]
+                assert bool(ex) == (arch == "qwen35moe") and all(h.packed["w"].ndim == 4 for h in ex), ex
+                leaves, tree = jax.tree_util.tree_flatten(W)
+                stack_ids = {id(a) for h in hs for a in jax.tree_util.tree_leaves(h.packed)}
+                cj = jax.make_jaxpr(lambda *lv: step(jax.tree_util.tree_unflatten(tree, lv)))(*leaves)
+                pv = {v for v, a in zip(cj.jaxpr.invars, leaves) if id(a) in stack_ids}
+                assert len(pv) == 2 * len(hs), (len(pv), len(hs))
+                readers = _plane_readers(cj.jaxpr, pv, "_stub_kq_kernel")
+                assert not readers, f"ops that read a stacked plane array outside the kernel: {sorted(readers)}"
+        finally:
+            ops.load_kernels(module="off")
+        got[picks] = (lg, set(calls))
+    assert got[False][1] == {(2, False)}, got[False][1]
+    assert got[True][1] == {(3, True), (2, False)}, f"kernel calls (planes ndim, layer given): {got[True][1]}"
+    assert np.array_equal(got[True][0], got[False][0]), "logits differ from the sliced-planes path"
+    e = nmse(got[True][0], exact)
+    print(f"{arch}: layer picked in the kernel vs sliced planes: bit-equal; vs exact path NMSE {e:.3e}")
+    assert e <= 1e-10, e
+
+
+def test_kq_layer_failure_keeps_the_sliced_path(tmp_path, monkeypatch, capsys):
+    """A kernel package whose matmul names layer= but raises on a stack: the first stack of each (type, shape) runs the
+    layer= form once at load (the layer preflight); it fails, so those stacks are sliced per layer as before, with one
+    warning per (type, shape), and logits (prefill + decode) are bit for bit those of a kernel without layer=."""
+    import sys
+    from mashbox import ops
+    q = FXT.write_qwen35(str(tmp_path / "q8.gguf"), seed=5, layers=8, quant=["Q8_0"])
+    toks = list(range(3, 19))
+    got = {}
+    for mode in (False, "raises"):
+        calls = []
+        name = f"_stub_gguf_kernels_layerfail_{mode}"
+        monkeypatch.setitem(sys.modules, name, _layer_stub(name, mode, calls))
+        try:
+            assert ops.load_kernels(module=name) == frozenset({8})
+            capsys.readouterr()
+            lg, _, _ = run(q, toks, split=8, use_kernels=True)
+            err = capsys.readouterr().err
+            failed = {k for k, v in getattr(ops, "_KQ_LAYER", {}).items() if v is not True}
+        finally:
+            ops.load_kernels(module="off")
+        got[mode] = (lg, set(calls), err, failed)
+    lg, calls, err, failed = got["raises"]
+    assert failed and calls == {(2, False)}, (failed, calls)
+    warns = [ln for ln in err.splitlines() if "kq layer= for" in ln]
+    assert len(warns) == len(failed) and all("sliced per layer" in ln for ln in warns), err
+    assert np.array_equal(lg, got[False][0]), "logits differ from the sliced-planes path"

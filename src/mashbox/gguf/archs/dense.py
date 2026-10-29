@@ -282,10 +282,12 @@ def make_forward(c, decode_kernels=None):
             return x + rs(lin_(a, w["wd"]).astype(act)), k, v
 
         if not isinstance(W["g"], list):
+            held, wx = ops.scan_split(W["g"])          # kernel planes stay whole: the kernel reads layer l in place
+
             def body(x, xs):
-                x, k, v = layer(x, xs["w"], xs["l"])
+                x, k, v = layer(x, ops.scan_join(held, xs["w"], xs["l"]), xs["l"])
                 return x, dict(k=k, v=v)
-            x, ys = lax.scan(body, x, dict(w=W["g"], l=jnp.arange(c.L, dtype=jnp.int32)))
+            x, ys = lax.scan(body, x, dict(w=wx, l=jnp.arange(c.L, dtype=jnp.int32)))
         else:
             yl = []
             for l in range(c.L):

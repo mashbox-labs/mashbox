@@ -469,10 +469,11 @@ def make_forward(c, decode_kernels=None):
             if c.moe:
                 exps = [{k: m[k] for k in MF.EXPERT_KEYS if k in m} for m in wx["mlp"]]
                 wx = dict(wx, mlp=[{k: v for k, v in m.items() if k not in MF.EXPERT_KEYS} for m in wx["mlp"]])
+            held, wx = ops.scan_split(wx)              # kernel planes stay whole: the kernel reads group g in place
 
             def body(carry, xg):
                 x, R, C = carry
-                x, R, C, k, v, rec = group(x, R, C, xg["g"], xg["w"], exps)
+                x, R, C, k, v, rec = group(x, R, C, xg["g"], ops.scan_join(held, xg["w"], xg["g"]), exps)
                 return (x, R, C), dict(k=k, v=v) if rec is None else dict(k=k, v=v, rec=rec)
             (x, R1, C1), ys = lax.scan(body, (x, R0, C0), dict(w=wx, g=jnp.arange(NG, dtype=jnp.int32)))
         else:

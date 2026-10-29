@@ -15,6 +15,8 @@ Two implementations sit behind the same names:
   * the TPU kernel package (licensed binary, optional): a Python module that provides, per supported type,
       repack(t, raw, shape) -> packed      lossless byte permutation into the kernel's layout (a pytree of arrays)
       matmul(x, packed) -> y               the kernel
+                                           optional keyword layer=: packed stacked on one leading axis (the layer
+                                           groups of a lax.scan) and the layer's index, read in place by the kernel
       dequant(packed) -> float32           for the contract test: must equal the reference bit for bit
     and a `TYPES` collection of the ggml type ids it covers. Optional:
       repack_host(t, raw, shape) -> packed the same planes from a host NumPy array, on the host's cores (used for every
@@ -42,6 +44,7 @@ runs the kernel once, compiled, on one row (the preflight). If the repack or the
 compile or run, weights of that type and shape load on the exact path, with a warning.
 """
 import importlib
+import inspect
 import os
 import sys
 
@@ -59,6 +62,7 @@ HI = lax.Precision.HIGHEST
 KERNEL_MODULE = "mashbox_engine_kernels"     # the licensed kernel wheel's module (release item `engine`)
 _KERNELS = {"module": None, "types": frozenset(), "nb": frozenset(), "name": None, "error": None}
 _KQ_RAN = {}             # kq preflight per (type, shape) since load_kernels: True = the kernel ran, else why it failed
+_KQ_LAYER = {}           # kq layer= preflight per (type, shape) on a layer stack: True = it ran, else why it failed
 PREFLIGHT_DTYPE = jnp.bfloat16   # the preflight's input dtype: the forward's activation dtype (the archs' Config act)
 DENSE_NATIVE = False     # dense weights stay on kq or the exact path; experts go native
 
@@ -122,6 +126,26 @@ class Packed:
         return f"Packed({type_name(self.t)}, {self.shape})"
 
 
+@jax.tree_util.register_pytree_node_class
+class At:
+    """One layer of a Packed handle stacked over layer groups, for a kernel that picks the layer itself (matmul's
+    layer=): the whole stack and the layer index. A lax.scan body multiplies by it; the stack is never sliced (on TPU
+    a slice of the planes is a copy: one more read and write of the layer's planes at every call)."""
+
+    def __init__(self, packed, layer, t, shape):
+        self.packed, self.layer, self.t, self.shape = packed, layer, int(t), tuple(int(s) for s in shape)
+
+    def tree_flatten(self):
+        return (self.packed, self.layer), (self.t, self.shape)
+
+    @classmethod
+    def tree_unflatten(cls, aux, ch):
+        return cls(ch[0], ch[1], *aux)
+
+    def __repr__(self):
+        return f"At({type_name(self.t)}, {self.shape})"
+
+
 def load_kernels(log=None, module=None):
     """Import the TPU kernel package if it is installed (env MASHBOX_GGUF_KERNELS names another module, `off` disables).
     -> the ggml type ids it runs. Without it every type uses the exact reference."""
@@ -129,6 +153,7 @@ def load_kernels(log=None, module=None):
     _KERNELS.update(module=None, types=frozenset(), nb=frozenset(), name=None, error=None)
     _EXPERT_CHECKED.clear()
     _KQ_RAN.clear()
+    _KQ_LAYER.clear()
     if module in ("", "off", "none"):
         return _KERNELS["types"]
     try:
@@ -258,6 +283,8 @@ def prepare(raw, t, shape, use_kernel=True, experts=None):
             if key not in _KQ_RAN:
                 _kq_preflight(h, max(0, raw.ndim - 2))
                 _KQ_RAN[key] = True
+            if raw.ndim == 3 and len(key[1]) == 2 and key not in _KQ_LAYER and kernel_picks_layer():
+                _kq_layer_preflight(h, key)
             return h
         except Exception as e:                  # a fast path must never stop the load: fall back, loudly
             _KQ_RAN[key] = f"{type(e).__name__}: {e}"
@@ -295,6 +322,21 @@ def _kq_preflight(h, lead):
     planes = jax.tree_util.tree_map(lambda a: a[(0,) * lead], h.packed) if lead else h.packed
     x = jnp.ones((1, h.shape[-1]), PREFLIGHT_DTYPE)
     jax.block_until_ready(jax.jit(_KERNELS["module"].matmul)(x, planes))
+
+
+def _kq_layer_preflight(h, key):
+    """The kernel's matmul with layer= on a whole layer stack (h: one (rows, cols) weight per layer), compiled and run
+    once with a traced layer index, as the layer scan calls it (scan_split). If it raises, stacks of this type and shape
+    are sliced per layer before the kernel instead (the plain call, which _kq_preflight ran), with one warning."""
+    try:
+        x = jnp.ones((1, h.shape[-1]), PREFLIGHT_DTYPE)
+        mm = jax.jit(lambda x_, p_, l_: _KERNELS["module"].matmul(x_, p_, layer=l_))
+        jax.block_until_ready(mm(x, h.packed, jnp.int32(0)))
+        _KQ_LAYER[key] = True
+    except Exception as e:                      # never stops the load: the sliced path still runs this weight
+        _KQ_LAYER[key] = f"{type(e).__name__}: {e}"
+        warn(f"mashbox: kq layer= for {type_name(key[0])} {key[1]} failed ({_KQ_LAYER[key]}); stacks of this type and "
+             f"shape are sliced per layer before the kernel")
 
 
 def dequant(h):
@@ -372,6 +414,8 @@ def qmatmul(x, h):
         return _KERNELS["module"].matmul_nb(x, h.planes).astype(x.dtype)
     if isinstance(h, Packed):
         return _KERNELS["module"].matmul(x, h.packed).astype(x.dtype)
+    if isinstance(h, At):
+        return _KERNELS["module"].matmul(x, h.packed, layer=h.layer).astype(x.dtype)
     if isinstance(h, dense16.Dense16):
         return dense16.matmul(x, h)
     x, raw = lax.optimization_barrier((x, h.raw))
@@ -383,6 +427,43 @@ def qmatmul(x, h):
     chunks = raw.reshape(rows // rc, rc, raw.shape[-1])
     ys = lax.map(lambda r: _exact(x, r, h.t, cols), chunks)                  # (rows // rc, ..., rc)
     return jnp.moveaxis(ys, 0, -2).reshape(x.shape[:-1] + (rows,)).astype(x.dtype)
+
+
+def kernel_picks_layer():
+    """True when the loaded kernel package's matmul takes layer= (see the module docstring)"""
+    mm = getattr(_KERNELS["module"], "matmul", None)          # a package of expert kernels only has no dense matmul
+    try:
+        return mm is not None and "layer" in inspect.signature(mm).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_handle(v):
+    return isinstance(v, (Raw, Packed, NB, At, dense16.Dense16))
+
+
+def _held(v):
+    """a Packed stack of one (rows, cols) weight per layer whose (type, shape) passed the layer= preflight"""
+    return isinstance(v, Packed) and len(v.shape) == 2 and _KQ_LAYER.get((v.t, v.shape)) is True
+
+
+def scan_split(ws):
+    """ws: a tree of weights stacked over layer groups, about to be the xs of a lax.scan -> (held, xs). When the kernel
+    package picks a layer itself, each Packed handle of a (rows, cols) weight is held out of the scan (held keeps the
+    handle, xs has None there) so the body multiplies by the whole stack at its layer (scan_join), and nothing slices
+    the planes. Everything else is scanned as before. Without that kernel, held is None and xs is ws."""
+    if not kernel_picks_layer():
+        return None, ws
+    held = jax.tree_util.tree_map(lambda v: v if _held(v) else None, ws, is_leaf=_is_handle)
+    return held, jax.tree_util.tree_map(lambda v: None if _held(v) else v, ws, is_leaf=_is_handle)
+
+
+def scan_join(held, w, layer):
+    """inside the scan body: the layer's weights = w (the scanned slice) with each held handle as At(stack, layer)"""
+    if held is None:
+        return w
+    return jax.tree_util.tree_map(lambda h, v: v if h is None else At(h.packed, layer, h.t, h.shape), held, w,
+                                  is_leaf=lambda v: v is None or _is_handle(v))
 
 
 def contract_check(t, raw, shape):
