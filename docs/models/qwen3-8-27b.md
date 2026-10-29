@@ -18,7 +18,7 @@ How it runs:
 
 | | TPU v6e (v6e-1) | TPU v5e (v5e-4) | TPU v6e slice (v6e-4) | TPU v5p slice (v5p-8) |
 |---|---|---|---|---|
-| Status | Supported: one chip (v6e-1) | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: 4 chips, split across them automatically | Not supported |
+| Status | Supported: one chip (v6e-1) | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: 4 chips, split across them automatically | Not tested yet |
 | Create with | `--accelerator-type=v6e-1 --version=v2-alpha-tpuv6e` | `--accelerator-type=v5litepod-4 --version=v2-alpha-tpuv5-lite` | `--accelerator-type=v6e-4 --version=v2-alpha-tpuv6e` | |
 
 One TPU v6e chip is $2.70 an hour at Google's on-demand list price. The chip bills from create to delete. Context is 2,048 tokens per request with 8 request slots. On a host of 4 chips, `mashbox run` splits the model across them by itself (`--tensor-parallel-size`, in [Options](#options)). The commands on this page use a v6e-1.

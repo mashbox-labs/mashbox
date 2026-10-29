@@ -71,9 +71,9 @@ This port loads the original weights unchanged from [tencent/Hy-Nomas](https://h
 
 | Chip | Status | Note |
 |---|---|---|
-| TPU v5e | Not supported | runs only on a v6e-4 (a TPU v6e slice of 4 chips) |
+| TPU v5e | Not tested yet |  |
 | TPU v6e | One chip | the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 |
-| TPU v5p slice (v5p-8) | Not supported | runs only on a v6e-4 (a TPU v6e slice of 4 chips) |
+| TPU v5p slice (v5p-8) | Not tested yet |  |
 | TPU v6e slice (v6e-4) | Supported | 4 chips |
 
 ## Kernels

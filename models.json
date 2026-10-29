@@ -76,18 +76,17 @@
       "chips": {
         "v6e": {
           "status": "not supported",
-          "reason": "runs only on a v6e-4 (a TPU v6e slice of 4 chips)",
           "accelerator": "v6e-1",
           "note": "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4"
         },
         "v5e": {
           "status": "not supported",
-          "reason": "runs only on a v6e-4 (a TPU v6e slice of 4 chips)"
+          "note": "Not tested yet"
         },
         "v5p-8": {
           "status": "not supported",
-          "reason": "runs only on a v6e-4 (a TPU v6e slice of 4 chips)",
-          "accelerator": "v5p-8"
+          "accelerator": "v5p-8",
+          "note": "Not tested yet"
         },
         "v6e-4": {
           "status": "passing",
@@ -312,7 +311,8 @@
           "accelerator": "v5p-8",
           "gcloud_type": "v5p-8",
           "runtime": "v2-alpha-tpuv5",
-          "chip_count": 4
+          "chip_count": 4,
+          "note": "Not tested yet"
         },
         "v6e-4": {
           "status": "passing",

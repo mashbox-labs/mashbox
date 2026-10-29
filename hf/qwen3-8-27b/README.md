@@ -118,7 +118,7 @@ Each chart names the hardware on both sides.
 |---|---|---|
 | TPU v5e | Supported | a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB |
 | TPU v6e | Supported | one chip (v6e-1) |
-| TPU v5p slice (v5p-8) | Not supported |  |
+| TPU v5p slice (v5p-8) | Not tested yet |  |
 | TPU v6e slice (v6e-4) | Supported | 4 chips, split across them automatically |
 
 ## Kernels

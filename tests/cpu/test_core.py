@@ -6,6 +6,8 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ALLOWED = {"numpy", "jax", "jaxlib", "ml_dtypes", "tokenizers", "jinja2", "huggingface_hub", "mashbox",
            "gguf"}                                  # gguf: llama.cpp's GGUF reader, pinned in pyproject (NOTICE)
@@ -205,6 +207,66 @@ def test_sync_check_catches_typed_drift(tmp_path):
         problems = sc.Problems()
         sc.check_app(reg, tmp_path, None, None, problems)
         assert len(problems) == 1 and "CATALOG_URL" in problems[0], problems
+
+
+def test_an_allow_line_covers_every_place_its_words_appear_on_a_line():
+    """tools/docs_lint_allow.txt: an allow line covers each hit inside its words wherever on the line they appear (a
+    support table row prints a chip's cell once per chip, e.g. "Not tested yet" three times); a hit outside those words,
+    or on another page, still fails."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("docs_lint", ROOT / "tools" / "docs_lint.py")
+    dl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl)
+    key = ("docs/x.md", "Not tested yet")
+    row = "| Model | Not tested yet | Not tested yet | Not tested yet |\n"
+    used = set()
+    assert dl.lint_text("docs/x.md", row, {key: (1, 3)}, used) == []
+    assert used == {key}
+    outside = dl.lint_text("docs/x.md", "| Not tested yet | Not tested yet | it runs there yet |\n", {key: (1, 2)}, set())
+    assert len(outside) == 1 and "[yet]" in outside[0], outside
+    assert len(dl.lint_text("docs/y.md", row, {key: (1, 3)}, set())) == 3
+
+
+@pytest.mark.parametrize("copies", [4, 5, 20, 2, 1])
+def test_an_allow_line_covers_exactly_its_count_of_hits(copies):
+    """an allow line names how many hits it covers on its page (page | words | hits | why): one more copy of the words
+    anywhere on the page (an extra cell on the same row included) or one fewer fails, so an allowance never grows
+    silently"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("docs_lint", ROOT / "tools" / "docs_lint.py")
+    dl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl)
+    key = ("docs/x.md", "Not tested yet")
+    page = "| Model | " + " | ".join(["Not tested yet"] * copies) + " |\n"
+    probs = dl.lint_text("docs/x.md", page, {key: (7, 3)}, set())
+    assert len(probs) == 1 and f"covers {copies} hit" in probs[0] and "says 3" in probs[0] and ":7:" in probs[0], probs
+    split = "| A | Not tested yet | Not tested yet |\n| B | Not tested yet |\n| C | Not tested yet |\n"
+    assert len(dl.lint_text("docs/x.md", split, {key: (7, 3)}, set())) == 1     # the budget is per page, not per line
+    assert dl.lint_text("docs/x.md", split, {key: (7, 4)}, set()) == []
+
+
+@pytest.mark.parametrize("line,ok", [("docs/x.md | Not tested yet | 3 | a chip cell", True),
+                                     ("docs/x.md | Not tested yet | a chip cell", False),
+                                     ("docs/x.md | Not tested yet | 0 | a chip cell", False),
+                                     ("docs/x.md | Not tested yet | -1 | a chip cell", False),
+                                     ("docs/x.md | Not tested yet | 3.0 | a chip cell", False),
+                                     ("docs/x.md | Not tested yet | three | a chip cell", False),
+                                     ("docs/x.md | Not tested yet | 3 |", False),
+                                     ("docs/x.md | Not tested yet | 3", False)])
+def test_an_allow_line_states_its_hit_count(tmp_path, line, ok):
+    """tools/docs_lint_allow.txt lines are 'page | the words (2 or more) | hits (a whole number, 1 or more) | why'"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("docs_lint", ROOT / "tools" / "docs_lint.py")
+    dl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl)
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "docs_lint_allow.txt").write_text("# header\n" + line + "\n")
+    problems = []
+    allowed = dl.load_allow(tmp_path, problems)
+    if ok:
+        assert problems == [] and allowed == {("docs/x.md", "Not tested yet"): (2, 3)}
+    else:
+        assert allowed == {} and len(problems) == 1 and "hits" in problems[0], (allowed, problems)
 
 
 def test_public_text_is_clean():

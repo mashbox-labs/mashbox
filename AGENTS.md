@@ -9,7 +9,7 @@ For coding agents that work on this repo, or that run its models for a person.
 ## Rules
 
 1. Ask the person before anything that costs money: creating a chip, picking its type, keeping it running. Tell them the hourly price first ([docs/google-cloud.md](docs/google-cloud.md), "What it costs").
-2. Create one chip of the smallest type the model's row lists.
+2. Create one chip of the smallest type the model's row lists as `passing`: those are the types `mashbox tpu up` creates. A chips row's `note`, when it has one, is what to tell the person about that chip.
 3. When the run ends or fails, delete the chip. Then show the person the output of `gcloud compute tpus tpu-vm list --zone=<zone>` without it.
 4. Never write passwords, tokens or keys into files, commits or command lines. `gcloud auth login` opens a browser and the person signs in.
 5. Never make anything public: no public repos, buckets or open ports. Servers bind 127.0.0.1 on the chip; reach them with an SSH tunnel (`-- -L <port>:127.0.0.1:<port>`), never by opening a firewall port.
@@ -18,7 +18,7 @@ For coding agents that work on this repo, or that run its models for a person.
 ## Run a model for a person
 
 - **Qwen3.8-27B** runs on one TPU v6e-1 ($2.70 an hour on demand). TPU v5e status: Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB. Install on the chip: `python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"` (the chip's system Python is 3.10; JAX for TPU needs 3.12, which uv brings). One answer: `~/.local/bin/mashbox run qwen3-8-27b --prompt "..."`. A server: [docs/models/qwen3-8-27b.md](docs/models/qwen3-8-27b.md).
-- **Hy-Nomas** (a video world model in the browser) runs only on a TPU v6e-4 ($10.80 an hour on demand in US regions). Install on the chip with the `install` line of its `models.json` row (it adds the `hy-nomas` extra and the CPU build of PyTorch), then `~/.local/bin/mashbox download hy-nomas` (the weights; the page lists the disk it needs) and `~/.local/bin/mashbox run hy-nomas --ui`. Connect with `-- -L 8790:127.0.0.1:8790` on the SSH line and give the person http://127.0.0.1:8790. Stop the app with Ctrl-C before you delete the chip. Every step: [docs/models/hy-nomas.md](docs/models/hy-nomas.md).
+- **Hy-Nomas** (a video world model in the browser) runs on a TPU v6e-4 (a TPU v6e slice of 4 chips, $10.80 an hour on demand in US regions). One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4. Install on the chip with the `install` line of its `models.json` row (it adds the `hy-nomas` extra and the CPU build of PyTorch), then `~/.local/bin/mashbox download hy-nomas` (the weights; the page lists the disk it needs) and `~/.local/bin/mashbox run hy-nomas --ui`. Connect with `-- -L 8790:127.0.0.1:8790` on the SSH line and give the person http://127.0.0.1:8790. Stop the app with Ctrl-C before you delete the chip. Every step: [docs/models/hy-nomas.md](docs/models/hy-nomas.md).
 - Run only the models in the README's Models table.
 - **Coding agents as clients:** to point Claude Code, Codex or Pi at a model you serve, follow [docs/agents-on-tpu.md](docs/agents-on-tpu.md).
 

@@ -117,8 +117,8 @@ The Qwen3.8-27B server also saves the programs it compiled in an `aot` folder in
 <!-- chips:start -->
 | Model | Runs on | TPU v5e | TPU v6e | TPU v5p slice (v5p-8) | TPU v6e slice (v6e-4) |
 |---|---|---|---|---|---|
-| Hy-Nomas | TPU v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | Supported: 4 chips |
-| Qwen3.8-27B | TPU v6e-1 | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: one chip (v6e-1) | Not supported | Supported: 4 chips, split across them automatically |
+| Hy-Nomas | TPU v6e-4 | Not tested yet | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 | Not tested yet | Supported: 4 chips |
+| Qwen3.8-27B | TPU v6e-1 | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: one chip (v6e-1) | Not tested yet | Supported: 4 chips, split across them automatically |
 <!-- chips:end -->
 
 A TPU v6e chip has 32 GB of memory (JAX reports 31.24 GiB); a TPU v5e chip has 16 GB (15.75 GiB). [TPU v6e and v5e](chips.md) compares the two.

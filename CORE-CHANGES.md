@@ -187,6 +187,7 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 
 1. **`tools/docs_lint.py` (T0, `test_public_text_is_clean`):** public pages, cards, chart captions, `models.json` text and CLI strings describe the release in the present tense. It fails on dates outside this changelog and licence text, on status or plan notes and on hidden comments in public Markdown. A line that must keep a hit goes in `tools/docs_lint_allow.txt` with the reason.
 2. **Support tables** say "Supported" or "Not supported" with the reason; a chip row without a result says "Not tested" and stops a release (`check --release`).
+3. **`tools/docs_lint.py` allow lines:** an allow line covers each hit inside its words wherever they appear on the line, not only the first place. Why: a support table row prints a chip's cell once per chip. Compatible: a hit outside the allowed words, or on another page, still fails.
 
 ## 0.1.1
 

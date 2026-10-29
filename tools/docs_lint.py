@@ -18,12 +18,13 @@ string with a space is text a person can read and gets every rule.
     python3 tools/docs_lint.py --paths FILE...        lint these files (a built site, an exported tree)
 
 A line that must keep a hit (a quoted error message, a licence line) goes in tools/docs_lint_allow.txt as
-"page | the words of the line that hold the hit | why"; an allow line that matches nothing fails, so the list only
-shrinks with the pages. Maintainers can add their own name and path rules in internal/docs_lint_rules.json
+"page | the words of the line that hold the hit | hits | why", hits being how many hits those words cover on the page;
+one hit more or fewer fails, and so does an allow line that matches nothing, so the list only shrinks with the pages. Maintainers can add their own name and path rules in internal/docs_lint_rules.json
 ({"rules": [[name, regex, what to write instead], ...]}), which the lint reads when the file is there.
 """
 import argparse
 import ast
+import collections
 import fnmatch
 import html
 import json
@@ -213,10 +214,11 @@ def load_allow(repo, problems):
         if not line.strip() or line.startswith("#"):
             continue
         parts = [p.strip() for p in line.split(" | ")]
-        if len(parts) != 3 or not all(parts) or len(parts[1].split()) < 2:
-            problems.append(f"{ALLOW.as_posix()}:{i}: want 'page | the words that hold the hit (2 or more) | why'")
+        if len(parts) != 4 or not all(parts) or len(parts[1].split()) < 2 or not re.fullmatch(r"[1-9][0-9]*", parts[2]):
+            problems.append(f"{ALLOW.as_posix()}:{i}: want 'page | the words that hold the hit (2 or more) | hits (how "
+                            "many hits they cover on the page, 1 or more) | why'")
             continue
-        allowed[(parts[0], parts[1])] = i
+        allowed[(parts[0], parts[1])] = (i, int(parts[2]))
     return allowed
 
 
@@ -232,6 +234,17 @@ def load_private(repo):
     return [(name, re.compile(rx), fix) for name, rx, fix in json.loads(f.read_text()).get("rules", [])]
 
 
+def _inside(flat, words, start, end):
+    """True when the hit [start, end) lies inside a place where words appears in flat: every place, not only the first
+    (a support table row prints a chip's cell once per chip)."""
+    i = flat.find(words)
+    while i != -1:
+        if i <= start and end <= i + len(words):
+            return True
+        i = flat.find(words, i + 1)
+    return False
+
+
 def lint_text(rel, text, allowed, used, extra=()):
     """Problems in one file. rel is the repo-relative path (decides the legal exemption).
     Code blocks and inline code are not read for words (they quote commands, output and error text as printed), but
@@ -239,6 +252,7 @@ def lint_text(rel, text, allowed, used, extra=()):
     A hidden comment (<!-- -->, and {/* */} in MDX) fails in every public Markdown, MDX or text file, the page templates
     included."""
     probs = []
+    hits = collections.Counter()
     rules = list(RULES) + list(extra)
     if rel not in LEGAL:
         rules += DATE_RULES
@@ -265,13 +279,18 @@ def lint_text(rel, text, allowed, used, extra=()):
             if name_only and rule in CODE_NAME_SKIP:
                 continue
             for mt in rx.finditer(flat):
-                key = next((k for k in allowed if k[0] == rel and k[1] in flat
-                            and flat.find(k[1]) <= mt.start() and mt.end() <= flat.find(k[1]) + len(k[1])), None)
+                key = next((k for k in allowed if k[0] == rel and _inside(flat, k[1], mt.start(), mt.end())), None)
                 if key:
                     used.add(key)
+                    hits[key] += 1
                     continue
                 a = max(0, mt.start() - 40)
                 probs.append(f"{rel}:{where}: [{rule}] {mt.group(0)!r} in ...{flat[a:mt.end() + 30]}...: {fix}")
+    for key, n in hits.items():    # an allow line covers exactly the hits it names: a copy more (or fewer) fails
+        i, want = allowed[key]
+        if n != want:
+            probs.append(f"{ALLOW.as_posix()}:{i}: {key[1]!r} covers {n} hit(s) on {rel}, the allow line says {want}: "
+                         "a copy more is a real hit to fix; fewer, lower the count")
     return probs
 
 
@@ -280,7 +299,7 @@ def lint_repo(repo):
     allowed, used, extra = load_allow(repo, problems), set(), load_private(repo)
     for rel in public_files(repo):
         problems += lint_text(rel, (repo / rel).read_text(errors="replace"), allowed, used, extra)
-    for k, i in sorted(allowed.items(), key=lambda kv: kv[1]):
+    for k, (i, _) in sorted(allowed.items(), key=lambda kv: kv[1]):
         if k not in used:
             problems.append(f"{ALLOW.as_posix()}:{i}: {k[1]!r} matches nothing on {k[0]} any more (remove the line)")
     return problems
