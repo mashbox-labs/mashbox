@@ -122,6 +122,18 @@ def tensor_parallel(n):
     return next(k for k in (4, 2, 1) if k <= len(devs))
 
 
+def forced_plain():
+    """The test-only speculation-off force (runtime/faults.py): MASHBOX_FAULT=force:speculation, or the older
+    MASHBOX_FORCE_FAIL=speculation, turns speculation off at load, before the engine and its warm-up exist, whatever the
+    flags ask. -> the why line, or None."""
+    from .runtime import faults
+    if faults.forced("speculation"):
+        return "forced failure (MASHBOX_FAULT=force:speculation): plain decoding"
+    if os.environ.get("MASHBOX_FORCE_FAIL") == "speculation":
+        return "forced failure (MASHBOX_FORCE_FAIL=speculation): plain decoding"
+    return None
+
+
 def speculation(a, m, cfg, tp, component_set_sha=None, later=False, model=None):
     """Engine arguments for speculative decoding with the model's drafter (models.json `drafter`, INTERFACES-v1 §10).
 
@@ -144,9 +156,10 @@ def speculation(a, m, cfg, tp, component_set_sha=None, later=False, model=None):
     sv, dk = getattr(a, "speculation", None), getattr(a, "draft_k", None)
     if sv is not None and k is not None:
         raise SystemExit("--mtp K is the short form of --speculation mtp --draft-k K: give one of them")
-    if os.environ.get("MASHBOX_FORCE_FAIL") == "speculation":
-        a.spec_why = "forced failure (MASHBOX_FORCE_FAIL=speculation): plain decoding"
-        log(json.dumps(dict(event="speculation", used=False, reason=a.spec_why)))
+    forced_why = forced_plain()
+    if forced_why:
+        a.spec_why = forced_why
+        log(json.dumps(dict(event="speculation", used=False, reason=forced_why)))
         return {}
     if sv == "off":
         k = 0
@@ -283,7 +296,7 @@ def gguf_speculation(a, c, A, records=None, f=None):
     auto (no flag) runs only a drafter with a passed gate record on this chip (records {kind: {chip: entry}}), else plain
     decoding with the why lines; --speculation <kind> forces one where it applies (--draft-model FILE: the draft model,
     loaded by gguf_draft against the target file f, which stops with its line when the file cannot draft for it); --speculation off and
-    MASHBOX_FORCE_FAIL=speculation decode plain. A gated pick carries the record's component_set_sha as gate_css:
+    the speculation-off force (forced_plain) decode plain. A gated pick carries the record's component_set_sha as gate_css:
     load_gguf checks the built engine's against it before the warm-up (gguf_spec_gate)."""
     from .gguf import GGUFError
     from .runtime import drafter as DR
@@ -297,8 +310,9 @@ def gguf_speculation(a, c, A, records=None, f=None):
         log(json.dumps(dict(event="speculation", used=False, reason=why)))
         a.spec_why = why            # the reason Engine.spec_health gives while decoding is plain (Engine spec_why)
         return {}
-    if os.environ.get("MASHBOX_FORCE_FAIL") == "speculation":
-        return off("forced failure (MASHBOX_FORCE_FAIL=speculation): plain decoding")
+    forced_why = forced_plain()
+    if forced_why:
+        return off(forced_why)
     chip = DR.chip_key()
     kind, gated, why, gcss = SEL.pick(SEL.meta_of(A, c, "gguf", getattr(c, "nextn", 0), draft_given=bool(given)), chip,
                                       records=records, forced=forced, later=True)

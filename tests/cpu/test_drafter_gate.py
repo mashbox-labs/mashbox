@@ -341,6 +341,23 @@ def test_health_reason_from_every_plain_path_of_the_models_json_load(run, monkey
     mm = copy.deepcopy(m)
     mm["drafter"] = {k: v for k, v in gated(dr, css="d" * 64).items() if k in mm["drafter"]}
     _, out = spec(mm)
+    monkeypatch.setenv("MASHBOX_FAULT", "force:speculation")       # the speculation-off force: the gated drafter is not used
+    a, off = spec(mm)
+    assert off == {} and a.spec_why == json.loads(logs[-1])["reason"] == \
+        "forced failure (MASHBOX_FAULT=force:speculation): plain decoding"
+    monkeypatch.delenv("MASHBOX_FAULT")
+    picked = {"drafter": "the --speculation ngram pick"}
+    monkeypatch.setattr(cli, "forced_drafter", lambda *x: picked)
+
+    def flag():
+        a = argparse.Namespace(mtp=None, mtp_file=None, speculation="ngram", draft_k=None)
+        return a, cli.speculation(a, m, None, 1, later=True, model=QM)
+    assert flag()[1] is picked
+    monkeypatch.setenv("MASHBOX_FAULT", "force:speculation")       # nor a drafter the flags pick
+    a, off = flag()
+    assert off == {} and a.spec_why == json.loads(logs[-1])["reason"] == \
+        "forced failure (MASHBOX_FAULT=force:speculation): plain decoding"
+    monkeypatch.delenv("MASHBOX_FAULT")
     eng = StandIn(out["draft_k"])
     cli.deployment_keys(eng, mm, "cfg", "lay", tp=1, gate_css=out["gate_css"])
     assert eng.DK == 0 and getattr(eng, "spec_why", None) == "gated on v6e-1 for another component set: plain decoding"
@@ -352,7 +369,8 @@ def test_health_reason_from_every_plain_path_of_the_models_json_load(run, monkey
 
 
 @pytest.mark.parametrize("path,says", (("no gate entry", "not gated on this chip (v6e-1)"), ("--mtp 0", "--mtp 0"),
-                                       ("forced failure", "forced failure (MASHBOX_FORCE_FAIL=speculation)")))
+                                       ("forced failure", "forced failure (MASHBOX_FORCE_FAIL=speculation)"),
+                                       ("force hook", "forced failure (MASHBOX_FAULT=force:speculation)")))
 def test_load_hands_the_speculation_why_line_to_the_engine(run, monkeypatch, tmp_path, path, says):
     """cli.load (the models.json path) builds its Engine with spec_why = the why line its own speculation() logged, so
     Engine.spec_health says why decoding is plain from the first request. The speculation rule is the real one; the files, the
@@ -382,6 +400,8 @@ def test_load_hands_the_speculation_why_line_to_the_engine(run, monkeypatch, tmp
     argv = ["run", "qwen3-8-27b", "--no-kernels", "--prompt", "hi"] + (["--mtp", "0"] if path == "--mtp 0" else [])
     if path == "forced failure":
         monkeypatch.setenv("MASHBOX_FORCE_FAIL", "speculation")
+    if path == "force hook":
+        monkeypatch.setenv("MASHBOX_FAULT", "force:speculation")
     a = cli.build_parser().parse_args(argv)
     with pytest.raises(Built):
         cli.load(a)

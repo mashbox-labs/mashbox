@@ -1057,7 +1057,8 @@ def evidence_problems(reg, ev, repo, work=None):
 
 # the dists every chip record names in versions{} (importlib.metadata.version in the run's process; python is
 # platform.python_version()), as posted for harness v2
-RUN_DISTS = ("python", "jax", "jaxlib", "libtpu", "gguf", "tokenizers", "jinja2", "numpy", "mashbox_engine_kernels")
+KERNELS_DIST = "mashbox_engine_kernels"   # the kernel package as a record's versions{} names it (a pin, not an MoE rule)
+RUN_DISTS = ("python", "jax", "jaxlib", "libtpu", "gguf", "tokenizers", "jinja2", "numpy", KERNELS_DIST)
 
 
 def tree_pins(repo, extras=("tpu",)):
@@ -1088,13 +1089,13 @@ def pins_problems(rec, krow, repo, chip, what, exact=False):
         return [f"{what}: the record has no versions (the dists the run imported)"]
     pins, out = tree_pins(repo), []
     for n in sorted(set(RUN_DISTS) | set(pins)):
-        if exact and n == KERNEL_PACKAGE:
+        if exact and n == KERNELS_DIST:
             if v.get(n) is not None:
                 out.append(f"{what}: kernel_path exact, and the record ran {n} {v[n]} (an exact-path zero-flag run has "
                            "no kernel package installed)")
         elif not isinstance(v.get(n), str) or not v[n]:
             out.append(f"{what}: the record's versions have no {n}")
-        elif n == KERNEL_PACKAGE and krow is not None and v[n] != bundle_version(krow):
+        elif n == KERNELS_DIST and krow is not None and v[n] != bundle_version(krow):
             out.append(f"{what}: the record ran {n} {v[n]}, the release bundle on {chip} is {bundle_version(krow)}")
     for n, want in sorted(pins.items()):
         if isinstance(v.get(n), str) and v[n] not in want:
@@ -1272,63 +1273,25 @@ def run_problems(g, r, e, rec, header, man, listed, read, under, work, chip, wha
     return out
 
 
-EXPERT_KERNEL, KERNEL_PACKAGE = "moe.expert-ffn", "mashbox_engine_kernels"
-GOODPUT_INPUTS = {"bandwidth", "U", "f", "Tc"}
+def _moe_record():
+    """the ONE MoE record schema and validator, internal/moe_record.py. None where internal/ is not shipped (the export): there no MoE row can pass."""
+    p = ROOT / "internal" / "moe_record.py"
+    if not p.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("mashbox_internal_moe_record", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def moe_problems(rec, chip, kernels, what):
-    """a passing mixture-of-experts row (never without its experts on the kernel), in the MoE record's fields: the
-    record ran the routed experts on the kernel (moe.expert_path), that kernel is moe.expert-ffn of the release package
-    on this chip and not a dev build (moe.kernel), every routed-op call site is on the kernel and none on the exact path
-    (moe.sites), a profiled decode step makes at least one expert-kernel call per MoE layer (moe.profile), and goodput
-    holds 1 and 8 users (an int, never True), each with tok_s, roofline_tok_s and pct > 0, its inputs as numbers, and pct
-    the one its tok_s / roofline_tok_s give (ARCH-FIX 2's contract)"""
-    m = rec.get("moe") or {}
-    if m.get("expert_path") != "kernel":
-        return [f"{what}: the record ran the routed experts on {m.get('expert_path')}, not the kernel"]
-    out = []
-    k = m.get("kernel") if isinstance(m.get("kernel"), dict) else {}
-    if (k.get("id"), k.get("package")) != (EXPERT_KERNEL, KERNEL_PACKAGE) or not k.get("version"):
-        out.append(f"{what}: the expert kernel is {k.get('id')} {k.get('version')} of {k.get('package')}, not "
-                   f"{EXPERT_KERNEL} of {KERNEL_PACKAGE}")
-    if k.get("dev_build") is not False:
-        out.append(f"{what}: the record ran a dev kernel build (dev_build {k.get('dev_build')}); a row needs the release "
-                   "package")
-    pkg = [x.get("sha256") for x in kernels if chip in (x.get("chips") or [])]
-    if k.get("package_sha256") not in pkg:
-        out.append(f"{what}: the expert kernel's package {k.get('package_sha256')} is not the release package's "
-                   f"({', '.join(map(str, pkg)) or 'none on ' + chip})")
-    s = m.get("sites") if isinstance(m.get("sites"), dict) else {}
-    if not (isinstance(s.get("kernel"), int) and s["kernel"] >= 1 and s.get("exact") == 0 and s.get("exact_why") == []):
-        out.append(f"{what}: routed-op call sites: {s.get('kernel')} on the kernel, {s.get('exact')} on the exact path "
-                   f"({s.get('exact_why')}); a row needs every one on the kernel")
-    p = m.get("profile") if isinstance(m.get("profile"), dict) else {}
-    calls, layers = p.get("kernel_calls_per_decode_step"), p.get("moe_layers")
-    if not (isinstance(calls, int) and isinstance(layers, int) and 1 <= layers <= calls):
-        out.append(f"{what}: {calls} expert-kernel calls per decode step for {layers} MoE layers (a row needs one per "
-                   "MoE layer at least)")
-    gp = rec.get("goodput") if isinstance(rec.get("goodput"), list) else []
-    for users in (1, 8):
-        hit = [x for x in gp if isinstance(x, dict) and type(x.get("users")) is int and x["users"] == users]
-        if len(hit) != 1:
-            out.append(f"{what}: the record has no goodput for {users} users")
-            continue
-        x = hit[0]
-        inp = x.get("inputs") if isinstance(x.get("inputs"), dict) else {}
-
-        def num(v):
-            return isinstance(v, (int, float)) and not isinstance(v, bool)
-        if not all(num(x.get(f)) for f in ("tok_s", "roofline_tok_s", "pct")) or not (
-                GOODPUT_INPUTS <= set(inp) and all(num(inp[k]) for k in GOODPUT_INPUTS)):
-            out.append(f"{what}: goodput at users={users} needs tok_s, roofline_tok_s, pct and its inputs "
-                       f"({', '.join(sorted(GOODPUT_INPUTS))}) as numbers")
-        elif min(x["tok_s"], x["roofline_tok_s"], x["pct"]) <= 0:
-            out.append(f"{what}: goodput at users={users} has tok_s {x['tok_s']}, roofline_tok_s {x['roofline_tok_s']}, "
-                       f"pct {x['pct']}; each must be > 0")
-        elif abs(x["pct"] - 100 * x["tok_s"] / x["roofline_tok_s"]) > 0.05:
-            out.append(f"{what}: goodput at users={users} is {x['pct']}%, its tok_s / roofline_tok_s give "
-                       f"{100 * x['tok_s'] / x['roofline_tok_s']:.1f}%")
-    return out
+    """a passing mixture-of-experts row (never without its experts on the kernel): the record's MoE fields hold
+    under internal/moe_record.py's problems(), the one validator; this file keeps no names or rules of its own"""
+    mr = _moe_record()
+    if mr is None:
+        return [f"{what}: this tree has no MoE record validator (internal/moe_record.py), so a mixture-of-experts row "
+                "cannot pass"]
+    return [f"{what}: {x}" for x in mr.problems(rec, chip, kernels)]
 
 
 def settle_problems(e, others, what, read, root):
@@ -1586,15 +1549,14 @@ def _settled(others, prompts=None, verdict="PRECISION"):
         for i in range(16 - others, 16 - others + n)]}))
 
 
-# the MoE fields of a chip record, MOE's five names and nothing else (the expert count is the file's metadata, read
-# from the sealed header): the routed experts ran on the expert kernel of the release package at every routed-op call
-# site, one kernel call per MoE layer per profiled decode step, and goodput as % of the roofline for 1 and 8 users
-# (values made up for the checks)
-MOE_RECORD = {"expert_path": "kernel",
-              "kernel": {"id": "moe.expert-ffn", "version": "0.1.4", "package": "mashbox_engine_kernels",
-                         "package_sha256": BUNDLE["sha256"], "dev_build": False},
-              "sites": {"kernel": 2, "exact": 0, "exact_why": []},
-              "profile": {"kernel_calls_per_decode_step": 4, "moe_layers": 4}}
+def _moe_fields():
+    """the moe fields of a passing chip record for the release bundle: internal/moe_record.py's own example, so this
+    file keeps no copy of the schema; {} where internal/ is not shipped (a mixture-of-experts row then fails closed)"""
+    mr = _moe_record()
+    return {} if mr is None else mr.example(BUNDLE["sha256"])["moe"]
+
+
+# goodput as % of the roofline for 1 and 8 users (values made up for the checks)
 GOODPUT = [{"users": u, "tok_s": t, "roofline_tok_s": rt, "pct": p, "inputs": {"bandwidth": 1.64e12, "U": u, "f": 0.1,
                                                                                 "Tc": 0.0}}
            for u, t, rt, p in ((1, 50.0, 200.0, 25.0), (8, 320.0, 800.0, 40.0))]
@@ -1610,9 +1572,9 @@ def _exact(package=None, drop=False):
         r["fit"]["kernel_types"] = []
         r["weights"]["reference_bytes"] = 4096
         if drop:
-            r["versions"].pop(KERNEL_PACKAGE)
+            r["versions"].pop(KERNELS_DIST)
         else:
-            r["versions"][KERNEL_PACKAGE] = package
+            r["versions"][KERNELS_DIST] = package
 
     def reg(r):
         r["engine_kernels"] = []
@@ -1640,7 +1602,7 @@ def _moe():
         for users, name in ((1, "1_user"), (8, "8_users")):
             n[f"goodput_roofline_pct_{name}"] = dict(n["decode_tok_s_1_user"], field=f"goodput[users={users}].pct", round=1)
     return _both(_set("fixture", lambda v: "qwen35moe-pyquant"), _set("reg", reg), _set("ev", ev),
-                 _set("rec", lambda x: x.update(moe=copy.deepcopy(MOE_RECORD), goodput=copy.deepcopy(GOODPUT))))
+                 _set("rec", lambda x: x.update(moe=_moe_fields(), goodput=copy.deepcopy(GOODPUT))))
 
 
 def _moe_rec(fn):
@@ -1648,6 +1610,41 @@ def _moe_rec(fn):
     def rec(r):
         fn(r["moe"], r["goodput"])      # changes the record in place; returns None so _set keeps the record
     return _both(_moe(), _set("rec", rec))
+
+
+MOE_RECORD_FORMS = {"a mixture of experts whose record has no moe fields", "no routed-op call site on the kernel",
+                    "a routed-op call site on the exact path", "a dev kernel build",
+                    "a mixture of experts on the exact routed path",
+                    "another expert kernel",
+                    "an expert kernel from another package build",
+                    "fewer expert-kernel calls than MoE layers",
+                    "no goodput for 8 users",
+                    "a goodput % its own numbers do not give",
+                    "a goodput of no tokens",
+                    "a goodput with no roofline",
+                    "a goodput input that is not a number",
+                    "a goodput entry whose users is true, not 1"}  # the forms internal/moe_record.py's problems() refuses
+
+
+def test_the_catalog_guard_gives_each_moe_record_the_one_modules_verdict():
+    """moe_problems is internal/moe_record.py's problems(); every record of its corpus gets the module's
+    verdict here (a count that is True, a NaN goodput, a number for the kernel version: each refused)"""
+    mr = _moe_record()
+    if mr is None:
+        pytest.skip("maintainers only: internal/moe_record.py, the MoE record validator, is not in this tree")
+    kernels = [{"sha256": "b" * 64, "chips": ["v6e"]}]
+    for name, rec, passes in mr.corpus("b" * 64):
+        assert (moe_problems(rec, "v6e", kernels, "row") == []) == passes, name
+
+
+def test_no_moe_row_passes_without_the_moe_record_module(monkeypatch):
+    """where internal/ is not shipped (the export) a passing mixture-of-experts row fails closed"""
+    fields = _moe_fields()
+    monkeypatch.setattr(sys.modules[__name__], "_moe_record", lambda: None)
+    found = moe_problems({"moe": fields, "goodput": copy.deepcopy(GOODPUT)}, "v6e",
+                         [{"sha256": "b" * 64, "chips": ["v6e"]}], "row")
+    assert found == ["row: this tree has no MoE record validator (internal/moe_record.py), so a mixture-of-experts row "
+                     "cannot pass"]
 
 
 MODS = arch_module_files()
@@ -1732,30 +1729,30 @@ BAD_FORMS = {
         _both(_moe(), _set("fixture", lambda v: FIXTURE.stem)),
         "the sealed header's metadata has 0 experts, the row says moe True"),
     "a mixture of experts whose record has no moe fields": (_both(_moe(), _set("rec", lambda r: r.__delitem__("moe"))),
-                                                            "the record ran the routed experts on None, not the kernel"),
+                                                            "the record's moe.expert_path is None, not 'kernel'"),
     "a mixture of experts on the exact routed path": (_moe_rec(lambda m, g: m.update(expert_path="exact")),
-                                                       "the record ran the routed experts on exact, not the kernel"),
+                                                       "the record's moe.expert_path is 'exact', not 'kernel'"),
     "a routed-op call site on the exact path": (_moe_rec(lambda m, g: m["sites"].update(exact=1, exact_why=["shape"])),
                                                 "routed-op call sites: 2 on the kernel, 1 on the exact path"),
     "no routed-op call site on the kernel": (_moe_rec(lambda m, g: m["sites"].update(kernel=0)),
                                              "routed-op call sites: 0 on the kernel, 0 on the exact path"),
-    "another expert kernel": (_moe_rec(lambda m, g: m["kernel"].update(id="moe.other")), "the expert kernel is moe.other"),
+    "another expert kernel": (_moe_rec(lambda m, g: m["kernel"].update(id="moe.other")), "the expert kernel is 'moe.other' '0.1.4' of 'mashbox_engine_kernels', not moe.expert-ffn"),
     "a dev kernel build": (_moe_rec(lambda m, g: m["kernel"].update(dev_build=True)), "the record ran a dev kernel build"),
     "an expert kernel from another package build": (_moe_rec(lambda m, g: m["kernel"].update(package_sha256="e" * 64)),
-                                                    "is not the release package's"),
+                                                    "is not a release package for this chip"),
     "fewer expert-kernel calls than MoE layers": (_moe_rec(lambda m, g: m["profile"].update(
-        kernel_calls_per_decode_step=3)), "3 expert-kernel calls per decode step for 4 MoE layers"),
-    "no goodput for 8 users": (_moe_rec(lambda m, g: g.pop()), "the record has no goodput for 8 users"),
+        kernel_calls_per_decode_step=3, moe_layers=4)), "3 expert-kernel calls per profiled decode step for 4 MoE layers"),
+    "no goodput for 8 users": (_moe_rec(lambda m, g: g.pop()), "the record has 0 goodput entries for 8 users (needs exactly 1)"),
     "a goodput % its own numbers do not give": (_moe_rec(lambda m, g: g[0].update(roofline_tok_s=100.0)),
-                                               "goodput at users=1 is 25.0%, its tok_s / roofline_tok_s give 50.0%"),
+                                               "goodput at users=1 is 25.0%, its tok_s / roofline_tok_s give 50.00%"),
     "a goodput of no tokens": (_moe_rec(lambda m, g: g[0].update(tok_s=0.0, pct=0.0)),
-                               "goodput at users=1 has tok_s 0.0, roofline_tok_s 200.0, pct 0.0; each must be > 0"),
+                               "goodput at users=1 needs tok_s, roofline_tok_s, pct as finite numbers > 0"),
     "a goodput with no roofline": (_moe_rec(lambda m, g: g[1].update(roofline_tok_s=0.0)),
-                                   "goodput at users=8 has tok_s 320.0, roofline_tok_s 0.0, pct 40.0; each must be > 0"),
+                                   "goodput at users=8 needs tok_s, roofline_tok_s, pct as finite numbers > 0"),
     "a goodput input that is not a number": (_moe_rec(lambda m, g: g[1]["inputs"].update(f="0.1")),
-                                             "goodput at users=8 needs tok_s, roofline_tok_s, pct and its inputs"),
+                                             "goodput at users=8 needs tok_s, roofline_tok_s, pct as finite numbers > 0 and inputs (bandwidth, U, f, Tc)"),
     "a goodput entry whose users is true, not 1": (_moe_rec(lambda m, g: g[0].update(users=True)),
-                                                   "the record has no goodput for 1 users"),
+                                                   "the record has 0 goodput entries for 1 users (needs exactly 1)"),
     "a mixture of experts whose goodput the record does not hold": (_both(_moe(), _set("reg", lambda r: r["gguf"][0][
         "chips"]["v6e"]["measured"].__setitem__("goodput_roofline_pct_1_user", 60.0))),
         "the record's goodput[users=1].pct is 25.0"),
@@ -1969,6 +1966,9 @@ def test_record_guard_holds_an_exact_path_row_whose_record_leaves_the_kernel_pac
 
 
 def test_record_guard_holds_a_mixture_of_experts_row_whose_routed_experts_ran_on_the_kernel(tmp_path):
+    """a passing MoE row needs internal/moe_record.py; without it the guard fails closed (its own test)"""
+    if _moe_record() is None:
+        pytest.skip("maintainers only: internal/moe_record.py, the MoE record validator, is not in this tree")
     reg, ev = _fake_records(tmp_path, _moe())
     assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
 
@@ -1987,6 +1987,8 @@ def test_record_guard_holds_a_row_whose_other_divergences_a_sealed_settle_covers
 def test_record_guard_names_each_bad_form(tmp_path, form):
     """each way a row can lose its backing is caught, with its own message"""
     edit, words = BAD_FORMS[form]
+    if form in MOE_RECORD_FORMS and _moe_record() is None:
+        pytest.skip("maintainers only: internal/moe_record.py, the MoE record validator, is not in this tree")
     reg, ev = _fake_records(tmp_path, edit)
     found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
     assert any(words in x for x in found), found

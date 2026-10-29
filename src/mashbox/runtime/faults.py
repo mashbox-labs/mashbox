@@ -27,7 +27,7 @@ WHERE = ("load", "warm", "admit", "step", "device")         # device = admit and
 SHORT_KINDS = {"device_error": "raise", "oom": "oom", "hang": "hang"}
 KINDS = ("raise", "oom", "kill", "hang", "exit")
 FORCE = ("speculation", "speculation-row", "moe-routed", "fit", "quant-kernel", "kernels-package", "model-bundle",
-         "compile-cache", "pin", "safetensors-bf16", "dense16")
+         "compile-cache", "pin", "safetensors-bf16", "dense16", "native-planes")
 
 
 class InjectedFault(RuntimeError):

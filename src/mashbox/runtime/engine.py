@@ -54,6 +54,7 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+from . import faults
 from . import programs as PG
 from . import sampler as SP
 
@@ -1215,6 +1216,9 @@ class Engine:
             sp, cnt, seen = jax.tree.map(cut, self.sp), cut(self.cnt), cut(self.seen)
         else:
             sp = cnt = seen = None
+        if faults.forced("speculation-row"):     # the test switch (MASHBOX_FAULT=force:speculation-row)
+            raise faults.InjectedFault("speculation call failed before dispatch (forced by "
+                                       "MASHBOX_FAULT=force:speculation-row)")
         out, ck, cv, self.dstate, cn, t2, p2, cnt, seen, tr = self.sstep(
             self.W, ck, cv, self.drafter.W, self.dstate, tuple(a(x) for x in X), a(tok), a(pos), a(kr), a(rem), sp,
             None if sp is None else a(st), cnt, seen, Tc=Tc, K=k, N=N, trace=self.trace)
