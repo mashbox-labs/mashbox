@@ -1,7 +1,7 @@
 <!-- Generated from src/mashbox/runtime/openapi.py by tools/hf_github_sync_check.py render --write. Do not edit. -->
 # Server API
 
-The HTTP server `mashbox run <model>` starts on 127.0.0.1 (reach it from your machine with an SSH tunnel). It speaks the OpenAI Chat Completions, Completions and Responses APIs and the Anthropic Messages API, so OpenAI and Anthropic clients and coding agents work against it unchanged. On 127.0.0.1 no API key is checked and any key a client sends is ignored; with `--api-key-file` or `MASHBOX_API_KEY`, and always when `--host` is not loopback, `/v1` routes and `/openapi.json` need a key (`Authorization: Bearer <key>` or `x-api-key: <key>`; 401 without). POST bodies must be `Content-Type: application/json` (415 otherwise), and a request from a web page of another origin, or naming the server by a host name it does not answer to, gets 403. Fields a route does not list are accepted and ignored.
+The HTTP server `mashbox run <model>` starts on 127.0.0.1 (reach it from your machine with an SSH tunnel). It speaks the OpenAI Chat Completions, Completions and Responses APIs and the Anthropic Messages API, so OpenAI and Anthropic clients and coding agents work against it unchanged. On 127.0.0.1 no API key is checked and any key a client sends is ignored; with `--api-key-file` or `MASHBOX_API_KEY`, and always when `--host` is not loopback, `/v1` routes, `/metrics` and `/openapi.json` need a key (`Authorization: Bearer <key>` or `x-api-key: <key>`; 401 without). POST bodies must be `Content-Type: application/json` (415 otherwise), and a request from a web page of another origin, or naming the server by a host name it does not answer to, gets 403. Fields a route does not list are accepted and ignored.
 
 The same description as an OpenAPI 3.1 file: [openapi.json](openapi.json) in these docs, or `GET /openapi.json` on a running server.
 
@@ -18,6 +18,7 @@ The same description as an OpenAPI 3.1 file: [openapi.json](openapi.json) in the
 | POST | `/v1/messages` | [Messages (Anthropic)](#createmessage) |
 | POST | `/v1/messages/count_tokens` | [Count tokens](#counttokens) |
 | POST | `/v1/responses` | [Responses (OpenAI)](#createresponse) |
+| GET | `/metrics` | [Metrics (Prometheus text)](#metrics) |
 | GET | `/openapi.json` | [This description](#openapi) |
 
 <a id="health"></a>
@@ -99,13 +100,16 @@ OpenAI Chat Completions with function tools, thinking and streaming. Coding agen
 | `messages` (required) | array of ChatMessage |  | The conversation. |
 | `tools` | array of object |  | Function tools the model may call. |
 | `tool_choice` | string or object |  | auto (default), none, required, or {"type": "function", "function": {"name": ...}}. |
-| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). |
+| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). A client that reads nothing from the stream for 30 s is disconnected and its answer stops. |
 | `stream_options` | object |  |  Fields: `include_usage`. |
 | `chat_template_kwargs` | object |  | Chat template options. Fields: `enable_thinking`. |
 | `enable_thinking` | boolean |  | Same as chat_template_kwargs.enable_thinking. |
-| `merge` | boolean | true | false runs the request alone instead of sharing a batch with requests sent at the same time. |
+| `merge` | boolean | true | Accepted and ignored: every request joins the running batch at the next device call, and no request field changes how other requests are scheduled. |
 | `prompt_cache_key` | string |  | Tags the request's session in the server log (as the X-Session-Id header does). |
 | `store` | boolean |  | Accepted and ignored. |
+| `logprobs` | boolean |  | Not supported (log probabilities): a request that sets it gets 400 naming the field. |
+| `top_logprobs` | integer |  | Not supported (log probabilities): a request that sets it gets 400 naming the field. |
+| `response_format` | object |  | Only {"type": "text"}. Not supported: json_object and json_schema (structured output), answered with 400. |
 | `max_tokens` | integer |  | Most new tokens (>= 1). |
 | `max_completion_tokens` | integer |  | Most new tokens (>= 1); max_tokens is the same. Default: up to the end of the context (--ctx). |
 | `temperature` | number | 0.0 | 0 = greedy (default). Up to 4. |
@@ -129,7 +133,10 @@ curl -s http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/
 
 - 200: OK `application/json` ChatCompletion, `text/event-stream` ChatCompletionChunk
 - 400: Bad request. `application/json` Error
-- 503: The model is still loading. `application/json` Error
+- 404: A model id other than the one this server serves (GET /v1/models), code model_not_found. Leaving model out is accepted. `application/json` Error
+- 429: Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant share it, a key without a name is its own tenant; without keys, 32 in all), or the server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds. `application/json` Error
+- 500: The request failed on the device: its one retry failed too, or it failed after its stream had sent output. A request whose client has received nothing is sent again (once, from the start): not streamed, until its response is written; streamed, until its first output is sent. A stream that has sent output is never retried by the server, since a second run could repeat what the client already has; it ends with the route's error event instead, carrying the response id as request_id. `application/json` Error
+- 503: The model is still loading. Retry after the Retry-After header's seconds. `application/json` Error
 
 <a id="createcompletion"></a>
 
@@ -143,9 +150,10 @@ Continue a plain prompt, no chat template.
 |---|---|---|---|
 | `model` | string |  | Accepted for compatibility; the server answers with the one model it runs. |
 | `prompt` (required) | string or array |  | The text to continue (a string, or a list of one string). |
-| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). |
-| `merge` | boolean | true | false runs the request alone instead of sharing a batch with requests sent at the same time. |
+| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). A client that reads nothing from the stream for 30 s is disconnected and its answer stops. |
+| `merge` | boolean | true | Accepted and ignored: every request joins the running batch at the next device call, and no request field changes how other requests are scheduled. |
 | `prompt_cache_key` | string |  | Tags the request's session in the server log (as the X-Session-Id header does). |
+| `logprobs` | integer |  | Not supported (log probabilities): a request that sets it gets 400 naming the field. |
 | `max_tokens` | integer |  | Most new tokens (>= 1). |
 | `max_completion_tokens` | integer |  | Same as max_tokens (OpenAI's newer name); wins when both are set. |
 | `temperature` | number | 0.0 | 0 = greedy (default). Up to 4. |
@@ -169,7 +177,10 @@ curl -s http://127.0.0.1:8000/v1/completions -H 'Content-Type: application/json'
 
 - 200: OK `application/json` Completion, `text/event-stream` Completion
 - 400: Bad request. `application/json` Error
-- 503: The model is still loading. `application/json` Error
+- 404: A model id other than the one this server serves (GET /v1/models), code model_not_found. Leaving model out is accepted. `application/json` Error
+- 429: Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant share it, a key without a name is its own tenant; without keys, 32 in all), or the server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds. `application/json` Error
+- 500: The request failed on the device: its one retry failed too, or it failed after its stream had sent output. A request whose client has received nothing is sent again (once, from the start): not streamed, until its response is written; streamed, until its first output is sent. A stream that has sent output is never retried by the server, since a second run could repeat what the client already has; it ends with the route's error event instead, carrying the response id as request_id. `application/json` Error
+- 503: The model is still loading. Retry after the Retry-After header's seconds. `application/json` Error
 
 <a id="createmessage"></a>
 
@@ -187,10 +198,10 @@ Anthropic Messages with client tools, thinking and streaming, for Claude Code. T
 | `tools` | array of object |  | Client tools the model may call. |
 | `tool_choice` | object |  | {"type": "auto" \| "any" \| "tool" \| "none", "name": ...}. |
 | `thinking` | object |  |  Fields: `type`, `budget_tokens`. |
-| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). |
+| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). A client that reads nothing from the stream for 30 s is disconnected and its answer stops. |
 | `prompt_cache_key` | string |  | Tags the request's session in the server log (as the X-Session-Id header does). |
 | `metadata` | object |  | Accepted and ignored. |
-| `output_config` | object |  | Accepted and ignored. |
+| `output_config` | object |  | effort is accepted and ignored. Not supported: format (structured output), answered with 400. |
 | `max_tokens` | integer |  | Most new tokens; default: up to the end of the context (--ctx). |
 | `max_completion_tokens` | integer |  | Same as max_tokens (OpenAI's newer name); wins when both are set. |
 | `temperature` | number | 0.0 | 0 = greedy (default). Up to 4. |
@@ -214,7 +225,9 @@ curl -s http://127.0.0.1:8000/v1/messages -H 'Content-Type: application/json' \
 
 - 200: OK `application/json` Message, `text/event-stream` MessageStreamEvent
 - 400: Bad request. `application/json` AnthropicError
-- 503: The model is still loading. `application/json` AnthropicError
+- 429: Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant share it, a key without a name is its own tenant; without keys, 32 in all), or the server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds. `application/json` AnthropicError
+- 500: The request failed on the device: its one retry failed too, or it failed after its stream had sent output. A request whose client has received nothing is sent again (once, from the start): not streamed, until its response is written; streamed, until its first output is sent. A stream that has sent output is never retried by the server, since a second run could repeat what the client already has; it ends with the route's error event instead, carrying the response id as request_id. `application/json` AnthropicError
+- 529: The model is still loading, or its worker is starting again after a fault, or the server's queue is full (256 waiting in all): overloaded_error. Retry after the Retry-After header's seconds (x-should-retry: true while not ready). `application/json` AnthropicError
 
 <a id="counttokens"></a>
 
@@ -242,7 +255,7 @@ curl -s http://127.0.0.1:8000/v1/messages/count_tokens -H 'Content-Type: applica
 
 - 200: OK `application/json` TokenCount
 - 400: Bad request. `application/json` AnthropicError
-- 503: The model is still loading. `application/json` AnthropicError
+- 529: The model is still loading, or its worker is starting again after a fault, or the server's queue is full (256 waiting in all): overloaded_error. Retry after the Retry-After header's seconds (x-should-retry: true while not ready). `application/json` AnthropicError
 
 <a id="createresponse"></a>
 
@@ -261,11 +274,13 @@ OpenAI Responses with function, custom and namespace tools, reasoning and stream
 | `tool_choice` | string or object |  | auto (default), none, required, or {"type": "function", "function": {"name": ...}}. |
 | `parallel_tool_calls` | boolean | false | Echoed in the response. |
 | `reasoning` | object |  |  Fields: `effort`. |
-| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). |
+| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). A client that reads nothing from the stream for 30 s is disconnected and its answer stops. |
 | `prompt_cache_key` | string |  | Tags the request's session in the server log (as the X-Session-Id header does). |
 | `store` | boolean |  | Accepted and ignored. |
-| `include` | array |  | Accepted and ignored. |
 | `client_metadata` | object |  | Accepted and ignored. |
+| `include` | array |  | Accepted and ignored, except an entry naming logprobs: 400 (log probabilities are not supported). |
+| `top_logprobs` | integer |  | Not supported (log probabilities): a request that sets it gets 400 naming the field. |
+| `text` | object |  | Only format {"type": "text"}. Not supported: other formats (structured output), answered with 400. |
 | `max_output_tokens` | integer |  | Most new tokens; default: up to the end of the context (--ctx). |
 | `max_tokens` | integer |  | Most new tokens (>= 1). |
 | `max_completion_tokens` | integer |  | Same as max_tokens (OpenAI's newer name); wins when both are set. |
@@ -290,7 +305,20 @@ curl -s http://127.0.0.1:8000/v1/responses -H 'Content-Type: application/json' \
 
 - 200: OK `application/json` Response, `text/event-stream` ResponseStreamEvent
 - 400: Bad request. `application/json` Error
-- 503: The model is still loading. `application/json` Error
+- 404: A model id other than the one this server serves (GET /v1/models), code model_not_found. Leaving model out is accepted. `application/json` Error
+- 429: Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant share it, a key without a name is its own tenant; without keys, 32 in all), or the server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds. `application/json` Error
+- 500: The request failed on the device: its one retry failed too, or it failed after its stream had sent output. A request whose client has received nothing is sent again (once, from the start): not streamed, until its response is written; streamed, until its first output is sent. A stream that has sent output is never retried by the server, since a second run could repeat what the client already has; it ends with the route's error event instead, carrying the response id as request_id. `application/json` Error
+- 503: The model is still loading. Retry after the Retry-After header's seconds. `application/json` Error
+
+<a id="metrics"></a>
+
+## GET /metrics
+
+What the server does, in the Prometheus text format: requests running and waiting, KV cache use, the cache layout (one slot holds one whole context: block_size = the context length, num_blocks = the slots), requests answered by finish reason, prompt and generated tokens, prefix cache lookups and hits (tokens), preemptions (never), worker restarts, programs compiled after ready, and histograms of time to first token, queue time, end-to-end time and time per output token. Every name starts with `mashbox:`. No label names a user, an API key or a session.
+
+**Responses:**
+
+- 200: Prometheus text exposition format. `text/plain`
 
 <a id="openapi"></a>
 
@@ -308,7 +336,21 @@ The OpenAPI 3.1 description of this server, with the running model's id.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `status` (required) | string |  | ok when the model is loaded, loading before. |
+| `status` (required) | string |  | ok when the model is loaded, loading before (and while its worker restarts). |
+| `live_rows` | integer or null |  | Requests being answered now. |
+| `waiting` | integer |  | Requests waiting for a slot. |
+| `cache_bytes` | integer |  | Bytes the prompt cache holds: host memory copies plus slot snapshots. |
+| `host_cache_bytes` | integer |  | Bytes of prompt cache in host memory. |
+| `snapshot_bytes` | integer |  | Bytes of saved slot state points. |
+| `host_cache_cap_bytes` | integer |  | Most bytes the host memory prompt cache holds (0 = off). |
+| `host_cache_evictions` | integer |  | Prompt cache entries removed from host memory to stay under that cap. |
+| `cache_namespace` | string or null |  | Id of what cached prompts are valid for: model, weights, tokenizer, chat template and cache policy. |
+| `deployment_id` | string or null |  | Id of the compiled programs this server runs (null until set). |
+| `component_set_sha` | string or null |  | Id of the model's component set (null until set). |
+| `certification` | string |  | Whether this server's build passed the certification gate on its chip. |
+| `compiles_after_ready` | integer or null |  | Programs compiled since the server reported ready, in every worker process it has run (0 when the start-up warm-up compiled every program the requests ran; null before ready or where this process does not count them). |
+| `worker_pid` | integer |  | Process id of the model's worker, when the engine runs in a worker process. |
+| `worker_restarts` | integer |  | Times the worker was started again after a fault. |
 
 ### Model
 
@@ -513,7 +555,7 @@ One `event:` + `data:` pair: message_start, ping, then per block content_block_s
 
 ### ResponseStreamEvent
 
-One `event:` + `data:` pair. An error mid-stream is sent as `data: {"error": ...}` then `data: [DONE]`.
+One `event:` + `data:` pair. An error after the stream started is sent as event `error`, then `response.failed` (the response with status failed and its error).
 
 | Field | Type | Default | Description |
 |---|---|---|---|

@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "LICENSE-KERNELS"]
 requires-python = ">=3.12"
-dependencies = ["numpy", "ml_dtypes", "tokenizers", "jinja2==3.1.6", "huggingface_hub", "flatbuffers"]
+dependencies = ["numpy", "ml_dtypes", "tokenizers", "jinja2==3.1.6", "huggingface_hub", "flatbuffers", "gguf==0.19.0"]
 
 [project.urls]
 Homepage = "https://mashbox.gg"

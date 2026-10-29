@@ -47,6 +47,7 @@ def arr(items, desc=None):
 
 
 IGNORED = "Accepted and ignored."
+NO_LOGPROBS = "Not supported (log probabilities): a request that sets it gets 400 naming the field."
 TEXT_ONLY = "Text parts only: image, audio and file parts are refused with 400 (text-only model)."
 
 # Sampling fields, read by knobs_of() in server.py on every generating route. The test checks these names equal KNOBS
@@ -80,9 +81,10 @@ def sampling(max_key, max_desc):
 
 
 TO_END = "Most new tokens; default: up to the end of the context (--ctx)."
-STREAM = f("boolean", "Stream the answer as server-sent events (see the 200 text/event-stream response).", default=False)
-MERGE = f("boolean", "false runs the request alone instead of sharing a batch with requests sent at the same time.",
-          default=True)
+STREAM = f("boolean", "Stream the answer as server-sent events (see the 200 text/event-stream response). A client that "
+           "reads nothing from the stream for 30 s is disconnected and its answer stops.", default=False)
+MERGE = f("boolean", "Accepted and ignored: every request joins the running batch at the next device call, and no request "
+          "field changes how other requests are scheduled.", default=True)
 CACHE_KEY = f("string", "Tags the request's session in the server log (as the X-Session-Id header does).")
 MODEL = f("string", "Accepted for compatibility; the server answers with the one model it runs.")
 THINK_KW = obj({"enable_thinking": f("boolean", "Think before answering (Qwen3 thinking mode).", default=False)},
@@ -99,7 +101,29 @@ CHOICE = f(["string", "object"], 'auto (default), none, required, or {"type": "f
 
 SCHEMAS = {
     # ------------------------------------------------------------------ shared
-    "Health": obj({"status": f("string", "ok when the model is loaded, loading before.", enum=["ok", "loading"])},
+    "Health": obj({"status": f("string", "ok when the model is loaded, loading before (and while its worker restarts).",
+                                 enum=["ok", "loading"]),
+                   # the fields below are sent only to a caller with an API key (or to any caller of a server without keys)
+                   "live_rows": f(["integer", "null"], "Requests being answered now."),
+                   "waiting": f("integer", "Requests waiting for a slot."),
+                   "cache_bytes": f("integer", "Bytes the prompt cache holds: host memory copies plus slot snapshots."),
+                   "host_cache_bytes": f("integer", "Bytes of prompt cache in host memory."),
+                   "snapshot_bytes": f("integer", "Bytes of saved slot state points."),
+                   "host_cache_cap_bytes": f("integer", "Most bytes the host memory prompt cache holds (0 = off)."),
+                   "host_cache_evictions": f("integer", "Prompt cache entries removed from host memory to stay under "
+                                             "that cap."),
+                   "cache_namespace": f(["string", "null"], "Id of what cached prompts are valid for: model, weights, "
+                                        "tokenizer, chat template and cache policy."),
+                   "deployment_id": f(["string", "null"], "Id of the compiled programs this server runs (null until set)."),
+                   "component_set_sha": f(["string", "null"], "Id of the model's component set (null until set)."),
+                   "certification": f("string", "Whether this server's build passed the certification gate on its chip.",
+                                      enum=["certified", "not_certified"]),
+                   "compiles_after_ready": f(["integer", "null"], "Programs compiled since the server reported ready, in "
+                                             "every worker process it has run (0 when the start-up warm-up compiled every "
+                                             "program the requests ran; null before ready or where this process does not "
+                                             "count them)."),
+                   "worker_pid": f("integer", "Process id of the model's worker, when the engine runs in a worker process."),
+                   "worker_restarts": f("integer", "Times the worker was started again after a fault.")},
                   ["status"]),
     "Model": obj({"id": f("string", "Model id, as in models.json."), "object": f("string", "model", const="model"),
                   "owned_by": f("string", "mashbox-labs"), "created": f("integer", "Always 0."),
@@ -132,7 +156,10 @@ SCHEMAS = {
         "tools": arr(FN_TOOL, "Function tools the model may call."), "tool_choice": CHOICE,
         "stream": STREAM, "stream_options": obj({"include_usage": f("boolean", "Send a last chunk with usage.")}),
         "chat_template_kwargs": THINK_KW, "enable_thinking": f("boolean", "Same as chat_template_kwargs.enable_thinking."),
-        "merge": MERGE, "prompt_cache_key": CACHE_KEY, "store": f("boolean", IGNORED)},
+        "merge": MERGE, "prompt_cache_key": CACHE_KEY, "store": f("boolean", IGNORED),
+        "logprobs": f("boolean", NO_LOGPROBS), "top_logprobs": f("integer", NO_LOGPROBS),
+        "response_format": f("object", 'Only {"type": "text"}. Not supported: json_object and json_schema (structured '
+                                       'output), answered with 400.')},
         **sampling("max_completion_tokens", "Most new tokens (>= 1); max_tokens is the same. Default: up to the end "
                                             "of the context (--ctx).")), ["messages"]),
     "ChatCompletion": obj({
@@ -179,7 +206,7 @@ SCHEMAS = {
     # ------------------------------------------------------------------ OpenAI completions
     "CompletionRequest": obj(dict({
         "model": MODEL, "prompt": f(["string", "array"], "The text to continue (a string, or a list of one string)."),
-        "stream": STREAM, "merge": MERGE, "prompt_cache_key": CACHE_KEY},
+        "stream": STREAM, "merge": MERGE, "prompt_cache_key": CACHE_KEY, "logprobs": f("integer", NO_LOGPROBS)},
         **sampling("max_tokens", "Most new tokens (>= 1).")), ["prompt"]),
     "Completion": obj({
         "id": f("string", "cmpl-..."), "object": f("string", "text_completion", const="text_completion"),
@@ -207,7 +234,9 @@ SCHEMAS = {
         "thinking": obj({"type": f("string", "enabled or adaptive turns thinking on.", enum=["enabled", "adaptive", "disabled"]),
                          "budget_tokens": f("integer", IGNORED)}),
         "stream": STREAM, "prompt_cache_key": CACHE_KEY,
-        "metadata": f("object", IGNORED), "output_config": f("object", IGNORED)},
+        "metadata": f("object", IGNORED),
+        "output_config": f("object", "effort is accepted and ignored. Not supported: format (structured "
+                                     "output), answered with 400.")},
         **sampling("max_tokens", TO_END)), ["messages"]),
     "Message": obj({
         "id": f("string", "msg_..."), "type": f("string", "message", const="message"), "role": f("string", "assistant"),
@@ -254,7 +283,12 @@ SCHEMAS = {
         "tool_choice": CHOICE, "parallel_tool_calls": f("boolean", "Echoed in the response.", default=False),
         "reasoning": obj({"effort": f("string", "Any value but none or minimal turns thinking on.")}),
         "stream": STREAM, "prompt_cache_key": CACHE_KEY,
-        "store": f("boolean", IGNORED), "include": f("array", IGNORED), "client_metadata": f("object", IGNORED)},
+        "store": f("boolean", IGNORED), "client_metadata": f("object", IGNORED),
+        "include": f("array", "Accepted and ignored, except an entry naming logprobs: 400 (log probabilities are not "
+                              "supported)."),
+        "top_logprobs": f("integer", NO_LOGPROBS),
+        "text": f("object", 'Only format {"type": "text"}. Not supported: other formats (structured output), answered '
+                            'with 400.')},
         **sampling("max_output_tokens", TO_END)), ["input"]),
     "Response": obj({
         "id": f("string", "resp_..."), "object": f("string", "response", const="response"),
@@ -284,14 +318,15 @@ SCHEMAS = {
                         "response.output_text.done", "response.reasoning_text.delta", "response.reasoning_text.done",
                         "response.function_call_arguments.delta", "response.function_call_arguments.done",
                         "response.custom_tool_call_input.delta", "response.custom_tool_call_input.done",
-                        "response.completed", "response.incomplete"]),
+                        "response.completed", "response.incomplete", "error", "response.failed"]),
         "sequence_number": f("integer", "1, 2, 3, ..."), "response": ref("Response"), "item": ref("ResponseItem"),
         "item_id": f("string", "Item the event belongs to."), "output_index": f("integer", "Item number."),
         "content_index": f("integer", "Part number."), "delta": f("string", "New text or arguments."),
         "text": f("string", "Whole text (done events)."), "part": f("object", "Content part."),
         "arguments": f("string", "Whole arguments (done event)."), "input": f("string", "Whole input (done event).")},
         ["type", "sequence_number"],
-        "One `event:` + `data:` pair. An error mid-stream is sent as `data: {\"error\": ...}` then `data: [DONE]`."),
+        "One `event:` + `data:` pair. An error after the stream started is sent as event `error`, then "
+        "`response.failed` (the response with status failed and its error)."),
 }
 
 
@@ -300,6 +335,26 @@ def ok(schema, stream=None, desc="OK"):
     if stream:
         content["text/event-stream"] = {"schema": ref(stream)}
     return {"description": desc, "content": content}
+
+
+BUSY_OWNER = ("Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant "
+              "share it, a key without a name is its own tenant; without keys, 32 in all), or the "
+              "server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds.")
+BUSY_OWNER_ANTH = ("Too many of your requests are waiting for a slot (32 per tenant: keys the key file names with one "
+                   "tenant share it, a key without a name is its own tenant; without keys, 32 in all). "
+                   "Retry after the Retry-After header's seconds.")
+BUSY_ALL = "The model is still loading. Retry after the Retry-After header's seconds."
+BUSY_ALL_ANTH = "The server's queue is full (256 waiting in all), overloaded_error. Retry after the Retry-After header's seconds."
+UNKNOWN_MODEL = ("A model id other than the one this server serves (GET /v1/models), code model_not_found. "
+                 "Leaving model out is accepted.")
+NOT_READY_ANTH = ("The model is still loading, or its worker is starting again after a fault, or the server's queue is full "
+                  "(256 waiting in all): overloaded_error. Retry after the Retry-After header's seconds (x-should-retry: true "
+                  "while not ready).")
+FAULT = ("The request failed on the device: its one retry failed too, or it failed after its stream had sent output. "
+         "A request whose client has received nothing is sent again (once, from the start): not streamed, until its "
+         "response is written; streamed, until its first output is sent. A stream that has sent output is never retried "
+         "by the server, since a second run could repeat what the client already has; it ends with the route's error "
+         "event instead, carrying the response id as request_id.")
 
 
 def err(desc, anth=False):
@@ -329,22 +384,35 @@ ROUTES = [
     dict(method="post", path="/v1/chat/completions", id="createChatCompletion", family="openai", summary="Chat completion",
          desc="OpenAI Chat Completions with function tools, thinking and streaming. Coding agents such as Pi use it.",
          request="ChatCompletionRequest", responses={"200": ok("ChatCompletion", "ChatCompletionChunk"),
-                                                    "400": err("Bad request."), "503": err("The model is still loading.")}),
+                                                    "400": err("Bad request."), "404": err(UNKNOWN_MODEL),
+                                                    "429": err(BUSY_OWNER), "500": err(FAULT), "503": err(BUSY_ALL)}),
     dict(method="post", path="/v1/completions", id="createCompletion", family="openai", summary="Text completion",
          desc="Continue a plain prompt, no chat template.", request="CompletionRequest",
-         responses={"200": ok("Completion", "Completion"), "400": err("Bad request."), "503": err("The model is still loading.")}),
+         responses={"200": ok("Completion", "Completion"), "400": err("Bad request."), "404": err(UNKNOWN_MODEL),
+                    "429": err(BUSY_OWNER), "500": err(FAULT), "503": err(BUSY_ALL)}),
     dict(method="post", path="/v1/messages", id="createMessage", family="anthropic", summary="Messages (Anthropic)",
          desc="Anthropic Messages with client tools, thinking and streaming, for Claude Code. "
               "The ?beta=true query Claude Code adds is accepted.",
          request="MessagesRequest", responses={"200": ok("Message", "MessageStreamEvent"), "400": err("Bad request.", True),
-                                               "503": err("The model is still loading.", True)}),
+                                               "429": err(BUSY_OWNER, True), "500": err(FAULT, True),
+                                               "529": err(NOT_READY_ANTH, True)}),
     dict(method="post", path="/v1/messages/count_tokens", id="countTokens", family="anthropic", summary="Count tokens",
          desc="Prompt tokens a Messages request would use, after the chat template.", request="CountTokensRequest",
-         responses={"200": ok("TokenCount"), "400": err("Bad request.", True), "503": err("The model is still loading.", True)}),
+         responses={"200": ok("TokenCount"), "400": err("Bad request.", True), "529": err(NOT_READY_ANTH, True)}),
     dict(method="post", path="/v1/responses", id="createResponse", family="openai", summary="Responses (OpenAI)",
          desc="OpenAI Responses with function, custom and namespace tools, reasoning and streaming, for Codex.",
          request="ResponsesRequest", responses={"200": ok("Response", "ResponseStreamEvent"), "400": err("Bad request."),
-                                                "503": err("The model is still loading.")}),
+                                                "404": err(UNKNOWN_MODEL),
+                                                "429": err(BUSY_OWNER), "500": err(FAULT), "503": err(BUSY_ALL)}),
+    dict(method="get", path="/metrics", id="metrics", family="mashbox", summary="Metrics (Prometheus text)",
+         desc="What the server does, in the Prometheus text format: requests running and waiting, KV cache use, the cache "
+              "layout (one slot holds one whole context: block_size = the context length, num_blocks = the slots), "
+              "requests answered by finish reason, prompt and generated tokens, prefix cache lookups and hits (tokens), "
+              "preemptions (never), worker restarts, programs compiled after ready, and histograms of time to first "
+              "token, queue time, end-to-end time and time per output token. Every name starts with `mashbox:`. No "
+              "label names a user, an API key or a session.",
+         responses={"200": {"description": "Prometheus text exposition format.",
+                            "content": {"text/plain": {"schema": {"type": "string"}}}}}),
     dict(method="get", path="/openapi.json", id="openapi", family="mashbox", summary="This description",
          desc="The OpenAPI 3.1 description of this server, with the running model's id.",
          responses={"200": {"description": "OpenAPI 3.1 document.", "content": {"application/json": {"schema": {"type": "object"}}}}}),
@@ -392,7 +460,7 @@ def spec(server=None, version=None):
             "It speaks the OpenAI Chat Completions, Completions and Responses APIs and the Anthropic Messages API, so "
             "OpenAI and Anthropic clients and coding agents work against it unchanged. On 127.0.0.1 no API key is checked "
             "and any key a client sends is ignored; with `--api-key-file` or `MASHBOX_API_KEY`, and always when `--host` is "
-            "not loopback, `/v1` routes and `/openapi.json` need a key (`Authorization: Bearer <key>` or "
+            "not loopback, `/v1` routes, `/metrics` and `/openapi.json` need a key (`Authorization: Bearer <key>` or "
             "`x-api-key: <key>`; 401 without). POST bodies must be `Content-Type: application/json` (415 otherwise), "
             "and a request from a web page of another origin, or naming the server by a host name it does not answer "
             "to, gets 403. Fields a route does not list are accepted and ignored.")
@@ -403,7 +471,7 @@ def spec(server=None, version=None):
             "servers": [{"url": "http://127.0.0.1:8000", "description": "`mashbox run <model>` (default `--port 8000`)"}],
             "tags": [{"name": "openai", "description": "OpenAI-compatible routes."},
                      {"name": "anthropic", "description": "Anthropic-compatible routes."},
-                     {"name": "mashbox", "description": "Health and this description."}],
+                     {"name": "mashbox", "description": "Health, metrics and this description."}],
             "paths": paths, "components": {"schemas": SCHEMAS}}
 
 

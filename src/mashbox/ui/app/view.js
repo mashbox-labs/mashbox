@@ -60,8 +60,9 @@
     function load(r) {
       get('/api/catalog' + (r ? '?refresh=1' : '')).then(function (c) {
         var s = c.source || {};
-        src.textContent = s.from === 'url' ? 'Catalog read ' + when(s.at) + ' from ' + s.url
-          : s.from === 'cache' ? 'Offline: the catalog saved ' + when(s.at) + ' (' + (s.error || '') + ')'
+        var sg = s.signed ? ', signed by MASHBOX Labs' + (s.signed_utc ? ' ' + s.signed_utc : '') : ', not signed (your own catalog address)';
+        src.textContent = s.from === 'url' ? 'Catalog read ' + when(s.at) + ' from ' + s.url + sg
+          : s.from === 'cache' ? 'Using the catalog saved ' + when(s.at) + sg + ' (' + (s.error || '') + ')'
           : 'Offline: the catalog in this install (' + (s.error || '') + ')';
         list.textContent = '';
         c.models.forEach(function (m) {
@@ -127,10 +128,13 @@
             light.className = 'app-dot ' + (p.ok ? (p.health === 503 ? 'busy' : 'live') : 'off');
             info.textContent = p.ok ? (p.health === 503 ? 'loading the model' : 'answers in ' + p.ms + ' ms') + (p.models.length ? ' · ' + p.models.map(function (m) { return m.id; }).join(', ') : '') : (p.error || 'no answer');
           });
+          var ext = (s.addons || []).filter(function (a) { return a.id === x.module; })[0];   // a server of an add-on module
           mine.appendChild(el('article', { class: 'app-item' + (on ? ' app-on' : ''), 'data-server': x.id }, [
             el('div', { class: 'app-item-main' }, [light, el('b', { class: 'app-name' }, [x.name]), on ? el('span', { class: 'mbx-chip app-live' }, ['In use']) : null,
+              ext ? el('span', { class: 'mbx-chip' }, [ext.label]) : null,
               el('div', { class: 'app-mono' }, [x.url]), info]),
             el('div', { class: 'app-acts' }, [
+              ext ? el('a', { class: 'app-btn pri', href: '/m/' + ext.id + '/', target: '_top' }, ['Open ' + ext.label]) :
               on ? null : el('button', { class: 'sm', type: 'button', on: { click: function () { post('/api/servers/use', { id: x.id }).then(draw); } } }, ['Use']),
               el('button', { class: 'sm ghost', type: 'button', on: { click: function () { post('/api/servers/remove', { id: x.id }).then(draw); } } }, ['Remove'])])]));
         });
@@ -237,8 +241,11 @@
     Promise.all([get('/api/state'), get('/api/check')]).then(function (r) {
       var s = r[0], p = r[1];
       var srv = (s.servers || []).filter(function (x) { return x.id === s.active; })[0];
-      if (!srv) {
-        main.appendChild(panel('Connect your coding agent', [note('Start a TPU or add a server first, then come back here.'),
+      // settings only for a server that answers now (/api/check, which reaches a TPU server only while its tunnel runs)
+      // and only when that check is of this very server (the server in use may change between the two answers)
+      if (!srv || !p || p.ok !== true || p.url !== srv.url) {
+        main.appendChild(panel('Connect your coding agent', [note(srv ? 'The server in use does not answer right now. Start it again in Servers, then come back here.'
+          : 'Start a TPU or add a server first, then come back here.'),
           el('a', { class: 'app-btn pri', href: '/p/servers' }, ['Servers'])]));
         return;
       }
@@ -312,7 +319,7 @@
       }));
       var rtSrc = el('code', { class: 'app-mono' }, ['checking']), rtRel = el('b', {}, ['checking']), drift = note('');
       main.appendChild(el('div', { class: 'app-stack' }, [
-        panel('Model catalog', [note('MASHBOX reads its model list when it opens, so new models show up without an app update. A saved copy is used when offline.'),
+        panel('Model catalog', [note('MASHBOX reads its model list when it opens, so new models show up without an app update. The default list is used only when it carries the MASHBOX Labs signature; a saved copy is used when offline.'),
           field('Catalog address', curl, 'Empty uses ' + s.catalog_default), el('div', { class: 'app-row' }, [save, reset]), msg]),
         panel('Look', [themes]),
         panel('About', [el('div', { class: 'app-kv' }, [
@@ -322,11 +329,12 @@
           el('span', {}, ['Latest release']), rtRel,
           el('span', {}, ['Data folder']), el('code', { class: 'app-mono' }, [s.data_dir])]),
           drift,
-          note('Automatic updates are not turned on in this build.')])]));
+          note(s.updates ? 'Updates: MASHBOX checks for a new version each time it opens and installs it only when it carries the MASHBOX Labs signature.'
+            : 'Updates come with the MASHBOX app; this browser view uses the mashbox you installed.')])]));
       get('/api/release').then(function (r) {
         rtSrc.textContent = r.source || 'not recorded';
         rtRel.textContent = r.latest ? 'mashbox ' + r.latest : 'not reachable';
-        drift.textContent = r.latest && r.latest !== r.version ? 'A newer mashbox is out (' + r.latest + '); this app runs ' + r.version + '.'
+        drift.textContent = r.newer === true ? 'A newer mashbox is out (' + r.latest + '); this app runs ' + r.version + '.'
           : r.release_file ? 'The runtime is the published release file.' : 'The runtime is a build of mashbox from source, not the published release file.';
       }).catch(function () { rtRel.textContent = 'not reachable'; });
     });

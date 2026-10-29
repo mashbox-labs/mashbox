@@ -1,0 +1,37 @@
+{
+ "name": "gemma3-f32",
+ "arch": "gemma3",
+ "made_by": "gguf-py",
+ "gguf_sha256": "57aedcaeda7c3f150ab3235ecf1589c656377fc7464735a5e2db83e620c94309",
+ "gguf_bytes": 9769504,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 286,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "acd358276fb87e5f3a09dc354a6a35e9ce3dcbb39a37586db608220b5e383d0d",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "gemma3",
+  "seed": 30,
+  "layers": 6,
+  "make": "gguf-py",
+  "quant": null
+ }
+}

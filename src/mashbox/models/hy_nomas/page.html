@@ -265,7 +265,7 @@ function onStats(j){
   document.querySelectorAll('button.sy').forEach(b=>b.classList.toggle('sel',(b.dataset.sy==='1')===!!(j.settings&&j.settings.sync)));
   const LD=j.loading; $('wl').style.display=LD?'block':'none'; $('wlHud').style.display=(LD&&j.world)?'block':'none';
   if(LD){const left=Math.max(0,Math.round(LD.est-LD.s));$('wlT').textContent='Loading '+LD.title+': '+LD.status+', '+Math.round(LD.s)+' s'+(left>0?', about '+left+' s left':', almost ready');
-    $('wlB').style.width=Math.min(100,100*LD.s/Math.max(1,LD.est))+'%';$('wlQ').textContent=j.queued_world?('Next: '+j.queued_world+' (starts after this one)'):'Keep steering and using actions: the current world plays until the new one is ready.';
+    $('wlB').style.width=Math.min(100,100*LD.s/Math.max(1,LD.est))+'%';$('wlQ').textContent=j.queued_world?('Next: '+j.queued_world+' (starts after this one)'):'Keep moving and using actions: the current world plays until the new one is ready.';
     $('wlHud').textContent='Loading '+LD.title+(left>0?': '+left+' s left':': almost ready')}
   if(LD&&!j.world)veil('Loading '+LD.title,'about '+Math.max(0,Math.round(LD.est-LD.s))+' s');
   else if(!j.world)veil('Pick a world to start');

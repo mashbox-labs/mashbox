@@ -16,7 +16,7 @@ The words these docs use, each with one meaning. Google Cloud terms follow Googl
 | Compile cache | Compiled programs saved on disk (`~/.cache/mashbox/xla` by default), so later starts skip compiling. |
 | Culet | Our TPU kernels. Each release ships only the ones its model needs, compiled, as one kernel bundle. |
 | Full precision | The weights exactly as the model's makers published them, usually bf16. |
-| Greedy | Sampling at temperature 0: the model always takes its most likely next token, so the same prompt gives the same answer. |
+| Greedy | Sampling at temperature 0: the model always takes its most likely next token. |
 | Hugging Face revision | A commit id in a Hugging Face repo. `models.json` pins one per download, so everyone gets the same files. |
 | JAX | Google's Python library for numerical code on TPU. Every model port here is written in it. |
 | Kernel bundle | One Python wheel that holds a release's compiled kernels. `mashbox run` downloads it from the model's Hugging Face repo and checks its sha256. |
@@ -42,7 +42,7 @@ The words these docs use, each with one meaning. Google Cloud terms follow Googl
 | TPU v6e | The default TPU generation for every model here, with 32 GB of memory per chip. |
 | TPU VM | The machine a chip is attached to. You connect to it with SSH and run the model there. |
 | Weights type | How a weights file stores its numbers: full precision, or a reduced-size type with fewer bits per weight. Each file name says its type. |
-| World model | A model that generates video of a place you steer while it plays. |
+| World model | A model that generates video of a place you move through while it plays. |
 | Zone | A Google Cloud location, for example `us-east5-b`. Quota and capacity are counted per zone. |
 
 ## Details

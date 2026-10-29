@@ -2,8 +2,11 @@
 
   JAX_PLATFORMS=cpu python3 tests/cpu/qwen3_8_27b_spec_checks.py <workdir>
 
-  S1 greedy with speculation == greedy without, token for token, K = 1, 2, 3, batch of 4 and each prompt alone, on a random
-     model (drafts mostly rejected) and a near-bigram model (drafts mostly accepted, so commits of 1..K+1 tokens all run)
+  S1 greedy with speculation, K = 1, 2, 3, batch of 4 and each prompt alone, on a random model (drafts mostly rejected)
+     and a near-bigram model (drafts mostly accepted, so commits of 1..K+1 tokens all run): the tie-aware replay
+     (G-D1): every committed token, teacher-forced through the plain forward, is its argmax or within
+     one bf16 step of its top logit; near-tie counts recorded. Equality with greedy without speculation (equal_batch,
+     equal_alone) is recorded as information, not gated (a bf16 tie can round differently at the verify width)
   S2 rejection sampling keeps the target distribution: 200,000 rows, V = 32, K = 2, temperature 0.8 and top_k 12;
      total variation distance of the first new token's histogram to the target distribution < 0.01
   S3 a sampled batch with speculation runs and its seeded rows repeat
@@ -119,8 +122,17 @@ for tag, lo in (("random", 1.0), ("bigram", 0.05)):
         got = e.generate(prompts, max_new=40)["ids"]
         got1 = [e.generate([p], max_new=40)["ids"][0] for p in prompts]
         h = e.spec_stats["hist"]
-        R[f"S1_{tag}_K{k}"] = dict(equal_batch=got == want, equal_alone=got1 == want, tokens_per_round=round(e.spec_stats["tokens"] / max(1, e.spec_stats["rounds"]), 3), hist=h)
-        ok &= got == want and got1 == want
+        near = over = 0
+        for p, y in list(zip(prompts, got)) + list(zip(prompts, got1)):
+            lg = np.asarray(base.logits(p + y)[len(p) - 1:len(p) - 1 + len(y)], np.float32)
+            top, mine = lg.max(-1), lg[np.arange(len(y)), y]
+            near += int(np.sum(lg.argmax(-1) != np.asarray(y)))
+            over += int(np.sum(top - mine > 2.0 ** (np.floor(np.log2(np.maximum(np.abs(top), 1e-30))) - 7)))
+        lens_ok = all(len(y) == 40 for y in got + got1)
+        R[f"S1_{tag}_K{k}"] = dict(replay_near_tie=near, replay_beyond_one_bf16_step=over, lens_ok=lens_ok,
+                                   equal_batch=got == want, equal_alone=got1 == want,
+                                   tokens_per_round=round(e.spec_stats["tokens"] / max(1, e.spec_stats["rounds"]), 3), hist=h)
+        ok &= over == 0 and lens_ok
         if got != want:
             for i, (a, b) in enumerate(zip(want, got)):
                 if a != b:

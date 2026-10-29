@@ -5,9 +5,13 @@ POST /v1/messages and /v1/messages/count_tokens (Anthropic Messages, for Claude 
 Responses, for Codex); stream true or false. See agents.py for the coding-agent APIs. Every route, request field and
 response shape is in runtime/openapi.py, served at GET /openapi.json (tests/cpu/test_openapi.py keeps the two equal).
 With ui=True (`mashbox run <model> --ui`) GET / is the MASHBOX Chat page (mashbox.ui.chat) and /ui/... its files.
-Requests sent together (within GATHER_S of the first) run as one batch of up to S rows (the engine's slot count), so
-several users share each decode step. Requests that arrive while a batch is running wait for it to finish, then run
-together as the next batch. Send "merge": false to run a request alone.
+Continuous batching: up to S requests (the engine's slot count) are live at once, and a
+request that arrives while others are mid-answer takes a free slot at the next device call. Its prompt is read in chunks
+next to the decoding rows (a long prompt never stalls them for more than one chunk), it gets its first token at the call
+where its prefill ends, and it ends at its own finish. Requests beyond S wait in arrival order for a slot. The request
+field "merge" is accepted and ignored: no request field changes how other rows are scheduled. Engines without
+admit/step (test stubs) run the older whole-batch loop; speculative decoding (`mashbox run --mtp K`) runs inside the
+continuous path's step.
 
 Who may call it (runtime/guard.py): a request must name the server as localhost, 127.0.0.1, [::1], another IP address
 or its own --host (a DNS-rebinding page names its own domain and is refused; with API keys any name, the key is the
@@ -15,14 +19,23 @@ check; MASHBOX_ALLOW_HOSTS adds names to a server without keys); a browser reque
 server's own origin (the chat page); a POST must be Content-Type application/json, so a web page cannot send one without
 a CORS preflight, which this server never approves. Clients that are not browsers (curl, SDKs, coding agents) pass as
 before. With API keys (cli.py: --api-key-file or MASHBOX_API_KEY; made for you when --host is not loopback) every /v1 and
-/openapi.json request needs one (Authorization: Bearer or x-api-key), and each key's prompts have a prefix cache of
-their own: a cached prompt is reused, and reported as cached_tokens, only for requests made with the same key.
-A request whose client hangs up is ended, waiting or running, streamed or not; at most MAX_WAITING wait at once (more
-get 429 with Retry-After).
+/openapi.json request needs one (Authorization: Bearer or x-api-key), and each tenant's prompts have a prefix cache and
+a waiting queue of their own: keys the key file names with one tenant share them, and a key without a name is its own
+tenant; a cached prompt is reused, and reported as cached_tokens, only for requests of the same tenant. The owner of
+a request is its tenant id (runtime/tenancy.py): an HMAC of the server's cache secret and the key's tenant name (the key
+file may name one after the key) or the key itself, never the key's place in the key list; without keys there is one
+local owner. A request whose client hangs up is ended, waiting or running, streamed or not. Waiting limits: at most
+MAX_WAITING_OWNER requests of one owner wait at once, more get 429; at most MAX_WAITING wait overall: when that is full
+and this owner is under its share, the newest waiting request of the owner with the most waiting is dropped
+(longest-queue drop), else 429 (Anthropic route: 529 overloaded_error). 503 means only that the model is not ready (still
+loading). Every refusal carries Retry-After (the estimated wait, 1 to 60 s) and goes out before any 200, the legacy
+streaming route included.
 """
 import collections
 import hashlib
+import io
 import json
+import math
 import os
 import queue
 import select
@@ -35,10 +48,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import agents as A
 from . import guard as G
-from .agents import BadRequest, TooLong
+from . import metrics as M
+from . import programs
+from . import tenancy as T
+from .agents import BadRequest, NotReady, TooLong, WorkerFault
+from .protocol import READ_S, STALL_S, raise_open_files
 
 GATHER_S = 0.02      # how long the first request of a batch waits for others sent at the same time
-MAX_WAITING = 256    # requests waiting for a batch at once; more get 429 + Retry-After (the queue is never unbounded)
+MAX_WAITING = 256         # requests waiting for a slot at once, all owners (the queue is never unbounded)
+MAX_WAITING_OWNER = 32    # per owner (4x the largest measured agent fan-out of 7); more get 429
+SEND_BUFFER = 1 << 20     # bytes the kernel may hold for one streamed response (POLICY 1 MiB; capped by net.core.wmem_max)
 KNOBS = dict(max_tokens=512, temperature=0.0, top_p=1.0, top_k=0, min_p=0.0, seed=None, stop=None,
              repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0)
 
@@ -61,7 +80,34 @@ def agent_of(headers, b):
     return hashlib.sha256(str(key).encode()).hexdigest()[:8] if key else None
 
 
+def refuse_unbuilt(b):
+    """Not supported: log probabilities and structured output. A request that asks for either gets 400 naming the
+    field, never an answer that silently lacks it (OpenAI chat, completions and Responses fields, the Anthropic
+    output_config.format, and the guided_* / structured_outputs extensions other servers take)."""
+    def no(field, what):
+        raise BadRequest(f"`{field}` is not supported by this server ({what}); send the request without it")
+    if b.get("logprobs") not in (None, False):
+        no("logprobs", "log probabilities")
+    if b.get("top_logprobs") not in (None, 0):
+        no("top_logprobs", "log probabilities")
+    inc = b.get("include")
+    if isinstance(inc, list) and any(isinstance(x, str) and "logprobs" in x for x in inc):
+        no("include: message.output_text.logprobs", "log probabilities")
+    rf = b.get("response_format")
+    if rf is not None and not (isinstance(rf, dict) and rf.get("type") == "text"):
+        no("response_format", "structured output")
+    tf = b["text"].get("format") if isinstance(b.get("text"), dict) else None
+    if tf is not None and not (isinstance(tf, dict) and tf.get("type") == "text"):
+        no("text.format", "structured output")
+    if isinstance(b.get("output_config"), dict) and b["output_config"].get("format") is not None:
+        no("output_config.format", "structured output")
+    for g in ("output_format", "guided_json", "guided_regex", "guided_choice", "guided_grammar", "structured_outputs"):
+        if b.get(g) is not None:
+            no(g, "structured output")
+
+
 def knobs_of(b, max_key=None):
+    refuse_unbuilt(b)
     k = {n: b.get(n, d) for n, d in KNOBS.items()}
     if b.get("max_completion_tokens") is not None:
         k["max_tokens"] = b["max_completion_tokens"]
@@ -75,8 +121,13 @@ def knobs_of(b, max_key=None):
         k["top_p"], k["top_k"], k["min_p"] = float(1.0 if k["top_p"] is None else k["top_p"]), int(k["top_k"] or 0), float(k["min_p"] or 0)
         for n_, d_ in (("repetition_penalty", 1.0), ("frequency_penalty", 0.0), ("presence_penalty", 0.0)):
             k[n_] = float(d_ if k[n_] is None else k[n_])
-    except (TypeError, ValueError):
-        raise BadRequest("max_tokens, temperature, top_p, top_k, min_p and the penalties must be numbers")
+    except (TypeError, ValueError, OverflowError):      # OverflowError: int() of a JSON Infinity or 1e999
+        raise BadRequest("max_tokens, temperature, top_p, top_k, min_p and the penalties must be finite numbers")
+    if not all(math.isfinite(k[n_]) for n_ in ("temperature", "top_p", "min_p", "repetition_penalty", "frequency_penalty",
+                                                "presence_penalty")):
+        raise BadRequest("temperature, top_p, min_p and the penalties must be finite numbers")
+    if not (k["max_tokens"] <= (1 << 31) - 1 and k["top_k"] <= (1 << 31) - 1):
+        raise BadRequest("max_tokens and top_k must fit 32 bits")
     if not (k["max_tokens"] >= 1 and 0 <= k["temperature"] <= 4 and 0 < k["top_p"] <= 1 and k["top_k"] >= 0 and 0 <= k["min_p"] < 1
             and k["repetition_penalty"] > 0 and -2 <= k["frequency_penalty"] <= 2 and -2 <= k["presence_penalty"] <= 2):
         raise BadRequest("max_tokens >= 1, temperature 0..4, top_p (0, 1], top_k >= 0, min_p [0, 1), repetition_penalty > 0, "
@@ -92,8 +143,10 @@ def knobs_of(b, max_key=None):
     else:
         try:
             k["seed"] = int(k["seed"])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise BadRequest("seed must be an integer")
+        if not -(1 << 63) <= k["seed"] < (1 << 64):
+            raise BadRequest("seed must fit 64 bits")
     return k
 
 
@@ -106,7 +159,30 @@ def samp_of(k):
 
 
 class Busy(Exception):
-    pass
+    """Over this owner's waiting limit: 429 with Retry-After."""
+    def __init__(self, msg, retry_after=1):
+        super().__init__(msg)
+        self.retry_after = int(retry_after)
+
+
+class Overloaded(Busy):
+    """Overall waiting limit full: 429 (Anthropic route 529 overloaded_error) with Retry-After. Never 503: that means only
+    that the model is not ready."""
+
+
+def stop_point(chat, ids, stops):
+    """Tokens up to the finish point: the shortest prefix of ids whose text holds a stop string (len(ids) if none).
+    Usage counts these, never tokens the engine decoded past the stop inside a device call (spec section 2.4)."""
+    if not stops or not any(x in chat.decode(ids) for x in stops):
+        return len(ids)
+    lo, hi = 1, len(ids)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if any(x in chat.decode(ids[:mid]) for x in stops):
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
 
 
 class Text:
@@ -136,18 +212,240 @@ class Server:
         self.user = tuple(chat.encode("user"))
         self.q = queue.Queue()
         self.waiting, self.wlock = 0, threading.Lock()
+        self.wait_by = collections.defaultdict(list)     # owner -> its waiting jobs, oldest first
+        self.admits = 0                                  # admission counter ("seq" of the MASHBOX_TRACE admit line)
+        self.last_admit, self.n_taken = {}, 0            # owner -> when it was last taken from the queue (next_waiting)
         self.ready = False
+        self.metrics = M.Metrics()                       # GET /metrics (runtime/metrics.py)
+        self.exit = os._exit        # Server.table_failed: a failed warm-up ends the process
+        if os.environ.get("MASHBOX_ASSERT_OWNERS") == "1":      # the owner checks always run; this says so in the log
+            self.log(json.dumps(dict(event="owner_asserts", on=True)))
         threading.Thread(target=self.loop, daemon=True).start()
+
+    def health(self):
+        """What /health adds for a caller that may use the API: live rows, waiting requests, prefix-cache bytes (host
+        copies + slot snapshots), the host cache's cap in bytes and how many entries it evicted to stay under it (per-tenant
+        floors decide which: a tenant inside cap / tenants is never evicted for another's traffic), the cache namespace and, once the compile key exists, the deployment id and component
+        set, and the XLA compiles since ready (runtime/programs.py; 0 when the warm-up covered every program, None in a
+        process that does not count them). Certification
+        is a state CERT's gate sets; this server reports not_certified."""
+        E = self.engine
+        host = getattr(E, "host", None)
+        snaps = sum(x["r"].nbytes + x["c"].nbytes for sn in (getattr(E, "snaps", None) or []) for x in sn)
+        hb = host.nbytes() if host is not None else 0
+        return dict(live_rows=E.S - E.free_slots() if hasattr(E, "free_slots") else None, waiting=self.waiting,
+                    cache_bytes=hb + snaps, host_cache_bytes=hb, snapshot_bytes=snaps,
+                    host_cache_cap_bytes=host.cap if host is not None else 0,
+                    host_cache_evictions=host.evicted if host is not None else 0,
+                    cache_namespace=getattr(E, "cache_ns", None), deployment_id=getattr(E, "deployment_id", None),
+                    component_set_sha=getattr(E, "component_set_sha", None), certification="not_certified",
+                    compiles_after_ready=programs.counts()["compiles_after_ready"])
 
     # -------------------------------------------------------------------------------------------------- batching
     def loop(self):
+        if hasattr(self.engine, "admit") and hasattr(self.engine, "step"):
+            return self.loop_live()
+        return self.loop_batches()
+
+    def loop_live(self):
+        """Continuous batching: between device calls, admit waiting requests into free
+        slots (first come, first served), then one engine step: a decode call for the decoding rows and a prefill chunk for
+        rows still reading their prompt. A request waits only for a free slot, never for a batch to finish; the engine
+        runs 1 decode step per call while anyone waits. No request field changes how other rows are scheduled ("merge"
+        is accepted and ignored)."""
+        E = self.engine
+        wait, live = collections.deque(), {}
+        while True:
+            if not live and not wait:
+                wait.append(self.q.get())
+            while True:
+                try:
+                    wait.append(self.q.get_nowait())
+                except queue.Empty:
+                    break
+            for j in [j for j in wait if j.get("cancel")]:      # client gone before it started
+                wait.remove(j)
+                self._unwait(j)
+                j["t_run"] = time.monotonic()
+                self.finish(j, dict(slot=None, ids=[], fin="cancel", cached=0, restored=0, sampled=False, calls=0,
+                                    t_admit=0.0, t_first=0.0, t_end=0.0), 0)
+            take, room = [], E.free_slots()
+            while wait and room:
+                take.append(wait.popleft())
+                room -= 1
+            if take:
+                t_run = time.monotonic()
+                for j in take:
+                    j["t_run"] = t_run
+                    self._unwait(j)
+                try:
+                    rows = E.admit([dict(ids=j["ids"], max_new=j["max_new"], samp=j["samp"], mark=j.get("mark"),
+                                         scope=j.get("scope"), variant=j.get("variant")) for j in take],
+                                   stop_ids=self.chat.stop_ids)
+                except Exception as e:
+                    if isinstance(e, programs.TableFailed):
+                        wait.extendleft(reversed(self.table_failed(take + list(live.values()), e)))
+                        live = {}
+                        continue
+                    if type(e).__name__ == "IsolationError":
+                        self.log(json.dumps(dict(event="owner_assert", error=str(e)[:200], rows=len(take) + len(live))))
+                    self.fail(take + list(live.values()), e)
+                    live = {}
+                    continue
+                for j, r in zip(take, rows):
+                    j["row"], j["cached"], j["batch_rows"] = r, r["cached"], len(live) + 1
+                    if r["fin"] != "error":
+                        self._admitted(j, r["slot"])
+                    if r["fin"] == "error":            # refused by the engine's own check: this request only
+                        self.fail([j], BadRequest(r.get("error") or "bad request"))
+                    elif r["fin"] is None:
+                        live[r["slot"]] = j
+                    else:
+                        self.finish(j, r, j["batch_rows"])
+            if not live:
+                continue
+            gone = E.cancel([j["row"] for j in live.values() if j.get("cancel")])
+            for r in gone:
+                j = live.pop(r["slot"])
+                self.finish(j, r, j["batch_rows"])
+            if not E.busy():
+                continue
+            n_live = len(live)
+            try:
+                ended = E.step(waiting=bool(wait) or not self.q.empty())
+            except Exception as e:
+                if isinstance(e, programs.TableFailed):
+                    wait.extendleft(reversed(self.table_failed(list(live.values()), e)))
+                    live = {}
+                    continue
+                self.fail(list(live.values()), e)
+                live = {}
+                continue
+            for j in live.values():
+                j["batch_rows"] = max(j["batch_rows"], n_live)
+                if j["row"]["ids"] or j["row"]["fin"] is not None:
+                    self.emit(j)
+            for r in ended:
+                j = live.pop(r["slot"])
+                self.finish(j, r, j["batch_rows"])
+
+    def next_waiting(self, wait):
+        """Take the next request to admit out of `wait` (a deque of waiting jobs in arrival order) and return it.
+        Round robin across owners (spec §5, A15: tenant = owner group): the owner taken least recently goes first (an
+        owner never taken before goes before every owner that was), first in, first out within an owner; a request sent
+        again after a worker fault (its "retried" mark, runtime/front.py) goes before all. So a request of an owner with
+        nothing else waiting joins at the next free row, however long other owners' queues are (CERT B5-64
+        bounded_progress: a late request emits before an earlier max-length row ends). The order depends only on the
+        arrivals and the earlier admissions, never on prompt content or cached state (B1: no content-dependent
+        ordering). With one owner (no API keys) it is plain first come, first served. Fallback: an empty `wait` raises
+        IndexError, as deque.popleft() does."""
+        if not wait:
+            raise IndexError("next_waiting from an empty queue")
+        if getattr(self, "last_admit", None) is None:    # a subclass that skips Server.__init__ (worker.Worker)
+            self.last_admit, self.n_taken = {}, 0
+        best, key, seen = None, None, set()
+        for i, j in enumerate(wait):
+            if j.get("retried"):
+                best = i
+                break
+            sc = j.get("scope")
+            if sc in seen:                       # only an owner's oldest waiting request competes
+                continue
+            seen.add(sc)
+            k = (self.last_admit.get(sc, -1), i)
+            if key is None or k < key:
+                best, key = i, k
+        j = wait[best]
+        del wait[best]
+        self.n_taken += 1
+        self.last_admit[j.get("scope")] = self.n_taken
+        return j
+
+    def _unwait(self, j):
+        """A job stops counting against the waiting limits once (admitted, or its client left while it waited)."""
+        with self.wlock:
+            if not j.get("unwaited"):
+                j["unwaited"] = True
+                self.waiting -= 1
+                mine = self.wait_by.get(j.get("scope"))
+                if mine is not None and j in mine:
+                    mine.remove(j)
+
+    def _admitted(self, j, slot):
+        """MASHBOX_TRACE=1: one log line per admitted request, written when the loop admits it, in admission order:
+        {"event": "admit", "rid": the response id its client receives, "slot": its slot (whole-batch loop: its row in
+        the batch), "seq": admission counter, "tenant": the first 11 characters of its tenant id, null for the one local
+        owner}. A request refused at admission or whose client left while it waited gets no line."""
+        if os.environ.get("MASHBOX_TRACE") != "1":
+            return
+        self.admits += 1
+        sc = j.get("scope")
+        self.log(json.dumps(dict(event="admit", rid=j.get("rid"), slot=slot, seq=self.admits,
+                                 tenant=sc[:11] if isinstance(sc, str) else None)))
+
+    def hangup(self, j):
+        """The client left: the engine ends the job at its next step, and a job still waiting frees its waiting count
+        at once, without waiting for a free slot (E7: hung-up requests free their count within 0.5 s)."""
+        j["cancel"] = True
+        if "t_run" not in j:
+            self._unwait(j)
+
+    def retry_after(self):
+        """Estimated wait in seconds, 1 to 60 (estimated as 2 s per request ahead per slot)."""
+        return int(min(60, max(1, math.ceil(2.0 * self.waiting / max(1, getattr(self.engine, "S", 1))))))
+
+    def emit(self, j):
+        r = j["row"]
+        if j.get("stream") is not None and not j.get("cancel"):
+            ids = r["ids"][:j["max_new"]]
+            j["sent"] = True        # a token is queued for the request's handler (a stream's client may have it)
+            j["stream"].put((list(ids), r["fin"] is not None or len(ids) >= j["max_new"], r["fin"]))
+
+    def finish(self, j, r, batch_rows):
+        ids = r["ids"][:j["max_new"]]
+        te = r["t_end"] or time.perf_counter()
+        tf = r["t_first"] if r.get("t_first") is not None else te
+        j["result"] = dict(ids=list(ids), finish="length" if len(ids) >= j["max_new"] else (r["fin"] or "length"),
+                           batch_rows=batch_rows, cached=r["cached"], restored=r["restored"],
+                           timing=dict(prefill_s=tf - r["t_admit"], decode_s=max(0.0, te - tf),
+                                       decode_calls=r["calls"], new_tokens=len(r["ids"]), sampled=r["sampled"]))
+        j.setdefault("cached", r["cached"])
+        if os.environ.get("MASHBOX_TRACE") == "1":    # token ids and per-step logit hashes (engine trace=True), for checks
+            self.log(json.dumps(dict(event="trace", ids=[int(t) for t in ids], cached=int(r["cached"]),
+                                     lh=[[int(h), float(g)] for h, g in (r.get("lh") or [])][:len(ids)])))
+        j["ev"].set()
+        if j.get("stream") is not None:
+            j["stream"].put(None)
+
+    def table_failed(self, jobs, e):
+        """A program loaded from the saved executable table failed in a request (programs.TableFailed): the engine
+        dropped its live rows and the table, and quarantined the table's folder. This process never warms again: a compile here would be a compile after ready, and a failed device call restarts the engine's process
+        (A13). The server says not ready, every job of the call gets the error, and the process ends (exit code 70).
+        `mashbox run` serves through the HTTP front, where the engine's process is a worker (runtime/worker.py
+        Worker.table_failed): the front starts a new worker without the table, which compiles before it says ready,
+        and sends a request whose client has received nothing once more. -> [] (nothing runs again in this process)"""
+        self.ready = False
+        self.log(json.dumps(dict(event="aot_table", phase="failed", **e.info)))
+        self.fail(jobs, e)
+        self.exit(70)
+        return []
+
+    def fail(self, jobs, e):
+        for j in jobs:
+            j["error"] = e
+            j["ev"].set()
+            if j.get("stream") is not None:
+                j["stream"].put(None)
+
+    def loop_batches(self):
+        """Whole-batch loop for engines with generate() only: requests sent together run as one batch; later ones wait."""
         hold = collections.deque()
         S = self.engine.S
         while True:
             first = hold.popleft() if hold else self.q.get()
             # Requests sent together reach the queue a few milliseconds apart; wait up to GATHER_S for them, so they share
             # one batch instead of the first one running alone while the rest wait for it to finish.
-            end = time.monotonic() + (GATHER_S if first["merge"] else 0.0)
+            end = time.monotonic() + GATHER_S
             while len(hold) < S - 1:
                 try:
                     hold.append(self.q.get(timeout=max(0.0, end - time.monotonic())))
@@ -159,16 +457,13 @@ class Server:
                 except queue.Empty:
                     break
             batch = [first]
-            if first["merge"]:
-                keep = collections.deque()
-                for nx in hold:
-                    (batch.append(nx) if nx["merge"] and len(batch) < S else keep.append(nx))
-                hold = keep
+            while hold and len(batch) < S:
+                batch.append(hold.popleft())
             self.run(batch)
 
     def run(self, batch):
-        with self.wlock:
-            self.waiting -= len(batch)
+        for j in batch:
+            self._unwait(j)
         for j in [j for j in batch if j.get("cancel")]:       # the client left while it waited: nothing to run
             j["error"] = ConnectionResetError("client closed the connection")
             j["ev"].set()
@@ -177,6 +472,8 @@ class Server:
         batch = [j for j in batch if not j.get("cancel")]
         if not batch:
             return
+        for i, j in enumerate(batch):
+            self._admitted(j, i)
         mx = max(j["max_new"] for j in batch)
         t_run = time.monotonic()
         for j in batch:                 # time spent waiting for the slot(s), logged as queue_s
@@ -209,7 +506,13 @@ class Server:
             if j.get("stream") is not None:
                 j["stream"].put(None)
 
-    def submit(self, ids, k, merge, stream, mark=None, clamp=False, scope=None):
+    def submit(self, ids, k, merge, stream, mark=None, clamp=False, scope=None, variant=None, rid=None, streamed=None):
+        """Queue a request. stream: the job gets a token queue (every route reads its tokens as they come); streamed:
+        its client reads a stream (None: the same as stream, so a caller that does not say counts as a stream), written
+        into the job before it is queued, since the front may run the job and lose its worker before submit returns,
+        and its retry rule reads this (Front.delivered); scope: its owner (tenant id, None = the one local owner);
+        variant: the hash of its activation-edit table or adapter (None = no edits), part of its prefix-cache key; rid:
+        the response id its client receives (the MASHBOX_TRACE admit line names it)."""
         room = self.engine.CTX - len(ids)
         if clamp:
             if room < 1:
@@ -218,21 +521,43 @@ class Server:
             k["max_tokens"] = min(k["max_tokens"], room)
         if len(ids) + k["max_tokens"] > self.engine.CTX:
             raise BadRequest(f"prompt ({len(ids)} tokens) + max_tokens ({k['max_tokens']}) is over the context of {self.engine.CTX}")
-        job = dict(ids=ids, max_new=k["max_tokens"], samp=samp_of(k), merge=merge, ev=threading.Event(),
-                   stream=queue.Queue() if stream else None, mark=mark, scope=scope)
+        if hasattr(self.engine, "check"):      # admission phase 1: a request the engine cannot take is refused alone
+            why = self.engine.check(dict(ids=ids, max_new=k["max_tokens"], samp=samp_of(k)))
+            if why is not None:
+                raise BadRequest(why)
+        # merge: accepted and ignored (no request field changes how other rows are scheduled)
+        job = dict(ids=ids, max_new=k["max_tokens"], samp=samp_of(k), ev=threading.Event(),
+                   stream=queue.Queue() if stream else None, mark=mark, scope=scope, variant=variant, rid=rid,
+                   streamed=bool(stream if streamed is None else streamed))
         with self.wlock:
+            mine = self.wait_by[scope]
+            if len(mine) >= min(MAX_WAITING_OWNER, MAX_WAITING):
+                raise Busy(f"too many requests: {len(mine)} of yours are waiting; try again shortly", self.retry_after())
             if self.waiting >= MAX_WAITING:
-                raise Busy(f"server busy: {self.waiting} requests are waiting; try again shortly")
+                owners = [o for o, js in self.wait_by.items() if js]
+                big = max(owners, key=lambda o: len(self.wait_by[o]))
+                if big != scope and len(mine) < MAX_WAITING / len(set(owners) | {scope}):
+                    v = self.wait_by[big].pop()                 # longest-queue drop: that owner's newest waiting request
+                    v["unwaited"], v["cancel"] = True, True
+                    self.waiting -= 1
+                    v["error"] = Overloaded("server overloaded: this request was dropped from the queue; try again",
+                                            self.retry_after())
+                    v["ev"].set()
+                    if v.get("stream") is not None:
+                        v["stream"].put(None)
+                else:
+                    raise Overloaded(f"server overloaded: {self.waiting} requests are waiting; try again shortly",
+                                     self.retry_after())
             self.waiting += 1
+            mine.append(job)
         self.q.put(job)
         return job
 
-    @staticmethod
-    def wait(job, gone):
+    def wait(self, job, gone):
         """Wait for a job that streams nothing to its client; end it if the client hangs up meanwhile."""
         while not job["ev"].wait(0.25):
             if gone is not None and gone():
-                job["cancel"] = True
+                self.hangup(job)
                 raise ConnectionResetError("client closed the connection")
 
     # -------------------------------------------------------------------------------------------------- routes
@@ -259,61 +584,85 @@ class Server:
                                               max_model_len=self.engine.CTX, **self.info)])
 
     def complete(self, b, chat, write_sse=None, meta=None):
+        """Plain completions (and chat without the agent parser). Streamed or not, the tokens are read as they come, so a
+        stop string ends the row at the engine's next step and nothing past it is sent or counted."""
+        t0 = time.monotonic()
         k = knobs_of(b)
         ids = self.prompt_ids(b, chat)
-        job = self.submit(ids, k, bool(b.get("merge", True)), write_sse is not None, scope=(meta or {}).get("scope"))
+        stream = write_sse is not None
         rid = ("chatcmpl-" if chat else "cmpl-") + uuid.uuid4().hex[:24]
+        job = self.submit(ids, k, bool(b.get("merge", True)), True, scope=(meta or {}).get("scope"), rid=rid,
+                          streamed=stream)  # not streamed, the client receives nothing before the end
         created = int(time.time())
         obj = "chat.completion" if chat else "text_completion"
-        if write_sse is not None:
-            tx = Text(self.chat, k["stop"])
-            if chat:
-                write_sse(dict(id=rid, object=obj + ".chunk", created=created, model=self.model_id,
-                               choices=[dict(index=0, delta=dict(role="assistant"), finish_reason=None)]))
-            finish = None
-            while True:
-                ev = job["stream"].get()
-                if ev is None:
-                    break
-                got, done, fin = ev
-                if tx.done:
-                    continue
-                delta = tx.update(got, final=done)
-                done = done or tx.done
-                if tx.done:
-                    job["cancel"] = True
-                if done:
-                    finish = "stop" if (fin == "stop" or tx.done) else "length"
-                if delta or done:
-                    ch = dict(index=0, finish_reason=finish if done else None)
-                    if chat:
-                        ch["delta"] = dict(content=delta)
-                    else:
-                        ch["text"] = delta
-                    try:
-                        write_sse(dict(id=rid, object=obj + ".chunk" if chat else obj, created=created, model=self.model_id,
-                                       choices=[ch]))
-                    except (BrokenPipeError, ConnectionResetError):
-                        job["cancel"] = True        # the client hung up: the engine ends this row at its next step
-                        raise
-            job["ev"].wait()
-            if "error" in job:
-                raise job["error"]
-            return None
-        self.wait(job, (meta or {}).get("gone"))
+        tx = Text(self.chat, k["stop"])
+        if stream and chat:
+            write_sse(dict(id=rid, object=obj + ".chunk", created=created, model=self.model_id,
+                           choices=[dict(index=0, delta=dict(role="assistant"), finish_reason=None)]))
+        finish, parts, t_first, t_last = None, [], None, None
+        gone_fn, t_chk = (meta or {}).get("gone"), time.monotonic()
+        while True:
+            try:
+                ev = job["stream"].get(timeout=0.25)
+            except queue.Empty:
+                ev = False
+            if gone_fn is not None and time.monotonic() - t_chk >= 0.25:  # a client that hangs up before anything
+                t_chk = time.monotonic()                                    # is written to it (waiting, prefill)
+                if gone_fn():                                               # ends it and frees its waiting count
+                    self.hangup(job)
+                    raise ConnectionResetError("client closed the connection")
+            if ev is False:
+                continue
+            if ev is None:
+                break
+            got, done, fin = ev
+            if tx.done:
+                continue
+            if got:
+                t_last = time.monotonic()
+                t_first = t_first or t_last
+            delta = tx.update(got, final=done)
+            done = done or tx.done
+            if tx.done:
+                job["cancel"] = True             # stop string found: the engine ends this row at its next step
+            if done:
+                finish = "stop" if (fin == "stop" or tx.done) else "length"
+            if not stream:
+                parts.append(delta)
+                continue
+            if delta or done:
+                ch = dict(index=0, finish_reason=finish if done else None)
+                if chat:
+                    ch["delta"] = dict(content=delta)
+                else:
+                    ch["text"] = delta
+                try:
+                    write_sse(dict(id=rid, object=obj + ".chunk" if chat else obj, created=created, model=self.model_id,
+                                   choices=[ch]))
+                except (BrokenPipeError, ConnectionResetError):
+                    self.hangup(job)            # the client hung up: the engine ends this row at its next step
+                    raise
+        job["ev"].wait()
         if "error" in job:
             raise job["error"]
         r = job["result"]
-        tx = Text(self.chat, k["stop"])
-        text = tx.update(r["ids"], final=True)
-        finish = "stop" if (r["finish"] == "stop" or tx.done) else "length"
-        n_out = len(r["ids"])
+        n_out = stop_point(self.chat, r["ids"], k["stop"]) if tx.done else len(r["ids"])
+        usage = dict(prompt_tokens=len(ids), completion_tokens=n_out, total_tokens=len(ids) + n_out)
+        self.metrics.request(finish or ("stop" if (r["finish"] == "stop" or tx.done) else "length"), len(ids),
+                             r.get("cached") or 0, n_out, queue_s=job.get("t_run", t0) - t0, e2e_s=time.monotonic() - t0,
+                             ttft_s=None if t_first is None else t_first - t0,
+                             tpot_s=(t_last - t_first) / (n_out - 1) if n_out > 1 and t_last > t_first else None)
+        if stream:
+            if not chat and (b.get("stream_options") or {}).get("include_usage"):
+                write_sse(dict(id=rid, object=obj, created=created, model=self.model_id, choices=[], usage=usage))
+            return None
+        if finish is None:                       # the row ended with no last event (it never started)
+            parts.append(tx.update(r["ids"], final=True))
+            finish = "stop" if (r["finish"] == "stop" or tx.done) else "length"
         choice = dict(index=0, finish_reason=finish)
-        choice.update(dict(message=dict(role="assistant", content=text)) if chat else dict(text=text))
-        return dict(id=rid, object=obj, created=created, model=self.model_id, choices=[choice],
-                    usage=dict(prompt_tokens=len(ids), completion_tokens=n_out, total_tokens=len(ids) + n_out),
+        choice.update(dict(message=dict(role="assistant", content="".join(parts))) if chat else dict(text="".join(parts)))
+        return dict(id=rid, object=obj, created=created, model=self.model_id, choices=[choice], usage=usage,
                     system_fingerprint=f"seed-{k['seed']}")
-
 
     # -------------------------------------------------------------------------------------------------- agent APIs
     def marks_of(self, ids):
@@ -337,7 +686,9 @@ class Server:
             ids = self.chat.chat_ids(msgs, think, tools or None)
         except Exception as e:
             raise BadRequest(f"chat template: {e}")
-        job = self.submit(ids, k, merge, True, mark=self.marks_of(ids), clamp=True, scope=(meta or {}).get("scope"))
+        job = self.submit(ids, k, merge, True, mark=self.marks_of(ids), clamp=True, scope=(meta or {}).get("scope"),
+                          rid=(meta or {}).get("rid"),
+                          streamed=(meta or {}).get("closed") is not None)     # the handler sets closed for a stream only
         gone_fn = (meta or {}).get("gone")
         par, tx = A.OutParser(tools, think), Text(self.chat, k["stop"])
         out = dict(text=[], reasoning=[], calls=[], finish="length", stop_sequence=None)
@@ -373,6 +724,7 @@ class Server:
                 end = done or tx.done
                 if tx.done:
                     job["cancel"] = True         # stop string found: the engine ends this row at its next step
+                    n_out = stop_point(self.chat, got, k["stop"])
                 for e in par.feed(delta, final=end):
                     (out["calls"].append(e[1:]) if e[0] == "tool" else out[e[0]].append(e[1]))
                     if on_event is not None:
@@ -382,7 +734,9 @@ class Server:
                     if tx.done:
                         out["stop_sequence"] = next((s for s in k["stop"] or [] if s in self.chat.decode(got)), None)
         except (BrokenPipeError, ConnectionResetError) as e:
-            job["cancel"], gone, out["finish"] = True, e, "client_closed"    # the engine ends this row at its next step
+            self.hangup(job)
+            gone, out["finish"] = e, ("consumer_stalled" if isinstance(e, Stalled) else "client_closed")  # the engine
+                                                                             # ends this row at its next step
         job["ev"].wait()
         if "error" in job:
             raise job["error"]
@@ -406,6 +760,9 @@ class Server:
                                  ttft_s=round((t_first or time.monotonic()) - t0, 3), total_s=round(time.monotonic() - t0, 3),
                                  prompt_ms=out["timings"]["prompt_ms"], predicted_ms=out["timings"]["predicted_ms"],
                                  predicted_per_second=out["timings"]["predicted_per_second"])))
+        self.metrics.request(out["finish"], len(ids), cached, n_out, queue_s=t_run - t0, e2e_s=time.monotonic() - t0,
+                             ttft_s=None if t_first is None else t_first - t0,
+                             tpot_s=g_ms / 1e3 / (n_out - 1) if n_out > 1 and g_ms > 0 else None)
         if gone is not None:
             raise gone
         return out
@@ -426,6 +783,8 @@ class Server:
         cid, created = A.rid("chatcmpl-"), int(time.time())
         head = dict(id=cid, object="chat.completion.chunk", created=created, model=self.model_id)
         n_calls = [0]
+        if sse is not None:
+            sse.rid = cid
 
         def start(_n):
             sse.start()
@@ -442,7 +801,7 @@ class Server:
                 n_calls[0] += 1
             sse.data(dict(head, choices=[dict(index=0, delta=d, finish_reason=None)]))
         r = self.run_chat(cv.messages(extra), tools, think, k, bool(b.get("merge", True)),
-                          start if sse else None, event if sse else None, meta)
+                          start if sse else None, event if sse else None, dict(meta or {}, rid=cid))
         fin = "tool_calls" if r["calls"] else r["finish"]
         u = r["usage"]
         usage = dict(prompt_tokens=u["prompt"], completion_tokens=u["completion"], total_tokens=u["prompt"] + u["completion"],
@@ -468,6 +827,8 @@ class Server:
         think = (b.get("thinking") or {}).get("type") in ("enabled", "adaptive")
         mid = A.rid("msg_")
         blocks, cur = [], [None]          # finished content blocks, open block type
+        if sse is not None:
+            sse.rid = mid
 
         def start(n):
             sse.start()
@@ -499,7 +860,8 @@ class Server:
             sse.event("content_block_delta", dict(type="content_block_delta", index=len(blocks) - 1, delta=d))
             if kind == "tool_use":
                 close()
-        r = self.run_chat(cv.messages(extra), tools, think, k, True, start if sse else None, event if sse else None, meta)
+        r = self.run_chat(cv.messages(extra), tools, think, k, True, start if sse else None, event if sse else None,
+                          dict(meta or {}, rid=mid))
         stop = "tool_use" if r["calls"] else ("max_tokens" if r["finish"] == "length" else
                                                "stop_sequence" if r["stop_sequence"] else "end_turn")
         u = r["usage"]
@@ -531,6 +893,8 @@ class Server:
                     model=b.get("model") or self.model_id, output=[], parallel_tool_calls=bool(b.get("parallel_tool_calls", False)),
                     tool_choice=b.get("tool_choice", "auto"), tools=b.get("tools") or [], usage=None)
         seq, items, cur = [0], [], [None]
+        if sse is not None:
+            sse.rid, sse.api, sse.resp, sse.seq = resp["id"], "responses", resp, seq
 
         def ev(name, **o):
             seq[0] += 1
@@ -608,7 +972,8 @@ class Server:
                 def event(self, *a):
                     pass
             sse = _Quiet()
-        r = self.run_chat(cv.messages(extra), tools, think, k, True, start if hasattr(sse, "start") else None, event, meta)
+        r = self.run_chat(cv.messages(extra), tools, think, k, True, start if hasattr(sse, "start") else None, event,
+                          dict(meta or {}, rid=resp["id"]))
         close()
         u = r["usage"]
         resp.update(output=items, usage=dict(input_tokens=u["prompt"], input_tokens_details=dict(cached_tokens=u["cached"]),
@@ -624,11 +989,90 @@ class Server:
         return resp
 
 
+def stall_s():
+    """Seconds a response write may wait for a client that reads nothing (MASHBOX_STALL_S, default protocol.STALL_S)."""
+    try:
+        v = float(os.environ.get("MASHBOX_STALL_S") or STALL_S)
+    except ValueError:
+        return float(STALL_S)
+    return v if v > 0 else float(STALL_S)
+
+
+def read_s():
+    """Seconds a connection may wait for a request's first byte, and then for the whole request (MASHBOX_READ_S, default
+    protocol.READ_S)."""
+    try:
+        v = float(os.environ.get("MASHBOX_READ_S") or READ_S)
+    except ValueError:
+        return float(READ_S)
+    return v if v > 0 else float(READ_S)
+
+
+class RequestReader(io.RawIOBase):
+    """The request side of one connection, under a deadline: while armed, each read waits only until the deadline, so a
+    client that sends nothing, half a request, or a byte now and then is cut off (TimeoutError: the standard request
+    handler closes the connection). The deadline is read_s() for the first byte, then read_s() again from that byte for
+    the whole request. Disarmed (None) once the body is in; then reads are the socket's own."""
+
+    def __init__(self, sock):
+        self.sock, self.deadline, self.got, self.timed_out, self.span = sock, None, 0, False, None
+
+    def arm(self, span):
+        self.deadline, self.got, self.timed_out, self.span = time.monotonic() + span, 0, False, span
+
+    def readable(self):
+        return True
+
+    def readinto(self, b):
+        if self.deadline is not None:
+            left = self.deadline - time.monotonic()
+            if left <= 0:
+                self.timed_out = True
+                raise TimeoutError("the request did not arrive whole in time")
+            self.sock.settimeout(left)
+        try:
+            n = self.sock.recv_into(b)
+        except TimeoutError:
+            self.timed_out = True
+            raise
+        if n and not self.got and self.deadline is not None:
+            self.deadline = time.monotonic() + self.span     # the request has started: it gets the whole span to arrive
+        self.got += n
+        return n
+
+
+class Stalled(ConnectionResetError):
+    """consumer_stalled (INTERFACES §3.3 P6): the client stopped reading. A ConnectionResetError, so every route ends the
+    request as a hang-up: the engine ends the row at its next step."""
+
+
+class StallWriter:
+    """The response writer of one POST. Once the request body is read (arm), every write must finish within stall_s
+    seconds: a client that reads nothing fills the connection's buffers, the write times out and raises Stalled, and later
+    writes raise at once. on_stall(stall_s) runs once, for the log. Before arm() it writes as the plain writer."""
+
+    def __init__(self, w, on_stall):
+        self.w, self.on_stall, self.stall_s, self.stalled = w, on_stall, None, False
+
+    def write(self, b):
+        if not self.stalled:
+            try:
+                return self.w.write(b)
+            except socket.timeout:
+                self.stalled = True
+                self.on_stall(self.stall_s)
+        raise Stalled(f"consumer_stalled: the client read nothing for {self.stall_s} s")
+
+    def __getattr__(self, name):              # flush, close, closed: the plain writer's
+        return getattr(self.w, name)
+
+
 class SSE:
     """Server-sent events on one response: data-only lines (OpenAI chat) or named events (Anthropic, Responses)."""
 
     def __init__(self, h):
         self.h, self.started = h, False
+        self.rid, self.api, self.resp, self.seq = None, None, None, None
 
     def start(self):
         h = self.h
@@ -641,13 +1085,8 @@ class SSE:
         self.started = True
 
     def closed(self):
-        """The client has closed its side. A write alone does not show it behind an SSH tunnel (the tunnel keeps taking
-        bytes), so check the socket as llama-server does: readable, and a 1-byte peek reads nothing."""
-        s = self.h.connection
-        try:
-            return bool(select.select([s], [], [], 0)[0]) and s.recv(1, socket.MSG_PEEK) == b""
-        except (OSError, ValueError):
-            return True
+        """The client has closed its side: the request handler's one check (H._gone), read before each event."""
+        return self.h._gone()
 
     def _w(self, b):
         self.h.wfile.write(b)
@@ -663,35 +1102,59 @@ class SSE:
         self._w(b"data: [DONE]\n\n")
 
     def error(self, msg, anth, typ="invalid_request_error"):
-        if anth:
-            self.event("error", dict(type="error", error=dict(type=typ, message=msg)))
-        else:
-            self.data(dict(error=dict(message=msg, type=typ)))
-            self.done()
+        """The last event of a stream whose request failed after its 200 went out (a status code can no longer change):
+        the route's error event with the response id as request_id, then the end of the stream. Anthropic: event error;
+        Responses: event error, then response.failed; chat and completions: data {"error": ...}, then [DONE]."""
+        try:
+            if anth:
+                self.event("error", dict(type="error", error=dict(type=typ, message=msg), request_id=self.rid))
+            elif self.api == "responses":
+                self.seq[0] += 1
+                self.event("error", dict(type="error", code=typ, message=msg, param=None, sequence_number=self.seq[0]))
+                self.seq[0] += 1
+                fail = dict(self.resp, status="failed", error=dict(code=typ, message=msg))
+                self.event("response.failed", dict(type="response.failed", sequence_number=self.seq[0], response=fail))
+            else:
+                self.data(dict(error=dict(message=msg, type=typ, param=None, code=None), request_id=self.rid))
+                self.done()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 
 
 # POST routes by their runtime/openapi.py ROUTES id; the server finds a request's route only through openapi.route.
 POST_API = {"createChatCompletion": "chat", "createCompletion": "completions", "createMessage": "anthropic",
             "countTokens": "count_tokens", "createResponse": "responses"}
+OPENAI_API = ("chat", "completions", "responses")      # the routes that check the request's model id
+
+class Listener(ThreadingHTTPServer):
+    """The HTTP server. Its accept queue holds request_queue_size connections (the standard library's default is 5: with
+    64 users connecting at once on a v6e-1, 5 overflowed and 15 of 128 requests were reset by peer). The kernel caps it at
+    net.core.somaxconn."""
+    request_queue_size = 1024
+
 
 def key_scope(headers, keys):
-    """The index of the API key a request carries (Authorization: Bearer or x-api-key), None when it carries none of them.
-    Every key is compared in full, in constant time."""
+    """The tenant id (runtime/tenancy.py) of the API key a request carries (Authorization: Bearer or x-api-key), None when
+    it carries none of them. Every key is compared in full, in constant time. The id is an HMAC of the server's cache
+    secret and the key's tenant (or the key), so it never depends on the key's place in the list."""
     a = headers.get("Authorization") or ""
     given = [g for g in (a[7:].strip() if a[:7].lower() == "bearer " else None, headers.get("x-api-key")) if g]
     hit = None
-    for i, k in enumerate(keys):
+    for k in keys:
         for g in given:
             if G._same(g, k) and hit is None:
-                hit = i
-    return hit
+                hit = k
+    return None if hit is None else T.current().tenant_id(hit)
 
 
 def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
     """keys: API keys a request must carry on /v1 and /openapi.json (None or empty: no key). Each key is its own prefix
     cache scope. The chat page, its files and /health stay open, as llama-server's public endpoints."""
     S = server
+    lim = raise_open_files()                    # one descriptor per connection: soft limit up to the hard limit
+    if lim is not None:
+        log(json.dumps(dict(event="open_files_limit", **lim)))
     keys = [k for k in (keys or []) if k]
     guard = G.Guard(hosts=[host])
     if keys:            # the key guards every API route, so any name may reach the server (a VM's DNS name, a proxy)
@@ -703,6 +1166,7 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         scope = None
+        api_name = None                 # the POST route being answered, for the consumer_stalled log line
 
         def _gate(self, key=True, anth=False):
             """Host, Origin and Content-Type for every request, and the API key when `key`. True = answered (refused),
@@ -721,28 +1185,50 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
 
         def _gone(self):
             """True once the client has closed its end of the connection (a request is answered whole, so nothing else
-            arrives on it while one runs)."""
+            arrives on it while one runs). poll(), not select(): select() cannot watch a descriptor numbered 1024 or more,
+            so a server holding that many connections would read every client as gone and cut its answer."""
             try:
-                r, _, _ = select.select([self.connection], [], [], 0)
-                return bool(r) and self.connection.recv(1, socket.MSG_PEEK) == b""
-            except (OSError, ValueError):
+                if not hasattr(select, "poll"):         # Windows: its select() has no limit on descriptor numbers
+                    r, _, _ = select.select([self.connection], [], [], 0)
+                    return bool(r) and self.connection.recv(1, socket.MSG_PEEK) == b""
+                p = select.poll()
+                p.register(self.connection, select.POLLIN | select.POLLPRI)
+                ev = p.poll(0)
+                if not ev:
+                    return False
+                if ev[0][1] & (select.POLLERR | select.POLLHUP | select.POLLNVAL):
+                    return True
+                return self.connection.recv(1, socket.MSG_PEEK) == b""
+            except (OSError, ValueError):               # ValueError: the socket is already closed (descriptor -1)
                 return True
 
-        def _send(self, code, obj):
+        def _send(self, code, obj, retry_after=None, should_retry=False):
             body = json.dumps(obj).encode()
             self.send_response(code)
-            if code == 429:
-                self.send_header("Retry-After", "1")
+            if retry_after is not None or code in (429, 503, 529):
+                self.send_header("Retry-After", str(retry_after or 1))
+            if should_retry:                # not ready: the official clients retry on it
+                self.send_header("x-should-retry", "true")
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
-        def _err(self, code, msg, typ="invalid_request_error", anth=False):
+        def _err(self, code, msg, typ="invalid_request_error", anth=False, retry_after=None, should_retry=False, ecode=None):
             if anth:     # Anthropic error shape
-                typ = {"invalid_request_error": "invalid_request_error", "unavailable": "overloaded_error"}.get(typ, typ)
-                return self._send(code, dict(type="error", error=dict(type=typ, message=msg)))
-            self._send(code, dict(error=dict(message=msg, type=typ)))
+                typ = {"invalid_request_error": "invalid_request_error", "unavailable": "overloaded_error",
+                       "server_error": "api_error"}.get(typ, typ)
+                return self._send(code, dict(type="error", error=dict(type=typ, message=msg)), retry_after, should_retry)
+            e = dict(message=msg, type=typ)
+            if ecode:
+                e["code"] = ecode
+            self._send(code, dict(error=e), retry_after, should_retry)
+
+        def _not_ready(self, msg, anth, retry_after=None):
+            """Not ready (loading, or the worker restarting after a fault): the only meaning of 503 (Anthropic 529)."""
+            if retry_after is None:
+                retry_after = S.not_ready_retry_after() if hasattr(S, "not_ready_retry_after") else 1
+            return self._err(529 if anth else 503, msg, "unavailable", anth=anth, retry_after=retry_after, should_retry=True)
 
         def do_HEAD(self):
             if self._gate(key=False):
@@ -767,9 +1253,21 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
             route, params = openapi.route("get", path)
             op = route and route["id"]
             if op in ("health", "healthShort", "root"):
-                return self._send(200 if S.ready else 503, dict(status="ok" if S.ready else "loading"))
+                caller = not keys or key_scope(self.headers, keys) is not None
+                more = S.health() if hasattr(S, "health") and caller else {}   # load: API callers only (a server
+                if hasattr(S, "health_extra") and caller:                     # without load fields: status only)
+                    more.update(S.health_extra())                             # worker process id and restarts
+                return self._send(200 if S.ready else 503, dict(status="ok" if S.ready else "loading", **more),
+                                  should_retry=not S.ready)
             if self._gate():
                 return
+            if op == "metrics":                          # Prometheus text (runtime/metrics.py); behind the key
+                body = S.metrics.render(S).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", M.CONTENT_TYPE)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
             if op == "listModels":
                 return self._send(200, S.models())
             if op == "openapi":                          # the OpenAPI 3.1 description (runtime/openapi.py)
@@ -779,11 +1277,45 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
                 return self._send(200, m) if params["model"] == m["id"] else self._err(404, f"model {params['model']} not found")
             self._err(404, "not found")
 
+        def setup(self):
+            super().setup()
+            self.reader = RequestReader(self.connection)          # every request read goes through its deadline
+            self.rfile = io.BufferedReader(self.reader)
+
+        def handle_one_request(self):
+            """Each request is read under a deadline (RequestReader): read_s() for its first byte, then read_s() for the
+            whole request; a connection that sends nothing or half a request is closed after it, so idle or half-sent
+            connections cannot pile up. Each answer goes through a StallWriter (P6): once do_POST has read a body and
+            armed it, a client that stops reading is ended after stall_s() and its connection closed. The connection's
+            own timeout and writer are restored after each request, so a keep-alive connection waits for its next
+            request as before."""
+            w, t = self.wfile, self.connection.gettimeout()
+            self.api_name = None
+            self.reader.arm(read_s())
+            self.wfile = sw = StallWriter(w, lambda s: S.log(json.dumps(dict(event="consumer_stalled", api=self.api_name,
+                                                                              stall_s=s))))
+            try:
+                super().handle_one_request()
+            finally:
+                self.wfile = w
+                if self.reader.timed_out:
+                    self.close_connection = True
+                    if self.reader.got:                 # half a request: logged (an idle keep-alive end is not)
+                        S.log(json.dumps(dict(event="request_read_timeout", read_s=self.reader.span,
+                                              bytes=self.reader.got)))
+                self.reader.deadline = None
+                if sw.stalled:
+                    self.close_connection = True
+                try:
+                    self.connection.settimeout(t)
+                except OSError:
+                    pass
+
         def do_POST(self):
             path = self.path.split("?")[0].rstrip("/")
             from . import openapi
             route, _ = openapi.route("post", path)
-            api = POST_API.get(route and route["id"])
+            api = self.api_name = POST_API.get(route and route["id"])
             anth = api in ("anthropic", "count_tokens")
             if self._gate(anth=anth):
                 return
@@ -796,8 +1328,22 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
                     raise BadRequest("body must be a JSON object")
             except (ValueError, BadRequest) as e:
                 return self._err(400, f"bad JSON body: {e}", anth=anth)
+            self.reader.deadline = None                  # the request is in: no read deadline while it is answered
+            if isinstance(self.wfile, StallWriter):   # the body is in: from here every write must finish in stall_s
+                self.wfile.stall_s = stall_s()
+                try:
+                    self.connection.settimeout(self.wfile.stall_s)
+                    if b.get("stream"):          # a stream keeps at most SEND_BUFFER bytes in the kernel for its client
+                        self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)
+                except OSError:
+                    pass
+            if api in OPENAI_API and b.get("model") not in (None, "", S.model_id):
+                # OpenAI routes serve one model id (GET /v1/models); the Anthropic routes answer any model name, because
+                # Claude Code sends its own (main model and subagents) unless every model variable is set.
+                return self._err(404, f"The model `{str(b.get('model'))[:64]}` does not exist on this server; it serves "
+                                      f"`{S.model_id}` (GET /v1/models)", ecode="model_not_found")
             if not S.ready:
-                return self._err(503, "model is loading", "unavailable" if not anth else "overloaded_error", anth=anth)
+                return self._not_ready("the model is loading or restarting; try again shortly", anth)
             meta = dict(api=api, ua=(self.headers.get("User-Agent") or "")[:80], session=session_of(self.headers, b),
                         agent=agent_of(self.headers, b), model=str(b.get("model") or "")[:64] or None)
             meta.update(scope=self.scope, gone=self._gone)           # not logged: run_chat logs named fields only
@@ -820,10 +1366,21 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
                 r = fn(b, sse, meta)
                 if sse is None:
                     return self._send(200, r)
-            except Busy as e:
+            except NotReady as e:
                 if sse is not None and sse.started:
-                    return sse.error(str(e), anth, "rate_limit_error" if anth else "rate_limit_exceeded")
-                return self._err(429, str(e), "rate_limit_error" if anth else "rate_limit_exceeded", anth=anth)
+                    return sse.error(str(e), anth, "overloaded_error" if anth else "server_error")
+                return self._not_ready(str(e), anth, e.retry_after)
+            except WorkerFault as e:
+                S.log(json.dumps(dict(event="error", api=api, error=f"WorkerFault {e.code}: {e}"[:300])))
+                if sse is not None and sse.started:
+                    return sse.error(str(e), anth, "api_error" if anth else "server_error")
+                return self._err(500, str(e), "server_error", anth=anth)
+            except Busy as e:
+                over = isinstance(e, Overloaded)
+                typ = ("overloaded_error" if anth else "server_overloaded") if over else ("rate_limit_error" if anth else "rate_limit_exceeded")
+                if sse is not None and sse.started:
+                    return sse.error(str(e), anth, typ)
+                return self._err(529 if (over and anth) else 429, str(e), typ, anth=anth, retry_after=e.retry_after)
             except BadRequest as e:
                 S.log(json.dumps(dict(event="rejected", api=api, ua=meta["ua"], error=str(e)[:300])))
                 if sse is not None and sse.started:
@@ -839,20 +1396,36 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
 
         def legacy(self, b, chat, meta=None):
             if b.get("stream"):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-cache")
-                self.send_header("Connection", "close")
-                self.end_headers()
-                self.close_connection = True
+                sent = []
+
+                def head():         # the 200 goes out with the first event, so a refusal before it keeps its own status
+                    if not sent:
+                        sent.append(1)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.send_header("Connection", "close")
+                        self.end_headers()
+                        self.close_connection = True
 
                 def write(o):
+                    head()
                     self.wfile.write(b"data: " + json.dumps(o).encode() + b"\n\n")
                     self.wfile.flush()
                 try:
                     S.complete(b, chat, write, meta)
-                except (BadRequest, Busy) as e:
-                    write(dict(error=dict(message=str(e), type="invalid_request_error")))
+                except (BrokenPipeError, ConnectionResetError):
+                    raise
+                except Exception as e:
+                    if not sent:
+                        raise                   # do_POST answers 400 / 429 / 500 / 503 with its status code
+                    plain = isinstance(e, (BadRequest, Busy, NotReady, WorkerFault))
+                    try:              # after the 200: the error event, then [DONE]
+                        write(dict(error=dict(message=str(e) if plain else f"{type(e).__name__}: {e}", param=None, code=None,
+                                              type="invalid_request_error" if isinstance(e, (BadRequest, Busy)) else "server_error")))
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                head()
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
                 return
@@ -861,6 +1434,7 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
         def log_message(self, *a):
             pass
 
-    httpd = ThreadingHTTPServer((host, port), H)
+    httpd = Listener((host, port), H)
+    server.httpd = httpd                       # a front that gives up (runtime/front.py) stops serving through it
     log(json.dumps(dict(event="listening", url=f"http://{host}:{port}/v1")))
     httpd.serve_forever()

@@ -103,21 +103,23 @@ def draft_row(m):
 
 def draft_file(m, path=None, log=print):
     """Local path of the draft weights (downloaded and checked unless `path` is given). A row may pin its own revision of
-    the model repo (a draft file added after the weights' release commit); else the model's hf_revision."""
+    the model repo (a draft file added after the weights' release commit), else the model's hf_revision, and may name its
+    own repo, else the model's hf_repo."""
     row = draft_row(m)
     if path:
         ok = row and row.get("sha256") and os.environ.get("MASHBOX_VERIFY", "1") != "0"
         return verify(path, row["sha256"], log) if ok else path
     if row is None:
         raise SystemExit(f"no draft file in models.json for {m['id']}")
-    p = fetch(m["hf_repo"], row["name"], row.get("revision") or m["hf_revision"])
+    p = fetch(row.get("repo") or m["hf_repo"], row["name"], row.get("revision") or m["hf_revision"])
     return verify(p, row["sha256"], log)
 
 
 def compile_cache(m, cache_dir, log=print):
     """Unpack the model's XLA compile cache (models.json files[] row with kind "xla-cache") into cache_dir when its chip, jax,
     jaxlib and libtpu match this setup, so the first run loads its programs instead of compiling them. -> local path or None.
-    No match, or any error, = one log line and compiling at first use, as before."""
+    No match, or any error, = one log line and compiling at first use, as before. That includes a tar whose sha256 does not
+    match the row: verify() stops the run with SystemExit for weights, so this path catches SystemExit too."""
     import shutil
     import tarfile
     from . import kernels as K
@@ -144,7 +146,7 @@ def compile_cache(m, cache_dir, log=print):
             log(json.dumps(dict(event="compile_cache", used=True, file=row["name"].rsplit("/", 1)[-1], new_entries=n)))
             return p
         log(json.dumps(dict(event="compile_cache", used=False, reason=f"no cache for chip {fam}, jax {ver['jax']}, libtpu {ver.get('libtpu')}")))
-    except Exception as e:  # a cache is an optimisation: never fail the run over it
+    except (Exception, SystemExit) as e:  # a cache is an optimisation: never fail the run over it
         log(json.dumps(dict(event="compile_cache", used=False, reason=f"{type(e).__name__}: {e}"[:300])))
     return None
 

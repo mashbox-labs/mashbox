@@ -18,6 +18,9 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+from ...runtime import activation_edits as AE
+from ...runtime.activation_edits import ActivationEdits  # noqa: F401  (the engine interface; re-exported for model users)
+
 f32, bf16 = jnp.float32, jnp.bfloat16
 HI = lax.Precision.HIGHEST
 CHUNK = 64
@@ -62,12 +65,17 @@ class Config:
 
 
 # ---------------------------------------------------------------------------------------------------------------- math
-def linear(x, w):
-    """(.., in) x (out, in) with f32 accumulation, rounded to x.dtype. w = bf16 array or {"q": int8, "s": f32 (out,)}."""
+def linear(x, w, pj=None):
+    """(.., in) x (out, in) with f32 accumulation, rounded to x.dtype. w = bf16 array or {"q": int8, "s": f32 (out,)}.
+    pj (activation edits only): a function on the f32 output before the rounding; None = the plain ops."""
     if isinstance(w, dict):
         y = lax.dot_general(x, w["q"].astype(x.dtype), (((x.ndim - 1,), (1,)), ((), ())), preferred_element_type=f32)
-        return (y * w["s"]).astype(x.dtype)
-    return lax.dot_general(x, w, (((x.ndim - 1,), (1,)), ((), ())), preferred_element_type=f32).astype(x.dtype)
+        if pj is None:
+            return (y * w["s"]).astype(x.dtype)
+        return pj(y * w["s"]).astype(x.dtype)
+    if pj is None:
+        return lax.dot_general(x, w, (((x.ndim - 1,), (1,)), ((), ())), preferred_element_type=f32).astype(x.dtype)
+    return pj(lax.dot_general(x, w, (((x.ndim - 1,), (1,)), ((), ())), preferred_element_type=f32)).astype(x.dtype)
 
 
 def rms_norm(x, w, eps):
@@ -98,10 +106,19 @@ def softplus(x):   # torch softplus(beta=1, threshold=20)
     return jnp.where(x > 20.0, x, jnp.log1p(jnp.exp(jnp.minimum(x, 20.0))))
 
 
-def embed(E, toks):
+def embed(E, toks, pj=None):
+    """Embedding rows of toks. pj (activation edits only): a function on the rows in f32 before the rounding."""
     if isinstance(E, dict):
-        return (E["q"][toks].astype(f32) * E["s"][toks][..., None]).astype(bf16)
-    return E[toks]
+        if pj is None:
+            return (E["q"][toks].astype(f32) * E["s"][toks][..., None]).astype(bf16)
+        return pj(E["q"][toks].astype(f32) * E["s"][toks][..., None]).astype(bf16)
+    if pj is None:
+        return E[toks]
+    return pj(E[toks].astype(f32)).astype(bf16)
+
+
+# Activation edits (mashbox.runtime.activation_edits, the engine interface): the sites this model runs.
+ACTIVATION_EDIT_SITES = AE.SITES
 
 
 def gated_delta_chunk(q, k, v, g, beta, s0, CH=CHUNK):
@@ -253,7 +270,8 @@ def kv_write_group(Kc, Vc, g, slots, pos, k, v):
     return (Kc.at[g, slots[:, None], pos].set(k, mode="drop"), Vc.at[g, slots[:, None], pos].set(v, mode="drop"))
 
 
-def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_one, kv_in_loop=False, kv_write_g=kv_write_group):
+def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_one, kv_in_loop=False, kv_write_g=kv_write_group,
+                 edits=None):
     """-> forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False) -> dict(ck, cv, nxt, lg).
 
     toks (B, T) int32 at positions p0 + 0..T-1 (lens = valid tokens per row, rows padded on the right), slots (B,) = state
@@ -266,7 +284,10 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
     kv_in_loop (tensor parallel): the K/V cache rides in the layer-loop carry and each group writes its K/V in place inside
     the loop (kv_write_g), the JetStream / MaxText decode layout. Off (one chip): the cache is read inside the loop and
     written once after it, as before. With the cache read-only inside the loop and updated after it, XLA on TPU copies the
-    whole cache twice per decode program (v5e-4, ctx 32768 x 8 slots: 9.02 GiB temp per chip)."""
+    whole cache twice per decode program (v5e-4, ctx 32768 x 8 slots: 9.02 GiB temp per chip).
+    edits: an ActivationEdits (mashbox.runtime.activation_edits) = forward takes ed= and returns out["edit_reads"]; None = no edit site at all, the
+    program is the one built without the argument."""
+    AE.check_make_forward_args(edits, kv_in_loop)
     L, D, H, KV, HD, V = c.L, c.D, c.H, c.KV, c.HD, c.V
     FI, NG, RD = c.FI, c.NG, c.RD
     HK, HV, DK, DV, CK = c.HK, c.HV, c.DK, c.DV, c.CK
@@ -282,9 +303,16 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
             return {k: at(v, i) for k, v in t.items()}
         return jax.tree_util.tree_map(lambda a: a[i], t)
 
-    def forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, verify=False, hidden=False):
+    def forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, verify=False, hidden=False, keep=None,
+                ed=None):
+        """keep (B,) bool or None: rows whose linear-attention state this call may change; the state rows of the others
+        (padding rows of a decode bucket, rows paused mid-prefill) are written back as they were. The verify pass writes no
+        linear state (speculative decoding commits the accepted part after it), so it takes no keep.
+        ed: the activation-edit operand (make_forward(edits=...) only)."""
+        AE.check_forward_args(edits, ed, verify)
         B, T = toks.shape
         assert not verify or (contig and not kv_in_loop), "verify runs on contig rows, one chip"
+        assert not (verify and keep is not None), "the verify pass takes no keep mask"
         Kc, Vc = ck
         R0, C0 = cv
         kern = decode_kernels.get(B) if (decode_kernels and contig and T == 1 and not verify) else None
@@ -301,9 +329,14 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
         else:
             mask = m2
         fresh = p0 == 0
-        x = embed(W["embed"], toks)
+        if edits is None:
+            x = embed(W["embed"], toks)
+        else:
+            ctx = dict(pos=pos, valid=valid, slots=slots, p0=p0, lens=lens)
+            e_call, e_lay = AE.split_op(ed)
+            x = embed(W["embed"], toks, edits.writer("embed", -1, e_call, None, ctx))
 
-        def lin_attn(h, w, r0, c0, pool=None, layer=None):
+        def lin_attn(h, w, r0, c0, pool=None, layer=None, pj=None):
             qkv = linear(h, w["qkv"])
             z = linear(h, w["z"]).reshape(B, T, HV, DV)
             bb, aa = linear(h, w["b"]), linear(h, w["a"])
@@ -329,9 +362,9 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
             else:
                 o, r1 = gated_delta(qr, kr, v, gg, beta, r0)
             o = rms_norm_gated(o.astype(bf16), z, w["nw"], eps).reshape(B, T, VD)
-            return linear(o, w["out"]), r1, c1
+            return linear(o, w["out"], pj), r1, c1
 
-        def full_attn(h, w, g, Kl=None, Vl=None):
+        def full_attn(h, w, g, Kl=None, Vl=None, pj=None):
             qg = linear(h, w["wq"]).reshape(B, T, H, 2 * HD)
             q, gate = qg[..., :HD], qg[..., HD:].reshape(B, T, H * HD)
             k, v = linear(h, w["wk"]).reshape(B, T, KV, HD), linear(h, w["wv"]).reshape(B, T, KV, HD)
@@ -340,12 +373,21 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
             o = attend(Kc if Kl is None else Kl, Vc if Vl is None else Vl, g, q.reshape(B, T, KV, G, HD), k, v, mask, slots, Tc,
                        scale).reshape(B, T, H * HD)
             o = o * jax.nn.sigmoid(gate.astype(f32)).astype(bf16)
-            return linear(o, w["wo"]), k, v
+            return linear(o, w["wo"], pj), k, v
 
         def mlp(x, wm, i):
             h = rms_norm(x, wm["ln2"][i], eps)
             a = jax.nn.silu(linear(h, at(wm["wg"], i)).astype(f32)).astype(bf16) * linear(h, at(wm["wu"], i))
             return x + linear(a, at(wm["wd"], i))
+
+        def mlp_edited(x, wm, i, l, lay):
+            """mlp with the act, writer("mlp") and resid sites -> (x, reads)."""
+            h = rms_norm(x, wm["ln2"][i], eps)
+            a = jax.nn.silu(linear(h, at(wm["wg"], i)).astype(f32)).astype(bf16) * linear(h, at(wm["wu"], i))
+            a, ra = edits.act(l, e_call, lay, a, ctx)
+            x = x + linear(a, at(wm["wd"], i), edits.writer("mlp", l, e_call, lay, ctx))
+            x, rr = edits.resid(l, e_call, lay, x, ctx)
+            return x, AE.merge_reads(ra, rr)
 
         def group(carry, xg):
             if kv_in_loop:
@@ -354,6 +396,7 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
                 x, R, C = carry
             g, w = xg["g"], xg["w"]
             rl, cl = [], []
+            erl = []                  # activation-edit reads of the group's layers (edits only)
             if contig:
                 Cg = lax.dynamic_slice(C, (g, 0, 0, 0, 0), (1, FI - 1, B) + C.shape[3:])[0]
                 if kern is not None:
@@ -362,38 +405,58 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
                 else:
                     Rg = lax.dynamic_slice(R, (g, 0, 0, 0, 0, 0), (1, FI - 1, B) + R.shape[3:])[0]
                     Rg, Cg = lax.optimization_barrier((Rg, Cg))
+                    Rg0 = Rg
                     Rg = jnp.where(fresh[None, :, None, None, None], 0.0, Rg)
+                Cg0 = Cg
                 Cg = jnp.where(fresh[None, :, None, None], jnp.zeros((), C.dtype), Cg)
             else:
                 gi = jnp.full((FI - 1, B), g, jnp.int32)
                 ii = jnp.broadcast_to(jnp.arange(FI - 1, dtype=jnp.int32)[:, None], (FI - 1, B))
                 si = jnp.broadcast_to(slots[None, :], (FI - 1, B))
                 Rg, Cg = lax.optimization_barrier((R[gi, ii, si], C[gi, ii, si]))
+                Rg0, Cg0 = Rg, Cg
                 Rg = jnp.where(fresh[None, :, None, None, None], 0.0, Rg)
                 Cg = jnp.where(fresh[None, :, None, None], jnp.zeros((), C.dtype), Cg)
             for i in range(FI):
                 h = rms_norm(x, w["mlp"]["ln1"][i], eps)
+                if edits is not None:
+                    l_ = g * FI + i
+                    lay = None if e_lay is None else jax.tree_util.tree_map(lambda a: a[i], xg["ed"])
+                    pj = edits.writer("attn", l_, e_call, lay, ctx)
+                else:
+                    pj = None
                 if i < FI - 1:
                     if kern is not None:
-                        o, R, c1 = lin_attn(h, at(w["lin"], i), None, Cg[i], pool=R, layer=g * (FI - 1) + i)
+                        o, R, c1 = lin_attn(h, at(w["lin"], i), None, Cg[i], pool=R, layer=g * (FI - 1) + i, pj=pj)
                     else:
-                        o, r1, c1 = lin_attn(h, at(w["lin"], i), Rg[i], Cg[i])
+                        o, r1, c1 = lin_attn(h, at(w["lin"], i), Rg[i], Cg[i], pj=pj)
                         rl.append(r1 if verify else r1.astype(R0.dtype))
                     cl.append(c1 if verify else c1.astype(C0.dtype))
                 elif kv_in_loop:
                     o, k, v = full_attn(h, w["full"], g, Kl, Vl)
                     Kl, Vl = kv_write_g(Kl, Vl, g, slots, pos, k, v)
                 else:
-                    o, k, v = full_attn(h, w["full"], g)
-                x = mlp(x + o, w["mlp"], i)
+                    o, k, v = full_attn(h, w["full"], g, pj=pj)
+                if edits is None:
+                    x = mlp(x + o, w["mlp"], i)
+                else:
+                    x, er = mlp_edited(x + o, w["mlp"], i, l_, lay)
+                    erl.append(er)
+            km = None if keep is None else keep[None, :, None, None]
             if kern is not None:
-                C = lax.dynamic_update_slice(C, lax.optimization_barrier(jnp.stack(cl))[None], (g, 0, 0, 0, 0))
+                Cn = jnp.stack(cl) if km is None else jnp.where(km, jnp.stack(cl), Cg0)
+                C = lax.dynamic_update_slice(C, lax.optimization_barrier(Cn)[None], (g, 0, 0, 0, 0))
+                if edits is not None:
+                    return (x, R, C), dict(k=k, v=v, er={n: jnp.stack([e[n] for e in erl]) for n in erl[0]})
                 return (x, R, C), dict(k=k, v=v)
             if verify:
                 rec = jax.tree.map(lambda *a: jnp.stack(a), *rl)
                 rec["x"] = jnp.stack(cl)
                 return (x, R, C), dict(k=k, v=v, rec=rec)
-            Rn, Cn = lax.optimization_barrier((jnp.stack(rl), jnp.stack(cl)))
+            Rn, Cn = jnp.stack(rl), jnp.stack(cl)
+            if km is not None:
+                Rn, Cn = jnp.where(km[..., None], Rn, Rg0), jnp.where(km, Cn, Cg0)
+            Rn, Cn = lax.optimization_barrier((Rn, Cn))
             if contig:
                 R = lax.dynamic_update_slice(R, Rn[None], (g, 0, 0, 0, 0, 0))
                 C = lax.dynamic_update_slice(C, Cn[None], (g, 0, 0, 0, 0))
@@ -401,9 +464,13 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
                 R, C = R.at[gi, ii, si].set(Rn), C.at[gi, ii, si].set(Cn)
             if kv_in_loop:
                 return (x, R, C, Kl, Vl), None
+            if edits is not None:
+                return (x, R, C), dict(k=k, v=v, er={n: jnp.stack([e[n] for e in erl]) for n in erl[0]})
             return (x, R, C), dict(k=k, v=v)
 
         xs = dict(w=W["g"], g=jnp.arange(NG, dtype=jnp.int32))
+        if edits is not None and e_lay is not None:      # (L, ..) -> (NG, FI, ..): each group scans its FI layers' rows
+            xs["ed"] = jax.tree_util.tree_map(lambda a: a.reshape((NG, FI) + a.shape[1:]), e_lay)
         if kern is not None:
             (x, R1, C1), ys = lax.scan(group, (x, R0.reshape((NG * (FI - 1),) + R0.shape[2:]), C0), xs)
             R1 = R1.reshape(R0.shape)
@@ -414,6 +481,8 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
         if not kv_in_loop:
             Kc, Vc = kv_write(Kc, Vc, slots, pos, ys["k"], ys["v"])
         out = dict(ck=(Kc, Vc), cv=(R1, C1))
+        if edits is not None:     # (NG, FI, ..) -> (L, ..)
+            out["edit_reads"] = {n: a.reshape((NG * FI,) + a.shape[2:]) for n, a in ys["er"].items()}
         if verify:                # bf16 logits at every position, as one-token decode computes them for its argmax
             xn = rms_norm(x, W["norm"], eps)
             lg = linear(xn, W["head"])

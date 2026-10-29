@@ -14,19 +14,20 @@ tags:
 <p>
   <a href="https://github.com/mashbox-labs/mashbox"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-mashbox--labs%2Fmashbox-181717?logo=github"></a>
   <a href="https://mashbox.gg/docs/models/hy-nomas"><img alt="Docs" src="https://img.shields.io/badge/Docs-mashbox.gg-ff5a1f"></a>
-  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.2/AGENTS.md"><img alt="AGENTS.md" src="https://img.shields.io/badge/For%20coding%20agents-AGENTS.md-555555"></a>
+  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.3/AGENTS.md"><img alt="AGENTS.md" src="https://img.shields.io/badge/For%20coding%20agents-AGENTS.md-555555"></a>
   <a href="https://x.com/mashboxgg"><img alt="X" src="https://img.shields.io/badge/X-%40mashboxgg-000000?logo=x"></a>
 </p>
 
 ### Read our guide: [run Hy-Nomas on TPU](https://mashbox.gg/docs/models/hy-nomas)
 
-Tencent's open video world model, playable in the browser from a TPU v6e-4. Made by Tencent Hunyuan, ported to TPU by MASHBOX Labs.
+Tencent's open video world model, playable in the browser from a TPU v6e-4. The full pipeline also fits on a single TPU v6e chip (32 GB), at 2.46 s of compute per second of video. Made by Tencent Hunyuan, ported to TPU by MASHBOX Labs.
 
 - **1.045 s (median of 87 and of 27 windows on two chips)**: compute per second of video, quality preset, Tencent decoder, 1.00 = real time, on TPU v6e-4
 - **0.689 s (median of 77 windows)**: compute per second of video, quality preset, MASHBOX Fast decoder, on TPU v6e-4
 - **10 min 40.1 s**: first start on a new chip without a matching compile cache, command to first frame on screen (weights downloaded and in the VM's memory; compiling included), on TPU v6e-4
 - **1 min 14.8 s (median of 5 starts; 1 min 7.2 s to 1 min 43.6 s)**: later starts, command to first frame on screen (weights in the VM's memory), on TPU v6e-4
 - **1 min 20.7 s**: first start on a new chip with the compiled programs from this repo, command to first frame on screen (weights downloaded and in the VM's memory), on TPU v6e-4
+- **2.46 s (60 s run)**: compute per second of video, full pipeline on a single TPU v6e chip (v6e-1, 32 GB), 720p, main model in our 4-bit format; this version of `mashbox run` starts on a v6e-4
 
 <img alt="Hy-Nomas running on Google Cloud TPU" width="720" src="https://huggingface.co/mashbox-labs/Hy-Nomas-TPU/resolve/main/assets/hero.gif">
 
@@ -34,7 +35,7 @@ Tencent's open video world model, playable in the browser from a TPU v6e-4. Made
 
 ## Quickstart
 
-On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.2/AGENTS.md)):
+On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.3/AGENTS.md)):
 
 ```bash
 python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu,hy-nomas]" --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
@@ -52,6 +53,7 @@ The app serves on the VM's 127.0.0.1:8790 only. Connect with `gcloud compute tpu
 | TPU v6e-4 | First start on a new chip without a matching compile cache, command to first frame on screen (weights downloaded and in the VM's memory; compiling included) | 10 min 40.1 s | n/a |
 | TPU v6e-4 | Later starts, command to first frame on screen (weights in the VM's memory) | 1 min 14.8 s (median of 5 starts; 1 min 7.2 s to 1 min 43.6 s) | n/a |
 | TPU v6e-4 | First start on a new chip with the compiled programs from this repo, command to first frame on screen (weights downloaded and in the VM's memory) | 1 min 20.7 s | 10 min 40.1 s without them (about 9 minutes of it compiling), same chip |
+| TPU v6e-1 (one chip, 32 GB) | Compute per second of video, full pipeline on one chip, 720p, main model in our 4-bit format | 2.46 s (60 s run) | 1.00 s = real time |
 
 Each chart names the hardware on both sides.
 
@@ -70,7 +72,7 @@ This port loads the original weights unchanged from [tencent/Hy-Nomas](https://h
 | Chip | Status | Note |
 |---|---|---|
 | TPU v5e | Not supported | runs only on a v6e-4 (a TPU v6e slice of 4 chips) |
-| TPU v6e | Not supported | runs only on a v6e-4 (a TPU v6e slice of 4 chips) |
+| TPU v6e | One chip | the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 |
 | TPU v5p slice (v5p-8) | Not supported | runs only on a v6e-4 (a TPU v6e slice of 4 chips) |
 | TPU v6e slice (v6e-4) | Supported | 4 chips |
 
@@ -86,7 +88,7 @@ Compiled TPU kernels for this model only. `mashbox run` picks the file that matc
 
 |  |  |
 |---|---|
-| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.2/src/mashbox/models/hy_nomas) |
+| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.3/src/mashbox/models/hy_nomas) |
 | Guide | [mashbox.gg/docs/models/hy-nomas](https://mashbox.gg/docs/models/hy-nomas) |
 | Original model | [tencent/Hy-Nomas](https://huggingface.co/tencent/Hy-Nomas) by Tencent Hunyuan |
 | Setup from a new Google account | [mashbox.gg/docs/google-cloud](https://mashbox.gg/docs/google-cloud) |
@@ -94,4 +96,4 @@ Compiled TPU kernels for this model only. `mashbox run` picks the file that matc
 
 ## Licence
 
-Weights: Apache-2.0 licence, from [tencent/Hy-Nomas@4b8b4ed8](https://huggingface.co/tencent/Hy-Nomas/tree/4b8b4ed8ac67bf7ed82a5b80e953af548d82bd8f); code: Apache-2.0 (MASHBOX Labs). [LICENSE](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU/blob/main/LICENSE) in this repo is Tencent Hunyuan's licence file from [tencent/Hy-Nomas](https://huggingface.co/tencent/Hy-Nomas) on Hugging Face, unchanged. Our own weights in this repo: `decoders/hy-nomas-fast-decoder-v1.safetensors` (the MASHBOX Fast Decoder): Apache-2.0. The compiled kernels in `kernels/` are under their own licence: [LICENSE-KERNELS](https://github.com/mashbox-labs/mashbox/blob/v0.1.2/LICENSE-KERNELS). The compile cache in `xla-cache/` is under the same licence.
+Weights: Apache-2.0 licence, from [tencent/Hy-Nomas@4b8b4ed8](https://huggingface.co/tencent/Hy-Nomas/tree/4b8b4ed8ac67bf7ed82a5b80e953af548d82bd8f); code: Apache-2.0 (MASHBOX Labs). [LICENSE](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU/blob/main/LICENSE) in this repo is Tencent Hunyuan's licence file from [tencent/Hy-Nomas](https://huggingface.co/tencent/Hy-Nomas) on Hugging Face, unchanged. Our own weights in this repo: `decoders/hy-nomas-fast-decoder-v1.safetensors` (the MASHBOX Fast Decoder): Apache-2.0. The compiled kernels in `kernels/` are under their own licence: [LICENSE-KERNELS](https://github.com/mashbox-labs/mashbox/blob/v0.1.3/LICENSE-KERNELS). The compile cache in `xla-cache/` is under the same licence.

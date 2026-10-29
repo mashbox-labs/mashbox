@@ -129,7 +129,7 @@ def test_rebinding_page_gets_nothing(world):
     assert call(port, "GET", "/")[0] == 200 and call(port, "GET", "/api/state")[0] == 200   # the plain route is unchanged
 
 
-def test_other_sites_cannot_watch_or_steer(world):
+def test_other_sites_cannot_watch_or_drive(world):
     """any page could open /ws, read the video and stats, send keys and wake an idle-paused session."""
     live, port = world
     live.idle_paused = True

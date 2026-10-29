@@ -99,7 +99,8 @@ def srv():
 
 
 def call(url, method="GET", body=None):
-    """-> (status, parsed body or list of (event name, data) for a stream, content type)."""
+    """-> (status, parsed body or list of (event name, data) for a stream, content type). A text/plain body (GET
+    /metrics) comes back as its text; every other body must parse as JSON."""
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(url, data, {"Content-Type": "application/json"}, method=method)
     try:
@@ -115,6 +116,8 @@ def call(url, method="GET", body=None):
             if d and d != "[DONE]":
                 ev.append((name, json.loads(d)))
         return r.status, ev, ctype
+    if ctype.startswith("text/plain"):
+        return r.status, raw, ctype
     return r.status, (json.loads(raw) if raw else None), ctype
 
 

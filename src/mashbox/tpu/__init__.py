@@ -22,6 +22,7 @@ user of this machine can take the port or the forward and answer in the chip's p
 server answered through our own SSH process. Chip names, zones and projects are checked before any gcloud call.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -33,6 +34,8 @@ import sys
 import tempfile
 import threading
 import time
+import http.client
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -178,8 +181,24 @@ def model(name):
         if key in (m["id"], m["name"].replace(".", "-").lower()):
             if "cloud" not in m:
                 raise Stop(f"{m['id']}: no TPU settings in this version of mashbox")
+            return {k: v for k, v in m.items() if k != "addon"}     # only addon_rows() marks a row as an add-on's
+    for m in addon_rows():
+        if key == m["id"]:
             return m
     raise Stop(f"unknown model {name!r}. Models: " + ", ".join(m["id"] for m in registry()["models"] if "cloud" in m))
+
+
+def addon_rows():
+    """The TPU rows of the MASHBOX app's add-ons (ui/app/addons.py), each marked with "addon" = its add-on's ID. Only in
+    a runtime the app started (MASHBOX_APP_ADDONS lists the add-ons it carries); none elsewhere. An add-on listed there
+    that does not load stops here, as the app itself refuses to start with one."""
+    if not os.environ.get("MASHBOX_APP_ADDONS"):
+        return []
+    from ..ui.app import addons
+    bad = addons.problems()
+    if bad:
+        raise Stop("an add-on of the MASHBOX app did not load: " + "; ".join(bad))
+    return [dict(r, addon=r["module"]) for r in addons.tpu_rows()]
 
 
 def all_zones():
@@ -261,10 +280,12 @@ def qr_node(q):
     return spec.get("nodeId"), spec.get("node") or {}
 
 
-def scan(project, zones, unchanged=True):
-    """Every mashbox node and queued request in these zones: ([(zone, node)], [(zone, qr)])."""
+def scan(project, zones, unchanged=True, names=()):
+    """Every mashbox node and queued request in these zones: ([(zone, node)], [(zone, qr)]). `names`: chips the user
+    named, listed even without our label so the caller can refuse them by name (one_place) instead of creating a second
+    chip with that name or saying there is nothing. The local list (tpu.json) never adds a chip here: it can be stale."""
     out, lock, errs = ([], []), threading.Lock(), []
-    mine = set(load_state())
+    mine = set(names)
 
     def listed(what, z):
         for _ in range(2):                              # one retry: a single failed call must not read as "nothing up"
@@ -279,7 +300,12 @@ def scan(project, zones, unchanged=True):
         return None
 
     def one(z):
-        ns, qs = listed("tpu-vm", z), listed("queued-resources", z)
+        try:
+            ns, qs = listed("tpu-vm", z), listed("queued-resources", z)
+        except Exception as e:                          # never a zone dropped in silence (read as "nothing there")
+            with lock:
+                errs.append((z, str(e)))
+            return
         if ns is None or qs is None:
             return
         with lock:
@@ -313,10 +339,67 @@ def prune(nodes, qrs, zones):
 
 
 def find(project, name, zones, unchanged=True):
-    nodes, qrs = scan(project, zones, unchanged)
-    n = next(((z, x) for z, x in nodes if short(x.get("name")) == name), None)
-    q = next(((z, x) for z, x in qrs if qr_node(x)[0] == name), None)
-    return n, q
+    """Every node and queued request named `name` in these zones, made by mashbox or not: ([(zone, node)], [(zone, qr)])."""
+    nodes, qrs = scan(project, zones, unchanged, [name])
+    return [(z, x) for z, x in nodes if short(x.get("name")) == name], [(z, x) for z, x in qrs if qr_node(x)[0] == name]
+
+
+def made_here(x):
+    """A node or queued request mashbox made: our label on it (or on a queued request's node). Every mashbox create
+    carries that label, so nothing else is proof: a name in this machine's local list (tpu.json) may be from another
+    project or zone, or from a chip deleted since whose name another chip now has."""
+    node = qr_node(x)[1] if "tpu" in x else x
+    return bool((x.get("labels") or {}).get("mashbox") or (node.get("labels") or {}).get("mashbox"))
+
+
+def owner(project, zone, name, what="tpu-vm"):
+    """Describe one node (or queued request) by its exact name: ("gone", None), ("ours", x) with our label,
+    ("foreign", x) without it, or ("unknown", gcloud's error) when it cannot be read (e.g. the sign-in expired)."""
+    r = gc(["compute", "tpus", what, "describe", name, "--zone", zone, "--format=json"], project)
+    if r.returncode:
+        e = (r.stderr or "").lower()
+        return ("gone", None) if ("not_found" in e or "not found" in e) else ("unknown", r.stderr)
+    try:
+        x = json.loads(r.stdout or "")
+    except ValueError:
+        return "unknown", "unreadable gcloud output"
+    if not isinstance(x, dict):
+        return "unknown", "unreadable gcloud output"
+    return ("ours" if made_here(x) else "foreign"), x
+
+
+def still_ours(project, zone, name, what="tpu-vm"):
+    """Described again right before mashbox acts on it by name (install, tunnel, ssh, delete): a list can be minutes
+    old, and a chip of that name may have been deleted and made again without our label since. Returns the fresh
+    description, or Stop (nothing done to it)."""
+    st, x = owner(project, zone, name, what)
+    if st == "ours":
+        return x
+    kind = "queued request" if what == "queued-resources" else "chip"
+    if st == "foreign":
+        raise Stop(f"the {kind} named {name} in {zone} is not the one mashbox listed: one without the mashbox label has "
+                   "that name now; it is left as it is (not used, not deleted)")
+    if st == "gone":
+        raise Stop(f"the {kind} {name} is gone from {zone}")
+    raise Stop(f"could not check the {kind} {name} in {zone} ({gerr(x)}); nothing was done to it")
+
+
+def not_ours(what, name, zone):
+    return Stop(f"a {what} named {name} appeared in {zone} while this command was making one, and it was not made by "
+                "mashbox (no mashbox label); it is left as it is (not used, not deleted). Choose another name with --name")
+
+
+def one_place(name, ns, qs, other):
+    """The chips named `name` (from find) must be mashbox's and in one zone. A chip made outside mashbox is never
+    waited for, used, set up or deleted (it may be someone else's), and a name in two zones is never guessed."""
+    foreign = sorted({z for z, x in ns + qs if not made_here(x)})
+    if foreign:
+        raise Stop(f"a TPU named {name} already exists in {', '.join(foreign)} and was not made by mashbox (no mashbox "
+                   f"label); it is left as it is. {other}")
+    zs = sorted({z for z, _ in ns + qs})
+    if len(zs) > 1:
+        raise Stop(f"chips named {name} are in {', '.join(zs)}. Name the zone: --zone ZONE")
+    return (ns[0] if ns else None), (qs[0] if qs else None)
 
 
 # --------------------------------------------------------------------------------------------------------------- create
@@ -340,6 +423,8 @@ def wait_ready_node(project, zone, name, timeout=900):
     while now() - t0 < timeout:
         x = gj(["compute", "tpus", "tpu-vm", "describe", name, "--zone", zone], project)
         st = (x or {}).get("state")
+        if x and not made_here(x):                       # another chip took the name since: never waited for or used
+            raise not_ours("TPU", name, zone)
         if st == "READY":
             return x
         misses = misses + 1 if x is None else 0          # 3 failed describes in a row: gone (one can be a blip)
@@ -396,7 +481,17 @@ def get_chip(m, a, project, name):
 
 
 def drop_node(project, zone, name):
-    """Delete, by its exact name, a node that a create of this command may have made. True when it is gone or never was."""
+    """Delete, by its exact name, a node that a create of this command may have made. True when it is gone or never was.
+    It is described first and deleted only with our label: after an unclear create answer, a chip of that name may be
+    someone else's (made after the scan), and that one is never deleted (up stops and names it)."""
+    st, x = owner(project, zone, name)
+    if st == "gone":
+        return True
+    if st == "foreign":
+        raise not_ours("TPU", name, zone)
+    if st == "unknown":
+        say(f"  {zone}: {name} could not be checked, so it was NOT deleted: {gerr(x)}")
+        return False
     r = gc(["compute", "tpus", "tpu-vm", "delete", name, "--zone", zone, "--quiet"], project)
     if r.returncode == 0:
         say(f"  {zone}: {name} deleted (the create had gone through)")
@@ -410,7 +505,9 @@ def drop_node(project, zone, name):
 def left_behind(project, zone, name, k):
     return (f"the create of {name} in {zone} may have reached Google, and a chip bills until it is deleted. "
             + (fix(k, project) + ", then delete it: " if k == "auth" else "Delete it: ")
-            + f"mashbox tpu down {name} (or: gcloud compute tpus tpu-vm delete {name} --zone {zone} --project {project} --quiet)")
+            + f"mashbox tpu down {name} (it deletes the chip only if mashbox made it), or, if gcloud compute tpus tpu-vm "
+            f"describe {name} --zone {zone} --project {project} shows the label mashbox=tpu-up: "
+            f"gcloud compute tpus tpu-vm delete {name} --zone {zone} --project {project} --quiet")
 
 
 def queue(m, a, project, name, zones, script):
@@ -444,19 +541,23 @@ def queue(m, a, project, name, zones, script):
         while True:
             for z in list(made):
                 x = gj(["compute", "tpus", "queued-resources", "describe", qr, "--zone", z], project) or {}
+                if x and not made_here(x):               # not the one this command made: never used or deleted
+                    say(f"  {z}: the queued request {qr} there was not made by mashbox (no mashbox label); left as it is")
+                    made.remove(z)
+                    continue
                 st = (x.get("state") or {}).get("state", "UNKNOWN")
                 if st == "ACTIVE":
                     say(f"  {z}: granted after {mins(now() - t0)}")
                     for o in made:
                         if o != z:
-                            delete_qr(project, o, qr)
+                            drop_qr(project, o, qr)
                     made.clear()
                     if not wait_ready_node(project, z, name):
                         raise Stop(f"the granted chip in {z} did not reach READY; take it down: mashbox tpu down {name}")
                     return z, qr
                 if st in ("FAILED", "SUSPENDED"):
                     say(f"  {z}: Google ended the request ({st})")
-                    delete_qr(project, z, qr)
+                    drop_qr(project, z, qr)
                     made.remove(z)
             if not made:
                 raise Stop("every queued request ended without a chip. Try again later, or another zone with --zone")
@@ -471,7 +572,25 @@ def queue(m, a, project, name, zones, script):
         if made:
             say("Deleting the queued requests this command made, so none is granted later:")
             for z in made:
-                delete_qr(project, z, qr)
+                drop_qr(project, z, qr)
+
+
+def drop_qr(project, zone, qr):
+    """Delete a queued request this command may have made (with --force, which deletes its node too), only after
+    describing it: one without our label is left as it is, and one that cannot be read is named, not deleted."""
+    st, x = owner(project, zone, qr, "queued-resources")
+    if st == "gone":
+        say(f"  {zone}: queued request {qr} not there")
+        return True
+    if st == "foreign":
+        say(f"  {zone}: the queued request {qr} there was not made by mashbox (no mashbox label); left as it is")
+        return True
+    if st == "unknown":
+        say(f"  {zone}: queued request {qr} could not be checked ({gerr(x)}), so it was NOT deleted. If it carries the label "
+            f"mashbox=tpu-up, delete it: gcloud compute tpus queued-resources delete {qr} --zone {zone} --project {project} "
+            "--force --quiet")
+        return False
+    return delete_qr(project, zone, qr)
 
 
 def delete_qr(project, zone, qr):
@@ -497,49 +616,170 @@ os.execv(mb, [mb] + run)
 """
 
 
+LAUNCH_ADDON = r"""
+import os, signal, sys
+os.setsid()
+open(os.path.expanduser("~/.mashbox/serve.pid"), "w").write(str(os.getpid()))
+signal.signal(signal.SIGINT, signal.SIG_DFL)    # started with &, SIGINT arrives ignored; Ctrl-C must stop it
+mb, folder, run = sys.argv[1], sys.argv[2], sys.argv[3:]
+py = os.path.join(os.path.dirname(os.path.realpath(os.path.expanduser(mb))), "python")   # the Python mashbox runs in
+os.chdir(folder)
+os.execv(py, [py, "-I", os.path.join(folder, "start.py")] + run)
+"""
+ADDON_CODE = "mashbox-addon-code.tar"
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def addon_files(m, project, zone, name, tmp, files):
+    """An add-on row's payload (addons.tpu_payload) added to the files copied to the chip, and the shell lines that check
+    them there: its code .tar (always sent, sha256 checked, unpacked into a folder named by that sha256) and its data
+    files (sent unless the chip holds ~/.mashbox/data/<sha256> as a regular file, not a link, with that sha256, hashed
+    there; a sent file is checked there, then put under that name in one step, an entry of that name that is a folder
+    first set aside). The start checks every file it did not send again. Returns {"sha": the code's sha256, "check":
+    shell lines, "args": the payload's arguments, "fp": sha256 of the code's, the data files' and the arguments'
+    identity (a change to any of them starts the server again)}."""
+    from ..ui.app import addons
+    try:
+        p = addons.tpu_payload(m, tmp)
+    except Exception as e:  # noqa: BLE001  (the add-on's own error, shown as it is)
+        raise Stop(f"{m['id']}: its add-on gave no usable files for the chip: {e}") from None
+    code = os.path.join(tmp, ADDON_CODE)
+    os.replace(p["code"], code)
+    sha = sha256_file(code)
+    files.append(code)
+    check = (f'got=$(sha256sum ~/{ADDON_CODE} | cut -c1-64)\n'
+             f'[ "$got" = {sha} ] || {{ echo "MBX_ADDON_SHA=code"; exit 5; }}\n')
+    data = [(sha256_file(f), f) for f in p["data"]]
+    have = set()
+    if data:
+        still_ours(project, zone, name)                 # what the chip already holds: asked of the chip of that name, ours
+        probe = ("for h in " + " ".join(h for h, _ in data) + "; do f=~/.mashbox/data/$h; "
+                 '[ -f "$f" ] && [ ! -L "$f" ] && [ "$(sha256sum "$f" | cut -c1-64)" = "$h" ] && echo "MBX_HAVE=$h"; '
+                 "done; true")
+        r = gc(["compute", "tpus", "tpu-vm", "ssh", name, "--zone", zone, "--quiet", "--command", probe], project,
+               timeout=600)
+        have = set(re.findall(r"^MBX_HAVE=([0-9a-f]{64})$", r.stdout, re.M)) if r.returncode == 0 else set()
+    for h, f in data:
+        if h in have:                                   # checked again at the start: what runs is what was hashed
+            check += (f'f=~/.mashbox/data/{h}; [ -f "$f" ] && [ ! -L "$f" ] && '
+                      f'[ "$(sha256sum "$f" | cut -c1-64)" = {h} ] || {{ echo "MBX_ADDON_SHA=data"; exit 5; }}\n')
+            continue
+        link = os.path.join(tmp, f"mashbox-data-{h}")
+        os.symlink(os.path.abspath(f), link)            # scp sends the file a link names
+        files.append(link)
+        check += (f'got=$(sha256sum ~/mashbox-data-{h} | cut -c1-64)\n'
+                  f'[ "$got" = {h} ] || {{ echo "MBX_ADDON_SHA=data"; exit 5; }}\n'
+                  f'mkdir -p ~/.mashbox/data; f=~/.mashbox/data/{h}\n'
+                  f'if [ -d "$f" ] && [ ! -L "$f" ]; then mv -T "$f" "$f.set-aside-$(date +%s)"; fi\n'
+                  f'mv -T -f ~/mashbox-data-{h} "$f"\n')
+    args = list(p.get("args") or [])
+    fp = hashlib.sha256(json.dumps({"code": sha, "data": [h for h, _ in data], "args": args}).encode()).hexdigest()
+    return {"sha": sha, "check": check, "args": args, "fp": fp}
+
+
+WHEEL_FILE = re.compile(r"[A-Za-z0-9_.]+-[A-Za-z0-9_.!+]+(-[A-Za-z0-9_.]+){3,4}\.whl")   # name-version(-build)-py-abi-plat.whl
+
+
+def stage_wheel(wheel, tmp):
+    """MASHBOX_WHEEL (a file here, or an http(s) URL) copied or downloaded once into this run's private folder, and the
+    sha256 of those exact bytes: the chip gets this copy and checks the hash before it installs, so what serve.pkg
+    names is what was installed. Returns (path, sha256)."""
+    u = urllib.parse.urlsplit(wheel)
+    url = u.scheme in ("http", "https")
+    base = urllib.parse.unquote(os.path.basename(u.path)) if url else os.path.basename(wheel)
+    if not WHEEL_FILE.fullmatch(base):
+        raise Stop(f"MASHBOX_WHEEL must be a wheel file or an http(s) URL of one (name-version-py-abi-platform.whl): {wheel}")
+    dst = os.path.join(tmp, base)
+    try:
+        if url:
+            with urllib.request.urlopen(wheel, timeout=300) as r, open(dst, "wb") as f:
+                shutil.copyfileobj(r, f)
+        elif os.path.isfile(wheel):
+            shutil.copyfile(wheel, dst)
+        else:
+            raise Stop(f"MASHBOX_WHEEL names no file on this machine: {wheel}")
+    except (OSError, ValueError, http.client.HTTPException) as e:
+        raise Stop(f"could not {'download' if url else 'copy'} MASHBOX_WHEEL {wheel}: {e}") from None
+    h = hashlib.sha256()
+    with open(dst, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return dst, h.hexdigest()
+
+
 def remote_setup(m, project, zone, name, extra=(), restart=False):
     """Copy install.sh (and staging files), install, check disk, start the server unless it runs. Returns dict."""
     c = m["cloud"]
     tmp = tempfile.mkdtemp(prefix="mashbox-tpu-")
+    check = ""
     try:
         files = [os.path.join(tmp, "mashbox-install.sh")]
         with open(files[0], "w") as f:
             f.write(resources.files("mashbox.tpu").joinpath("install.sh").read_text())
-        env = dict(MASHBOX_EXTRAS=c.get("extras", "tpu"))
+        env = dict(MASHBOX_EXTRAS=shlex.quote(c.get("extras", "tpu")))     # values as the shell reads them
         wheel = os.environ.get("MASHBOX_WHEEL", "")
-        if wheel and os.path.isfile(wheel):                 # pre-release tests: a wheel on this machine
-            files.append(os.path.abspath(wheel))
-            env["MASHBOX_WHEEL"] = "$HOME/" + os.path.basename(wheel)
-        elif wheel:
-            env["MASHBOX_WHEEL"] = wheel
+        if wheel:                                           # pre-release tests, the Mac app's own wheel
+            staged, sha = stage_wheel(wheel, tmp)
+            files.append(staged)
+            w = '"$HOME"/' + shlex.quote(os.path.basename(staged))
+            env["MASHBOX_WHEEL"] = w
+            pkg = "wheel sha256=" + sha
+            check = (f'got=$(sha256sum {w} | cut -c1-64)\n'
+                     f'[ "$got" = {sha} ] || {{ echo "MBX_WHEEL_SHA=$got"; exit 4; }}   # the bytes this machine hashed\n')
         else:
             from .. import __version__
-            env["MASHBOX_VERSION"] = __version__
+            env["MASHBOX_VERSION"] = shlex.quote(__version__)
+            pkg = "mashbox==" + __version__
         if os.environ.get("MASHBOX_INDEX_URL"):
-            env["MASHBOX_INDEX_URL"] = os.environ["MASHBOX_INDEX_URL"]
+            env["MASHBOX_INDEX_URL"] = shlex.quote(os.environ["MASHBOX_INDEX_URL"])
         tok = os.environ.get("MASHBOX_HF_TOKEN_FILE")       # pre-release tests: private Hugging Face repo
         if tok:
             files.append(os.path.join(tmp, "mashbox-hf-token"))
             shutil.copyfile(tok, files[-1])
+        addon = addon_files(m, project, zone, name, tmp, files) if m.get("addon") else None
+        if addon:                                       # a changed payload starts the server again, as a changed wheel does
+            pkg += f" + {m['id']} sha256={addon['sha']} payload={addon['fp']}"
+            check += addon["check"]
         t0 = now()
+        still_ours(project, zone, name)                 # the copy goes to the chip of that name: ours, now
         r = gc(["compute", "tpus", "tpu-vm", "scp"] + files + [f"{name}:", "--zone", zone, "--quiet"], project)
         if r.returncode:
             raise Stop("could not copy files to the chip: " + r.stderr.strip()[-300:])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    run = shlex.split(m["run"])[1:] + list(extra)
-    envs = " ".join(f"{k}={v if v.startswith('$HOME/') else shlex.quote(v)}" for k, v in env.items())
+    run = (addon["args"] if addon else shlex.split(m["run"])[1:]) + list(extra)
+    want = shlex.join(run)          # the server's command line (model and settings): a running one is kept only if equal
+    envs = " ".join(f"{k}={v}" for k, v in env.items())
+    if addon:                                           # unpacked once per sha256 into its own folder, then started
+        d = f'"$HOME"/.mashbox/addon/{shlex.quote(m["id"])}-{addon["sha"][:16]}'
+        launch = (f'[ -d {d} ] || {{ mkdir -p {d}.part && tar -xf ~/{ADDON_CODE} -C {d}.part && mv {d}.part {d}; }}\n'
+                  f'nohup python3 -c {shlex.quote(LAUNCH_ADDON)} {REMOTE_MB} {d}')
+    else:
+        launch = f"nohup python3 -c {shlex.quote(LAUNCH)} {REMOTE_MB} {shlex.quote(m['id'])}"
     script = f"""set -e
 mkdir -p ~/.mashbox
 if [ -f ~/mashbox-hf-token ]; then mkdir -p ~/.cache/huggingface; [ -s ~/.cache/huggingface/token ] || cp ~/mashbox-hf-token ~/.cache/huggingface/token; chmod 600 ~/.cache/huggingface/token; rm -f ~/mashbox-hf-token; fi
-{envs} sh ~/mashbox-install.sh > ~/.mashbox/install.log 2>&1 || {{ tail -n 20 ~/.mashbox/install.log; exit 3; }}
+{check}{envs} sh ~/mashbox-install.sh > ~/.mashbox/install.log 2>&1 || {{ tail -n 20 ~/.mashbox/install.log; exit 3; }}
 grep '^mashbox install:' ~/.mashbox/install.log | sed 's/^/    /' || true
 free=$(df -Pk ~ | awk 'NR==2{{print int($4/976562)}}')
-used=$(du -sk ~/.cache/huggingface ~/.cache/mashbox 2>/dev/null | awk '{{s+=$1}} END{{print int(s/976562)}}')
+used=$(du -sk ~/.cache/huggingface ~/.cache/mashbox ~/.mashbox/data 2>/dev/null | awk '{{s+=$1}} END{{print int(s/976562)}}')
 echo "MBX_DISK free_gb=$free have_gb=$((free + used))"
+pkg={shlex.quote(pkg)}
+want={shlex.quote(want)}
 pid=$(cat ~/.mashbox/serve.pid 2>/dev/null || true)
 if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-  if [ {int(restart)} = 0 ]; then echo "MBX_SERVER=running"; echo "MBX_ARGS=$(cat ~/.mashbox/serve.args 2>/dev/null)"; exit 0; fi
+  ran=$(cat ~/.mashbox/serve.pkg 2>/dev/null || echo unknown)   # the mashbox it was started from
+  had=$(cat ~/.mashbox/serve.args 2>/dev/null || true)          # and its model and settings
+  if [ {int(restart)} = 0 ] && [ "$ran" = "$pkg" ] && [ "$had" = "$want" ]; then echo "MBX_SERVER=running"; echo "MBX_ARGS=$had"; exit 0; fi
+  if [ "$ran" != "$pkg" ]; then echo "MBX_STALE=$ran"     # the install above replaced the package under it: start it again
+  elif [ "$had" != "$want" ]; then echo "MBX_CHANGED=$had"; fi   # another model or other settings: start it again
   kill -INT -- "-$pid"; i=0                       # Ctrl-C to its process group, never SIGTERM
   while kill -0 "$pid" 2>/dev/null && [ $i -lt 300 ]; do sleep 1; i=$((i+1)); done
   if kill -0 "$pid" 2>/dev/null; then echo MBX_SERVER=stuck; exit 0; fi
@@ -547,15 +787,23 @@ if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
 fi
 if [ $((free + used)) -lt {int(c.get("disk_gb", 0))} ]; then echo MBX_SERVER=disk; exit 0; fi
 echo "=== start $(date -u +%FT%TZ)" >> ~/.mashbox/serve.log
-echo {shlex.quote(' '.join(run))} > ~/.mashbox/serve.args
-nohup python3 -c {shlex.quote(LAUNCH)} {REMOTE_MB} {shlex.quote(m['id'])} {' '.join(shlex.quote(x) for x in run)} >> ~/.mashbox/serve.log 2>&1 < /dev/null &
+printf '%s\n' "$want" > ~/.mashbox/serve.args
+echo "$pkg" > ~/.mashbox/serve.pkg
+{launch} {' '.join(shlex.quote(x) for x in run)} >> ~/.mashbox/serve.log 2>&1 < /dev/null &
 echo MBX_SERVER=started
 """
+    still_ours(project, zone, name)                     # described again after the copy: the install goes to it only
     r = gc(["compute", "tpus", "tpu-vm", "ssh", name, "--zone", zone, "--quiet", "--command", script], project)
     out = r.stdout + r.stderr
     for line in r.stdout.splitlines():
         if line.startswith("    mashbox install:") and "next:" not in line and "not on your PATH" not in line:
             say(line)
+    bad = re.search(r"^MBX_WHEEL_SHA=(\S*)", r.stdout, re.M)
+    if r.returncode and bad:
+        raise Stop(f"the wheel on the chip is not the one sent from here (sha256 {bad.group(1)[:16] or 'none'}... there, "
+                   f"{pkg.split('=', 1)[1][:16]}... here); nothing was installed")
+    if r.returncode and re.search(r"^MBX_ADDON_SHA=", r.stdout, re.M):
+        raise Stop("the add-on files on the chip are not the ones sent from here; nothing was started. Press Start again")
     if r.returncode:
         raise Stop("install on the chip failed:\n" + out.strip()[-1500:])
     res = dict(seconds=now() - t0)
@@ -564,6 +812,10 @@ echo MBX_SERVER=started
             res["server"] = line.split("=", 1)[1].strip()
         if line.startswith("MBX_ARGS="):
             res["args"] = line.split("=", 1)[1].strip()
+        if line.startswith("MBX_STALE="):
+            res["stale"] = line.split("=", 1)[1].strip()
+        if line.startswith("MBX_CHANGED="):
+            res["changed"] = line.split("=", 1)[1].strip()
         if line.startswith("MBX_DISK"):
             res.update(kv.split("=") for kv in line.split()[1:])
     if res.get("server") == "stuck":
@@ -589,6 +841,7 @@ def life_check(project, zone, name, qr):
     """Can the chip delete itself? DELETE on a random name that does not exist: 404 = allowed, 403 = not allowed."""
     script = PROBE.format(p=shlex.quote(project), z=shlex.quote(zone), q=shlex.quote(qr or ""), r=uuid.uuid4().hex[:12])
     for _ in range(4):                                  # the startup script may still be running right after boot
+        still_ours(project, zone, name)
         r = gc(["compute", "tpus", "tpu-vm", "ssh", name, "--zone", zone, "--quiet", "--command", script], project)
         v = dict(line.split("=", 1) for line in r.stdout.splitlines() if line.startswith("MBX_") and "=" in line)
         if v.get("MBX_ARMED", "0").strip() not in ("", "0"):
@@ -606,10 +859,29 @@ def sa_fix(project):
 
 
 # --------------------------------------------------------------------------------------------------------------- tunnel
+SUN_MAX = 103 if sys.platform == "darwin" else 107    # bytes a Unix socket path may have (sun_path less its NUL)
+SHORT_BASES = ("/tmp",)                               # when TMPDIR is too long for a socket path in it
+
+
+def private_dir():
+    """A new 0700 directory for the forward's socket ("s"), in TMPDIR, or under /tmp when a socket path in TMPDIR would
+    be longer than the system allows (ssh could not bind it and would fail again on every retry)."""
+    for base in (None,) + SHORT_BASES:
+        if len(os.fsencode(os.path.join(base or tempfile.gettempdir(), "mbx-xxxxxxxx", "s"))) <= SUN_MAX:
+            return tempfile.mkdtemp(prefix="mbx-", dir=base)
+    raise Stop(f"no folder for the tunnel's private socket: a socket path in TMPDIR ({tempfile.gettempdir()}) or "
+               f"{', '.join(SHORT_BASES)} would be longer than {SUN_MAX} bytes. Set TMPDIR to a short folder and try again")
+
+
 class Port:
-    """127.0.0.1:port, bound by this process from the first check to the end of the session, and relayed to the SSH
+    """127.0.0.1:port, bound by this process from the first check until it exits (release()), and relayed to the SSH
     forward's Unix socket (self.sock, in a 0700 directory of this user). Another local user can neither bind the port
-    (it is never released, not even while a dropped tunnel is reopened) nor reach or replace the socket."""
+    (it is never released, not even while a dropped tunnel is reopened) nor reach or replace the socket. Nothing is
+    relayed until open() (after the chip's server passed the guard check through the socket): a page in a browser
+    that keeps calling the port cannot reach a server before that check, or a reopened forward before its new check.
+    Each shut() starts a new forward generation and cuts the relays in flight; a relay checks again after it connected
+    (same generation, still open) before any byte moves, so one that paused across a reopen never reaches the new
+    forward unchecked."""
 
     def __init__(self, port):
         self.ls = socket.socket()
@@ -620,10 +892,35 @@ class Port:
         except OSError:
             self.ls.close()
             raise
-        self.dir = tempfile.mkdtemp(prefix="mbx-")                          # mode 0700; made once the port is ours
+        try:
+            self.dir = private_dir()                                        # mode 0700; made once the port is ours
+        except Stop:
+            self.ls.close()
+            raise
         self.sock = os.path.join(self.dir, "s")
         self.port = port
+        self.ok = threading.Event()                                         # set by open(), cleared by shut()
+        self.gen = 0                                                        # +1 at each shut(): one per forward
+        self.lock = threading.Lock()
+        self.live = set()                                                   # (local, socket) pairs relaying now
         threading.Thread(target=self.accept, daemon=True).start()
+
+    def open(self):
+        with self.lock:
+            self.ok.set()
+
+    def shut(self):
+        """Nothing new is relayed, and every relay in flight is cut: its forward is gone or has not passed its check."""
+        with self.lock:
+            self.ok.clear()
+            self.gen += 1
+            live, self.live = self.live, set()
+        for pair in live:
+            for x in pair:
+                try:
+                    x.shutdown(socket.SHUT_RDWR)                            # wakes its pipes; the relay closes it
+                except OSError:
+                    pass
 
     def accept(self):
         while True:
@@ -634,10 +931,24 @@ class Port:
             threading.Thread(target=self.relay, args=(c,), daemon=True).start()
 
     def relay(self, c):
+        with self.lock:
+            g = self.gen if self.ok.is_set() else None
+        if g is None:                                                       # not checked yet: closed, never queued
+            c.close()
+            return
         u = socket.socket(socket.AF_UNIX)
         try:
             u.connect(self.sock)
         except OSError:                                                     # no forward yet (starting, reopening)
+            u.close()
+            c.close()
+            return
+        with self.lock:                                                     # reopened while this connected: the socket
+            if self.ok.is_set() and self.gen == g:                          # may be a forward not checked yet (or one
+                self.live.add((c, u))                                       # checked after this relay's own check)
+            else:
+                g = None
+        if g is None:
             u.close()
             c.close()
             return
@@ -660,10 +971,21 @@ class Port:
         t.start()
         pipe(c, u)
         t.join()
+        with self.lock:
+            self.live.discard((c, u))
         u.close()
         c.close()
 
+    def release(self):
+        """End of the session: nothing is relayed any more and the private socket directory is removed, but the port
+        stays bound until this process exits (the kernel frees it then). So while this process runs, nothing else can
+        listen on the port: the Mac app takes "its tunnel job still runs after I connected" as proof that the
+        connection reached this port (ui/app reach()), and a port freed before the exit would break that."""
+        self.shut()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
     def close(self):
+        self.shut()
         try:
             self.ls.shutdown(socket.SHUT_RDWR)                              # wakes the accept() thread (Linux)
         except OSError:
@@ -682,10 +1004,18 @@ def free_port(p):
     raise Stop(f"ports {p} to {p + 19} on 127.0.0.1 are all in use here")
 
 
-TUNNEL_FAIL = ("forwarding failed", "cannot listen", "address already in use", "bind:", "port forwarding failed")
+TUNNEL_FAIL = ("forwarding failed", "cannot listen", "address already in use", "bind:", "port forwarding failed",
+               "could not request local forwarding", "unix_listener", "too long for unix domain socket")
 
 
 def open_tunnel(project, zone, name, rport, lp):
+    """The SSH forward to the chip of that name, described right before (ours, now): Stop otherwise, nothing opened."""
+    still_ours(project, zone, name)
+    return forward(project, zone, name, rport, lp)
+
+
+def forward(project, zone, name, rport, lp):
+    """The SSH forward itself. Callers describe the chip right before (open_tunnel, _hold)."""
     cmd = [gcloud(), "compute", "tpus", "tpu-vm", "ssh", name, "--zone", zone, "--project", project, "--quiet", "--",
            "-N", "-L", f"{lp.sock}:127.0.0.1:{rport}", "-o", "ExitOnForwardFailure=yes", "-o", "StreamLocalBindUnlink=yes",
            "-o", "ServerAliveInterval=30"]
@@ -702,18 +1032,61 @@ def forward_failed(tun):
             bad = [x.strip() for x in f.read().splitlines() if any(w in x.lower() for w in TUNNEL_FAIL)]
     except OSError:
         return None
-    return bad[-1][:300] if bad else None
+    return " ".join(dict.fromkeys(bad))[-500:] if bad else None    # every line: the cause comes before the last one
 
 
-def up_http(url):
+class _Unix(http.client.HTTPConnection):
+    def __init__(self, path, timeout):
+        super().__init__("127.0.0.1", timeout=timeout)
+        self.unix = path
+
+    def connect(self):
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(self.timeout)
+        try:
+            s.connect(self.unix)
+        except OSError:
+            s.close()
+            raise
+        self.sock = s
+
+
+def sock_get(lp, path, origin=None, timeout=5):
+    """GET through the forward's private socket, as a client of 127.0.0.1:<port> would send it: the HTTP status, or
+    None when nothing answered (no forward, no server, not HTTP)."""
+    c = _Unix(lp.sock, timeout)
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
-            return r.status == 200
-    except Exception:
-        return False
+        c.request("GET", path, headers={"Host": f"127.0.0.1:{lp.port}", **({"Origin": origin} if origin else {})})
+        r = c.getresponse()
+        r.read(65536)
+        return r.status
+    except (OSError, http.client.HTTPException, ValueError):
+        return None
+    finally:
+        c.close()
+
+
+GUARD_CHECK = "http://mashbox-guard-check.invalid"      # an Origin no guard allows: another web site's page
+
+
+def guard_check(lp, path):
+    """What the chip's server answers a request a page on another web site would send. A server with mashbox's request
+    guard refuses it (403; 401 when it wants a key first). Anything else (an answer, a 404 from a server without the
+    route, no answer) means no guard: any page open in a browser could use it through 127.0.0.1."""
+    st = sock_get(lp, path, GUARD_CHECK)
+    return st in (401, 403), st
+
+
+def unguarded_stop(m, name, st):
+    return (f"the server on {name} did not refuse a request from another web site "
+            f"({'HTTP %d' % st if st else 'no answer'}; a guarded mashbox server answers 403), so any page open in a "
+            f"browser could use it through 127.0.0.1. The local port was not opened. Start the server again with this "
+            f"mashbox: mashbox tpu up {m['id']} --name {name} --restart. The chip is still up and billing: "
+            f"mashbox tpu down {name}")
 
 
 def remote_tail(project, zone, name):
+    still_ours(project, zone, name)                     # minutes after the tunnel opened: is that name still ours?
     r = gc(["compute", "tpus", "tpu-vm", "ssh", name, "--zone", zone, "--quiet", "--command",
             "pid=$(cat ~/.mashbox/serve.pid 2>/dev/null); kill -0 \"$pid\" 2>/dev/null && echo MBX_ALIVE=1 || echo MBX_ALIVE=0; "
             "tail -n 15 ~/.mashbox/serve.log"], project, timeout=60)
@@ -723,42 +1096,45 @@ def remote_tail(project, zone, name):
 
 def wait_server(project, zone, name, m, lp):
     """Ready = our SSH process is running and the chip's server answered through its forward (our Port relays to our
-    socket only). A forward SSH could not set up stops here with its message, never a silent retry."""
+    socket only). A forward SSH could not set up stops here with its message, never a silent retry. Every forward and
+    every look at the chip's log first describes the chip again (open_tunnel, remote_tail): ours, now. Any stop closes
+    the forward."""
     c = m["cloud"]
-    url = f"http://127.0.0.1:{lp.port}{c.get('health', '/')}"
+    health = c.get("health", "/")
     tun, t0, last = open_tunnel(project, zone, name, c["port"], lp), now(), now()
     say(f"Starting the server on the chip (first start downloads the model; measured times: docs/models/{m['id']}.md).")
-    while not (tun.poll() is None and up_http(url)):
-        if tun.poll() is not None:
-            bad = forward_failed(tun)
-            if bad:
-                raise Stop(f"the SSH tunnel could not open its forward ({bad}). The chip is still up and billing: "
-                           f"mashbox tpu down {name}")
-            tun = open_tunnel(project, zone, name, c["port"], lp)
-        if now() - last >= 60:
-            alive, tail = remote_tail(project, zone, name)
-            line = next((x for x in reversed(tail) if x.strip()), "")
-            say(f"  {mins(now() - t0)} so far: {line[:150]}")
-            if not alive:
-                tun.terminate()
-                raise Stop("the server on the chip stopped. Last lines of ~/.mashbox/serve.log:\n" + "\n".join(tail)
-                           + f"\nThe chip is still up and billing: mashbox tpu down {name}")
-            last = now()
-        if now() - t0 > READY_MIN * 60:
-            tun.terminate()
-            raise Stop(f"the server was not ready after {READY_MIN} min. Log: mashbox tpu ssh {name}, then "
-                       f"tail ~/.mashbox/serve.log. The chip is still up and billing: mashbox tpu down {name}")
-        time.sleep(min(POLL, 5))
+    try:
+        while not (tun.poll() is None and sock_get(lp, health) == 200):
+            if tun.poll() is not None:
+                bad = forward_failed(tun)
+                if bad:
+                    raise Stop(f"the SSH tunnel could not open its forward ({bad}). The chip is still up and billing: "
+                               f"mashbox tpu down {name}")
+                tun = open_tunnel(project, zone, name, c["port"], lp)
+            if now() - last >= 60:
+                alive, tail = remote_tail(project, zone, name)
+                line = next((x for x in reversed(tail) if x.strip()), "")
+                say(f"  {mins(now() - t0)} so far: {line[:150]}")
+                if not alive:
+                    raise Stop("the server on the chip stopped. Last lines of ~/.mashbox/serve.log:\n" + "\n".join(tail)
+                               + f"\nThe chip is still up and billing: mashbox tpu down {name}")
+                last = now()
+            if now() - t0 > READY_MIN * 60:
+                raise Stop(f"the server was not ready after {READY_MIN} min. Log: mashbox tpu ssh {name}, then "
+                           f"tail ~/.mashbox/serve.log. The chip is still up and billing: mashbox tpu down {name}")
+            time.sleep(min(POLL, 5))
+        ok, st = guard_check(lp, health)
+        if not ok:
+            raise Stop(unguarded_stop(m, name, st))
+    except BaseException:
+        tun.terminate()
+        raise
+    lp.open()
     say(f"Server ready ({mins(now() - t0)}).")
     return tun
 
 
-def node_gone(project, zone, name):
-    """True only when gcloud says the node does not exist (or is being deleted); an error of any other kind is not 'gone'."""
-    r = gc(["compute", "tpus", "tpu-vm", "describe", name, "--zone", zone, "--format=value(state)"], project)
-    if r.returncode:
-        return "not_found" in r.stderr.lower() or "was not found" in r.stderr.lower()
-    return r.stdout.strip() in ("DELETING", "PREEMPTED", "TERMINATED")
+GONE = ("DELETING", "PREEMPTED", "TERMINATED")      # states of a chip on its way out
 
 
 def hold(tun, project, zone, name, m, lp, deadline):
@@ -768,11 +1144,13 @@ def hold(tun, project, zone, name, m, lp, deadline):
     try:
         return _hold(tun, project, zone, name, m, lp, deadline, reopened)
     finally:
-        if hasattr(lp, "close"):
-            lp.close()                                  # the port and the private socket directory
+        if hasattr(lp, "release"):
+            lp.release()                                # relays cut, private socket gone; the port stays bound until
+                                                        # this process exits (the Mac app relies on that, see release())
 
 
 def _hold(tun, project, zone, name, m, lp, deadline, reopened):
+    unread = False
     try:
         while True:
             if deadline and now() > deadline + 600:
@@ -783,16 +1161,36 @@ def _hold(tun, project, zone, name, m, lp, deadline, reopened):
                 except Stop as e:
                     raise Stop(f"{e}\n{name} ({zone}) may still be running and billing. Take it down: "
                                f"mashbox tpu down {name}") from None
-            if tun.poll() is not None:                 # the tunnel dropped: chip gone, or a network blip
-                if node_gone(project, zone, name):
+            if tun.poll() is not None:                 # the tunnel dropped: chip gone, replaced, or a network blip
+                if now() - reopened < 10:              # at most one reopen (and one describe) every 10 s
+                    time.sleep(10 - (now() - reopened))
+                reopened = now()
+                st, x = owner(project, zone, name)     # described right before the forward: hours may have passed
+                if st == "gone" or (st == "ours" and x.get("state") in GONE):
                     say(f"\n{name} is gone (taken down, or deleted by its max lifetime). Nothing of it bills now. "
                         "Tunnel closed.")
                     save_state(name)
                     return 0
-                if now() - reopened < 10:              # at most one reopen every 10 s
-                    time.sleep(10 - (now() - reopened))
-                tun, reopened = open_tunnel(project, zone, name, m["cloud"]["port"], lp), now()
-            time.sleep(POLL)
+                if st == "foreign":
+                    raise Stop(f"the chip named {name} in {zone} is not the one this tunnel was opened to: a chip "
+                               "without the mashbox label has that name now. Tunnel closed and not reopened; that chip "
+                               "is left as it is (not used, not deleted)")
+                lp.shut()                              # the server behind it may have changed: check it again first
+                if st == "unknown":                    # cannot be read now (network, sign-in): no forward to a chip
+                    if not unread:                     # that was not checked; describe it again in 10 s
+                        say(f"\nThe tunnel dropped and {name} could not be checked ({gerr(x)}). Trying again every "
+                            "10 s; the local port relays nothing meanwhile.")
+                    unread = True
+                    continue
+                unread = False
+                tun = forward(project, zone, name, m["cloud"]["port"], lp)
+            if not lp.ok.is_set() and tun.poll() is None and sock_get(lp, m["cloud"].get("health", "/")) == 200:
+                ok, st = guard_check(lp, m["cloud"].get("health", "/"))
+                if not ok:
+                    tun.terminate()
+                    raise Stop(unguarded_stop(m, name, st))
+                lp.open()
+            time.sleep(POLL if lp.ok.is_set() else min(POLL, 2))
     except KeyboardInterrupt:
         tun.terminate()
         say(f"\nTunnel closed. The chip is still running and billing. Reopen: mashbox tpu tunnel {name}   "
@@ -840,8 +1238,9 @@ def cmd_up(a):
     p = price(acc)
     say(f"{m['name']} needs a TPU {acc}: {money(p)} per hour while it exists ({PRICE_NOTE}).")
     say(f"Max lifetime: {'%g h after the chip starts, then it deletes itself (--max-hours 0 turns this off)' % a.max_hours if a.max_hours else 'off (--max-hours 0)'}.")
-    zones = list(dict.fromkeys(([a.zone] if a.zone else []) + c["zones"] + all_zones()))
-    node, qr = find(project, name, zones)
+    zones = [a.zone] if a.zone else list(dict.fromkeys(c["zones"] + all_zones()))   # --zone: that zone only
+    node, qr = one_place(name, *find(project, name, zones),
+                         "Choose another name with --name (mashbox tpu status lists the chips mashbox made)")
     qrname = None
     if node:
         zone, x = node
@@ -880,10 +1279,20 @@ def cmd_up(a):
         res = remote_setup(m, project, zone, name, extra, a.restart)
         if res.get("server") == "running" and res.get("args"):
             say(f"  the server was already running ({res['args']}); --restart starts it again with this command's options")
+        if res.get("stale"):
+            say(f"  the server that was running came from another mashbox ({res['stale'][:60]}); "
+                "started it again with the one just installed")
+        elif "changed" in res:
+            say(f"  the server that was running had other settings ({res['changed'][:120] or 'none recorded'}); "
+                "started it again with this command's")
         say(f"  done in {mins(res['seconds'])}; disk for the model: {res.get('have_gb')} GB (needs {c.get('disk_gb')}); "
             f"server {res.get('server')}")
-        n, _ = find(project, name, [zone], unchanged=False)
+        ns, _ = find(project, name, [zone], unchanged=False)
+        n = ns[0] if ns else None
         mh = int(((n[1].get("metadata") or {}).get("mashbox-max-seconds") or 0)) / 3600 if n else a.max_hours
+        if node and mh != a.max_hours:
+            say(f"  {name} keeps the max lifetime it was made with ({'%g h' % mh if mh else 'off'}); "
+                "--max-hours applies to a new chip")
         deadline = (created(n[1]) or now()) + mh * 3600 if n and mh else None
         life = "off"
         if deadline:
@@ -908,7 +1317,7 @@ def cmd_up(a):
 
 
 def pick(project, name, zones):
-    nodes, qrs = scan(project, zones)
+    nodes, qrs = scan(project, zones, names=[name] if name else ())
     names = list(dict.fromkeys([short(x.get("name")) for _, x in nodes] + [qr_node(x)[0] for _, x in qrs]))
     if name:
         return [n for n in names if n == name], nodes, qrs
@@ -922,12 +1331,20 @@ def take_down(project, targets, nodes=None, qrs=None):
     rc = 0
     for zone, name in targets:
         t0 = now()
-        q = [(z, x) for z, x in qrs if qr_node(x)[0] == name]
-        n = [(z, x) for z, x in nodes if short(x.get("name")) == name]
+        q = [(z, x) for z, x in qrs if z == zone and qr_node(x)[0] == name]
+        n = [(z, x) for z, x in nodes if z == zone and short(x.get("name")) == name]
         for z, x in n:
             age = now() - (created(x) or now())
             say(f"{name} ({x.get('acceleratorType')}, {z}): up {mins(age)}, about "
                 f"{money((price(x.get('acceleratorType', '')) or 0) * age / 3600)} so far (estimate at list price). Deleting ...")
+        try:                                                     # deletes go by name: ours, described now (one
+            q = [(z, x) for z, x in q if owner(project, z, short(x.get("name")), "queued-resources")[0] != "gone"
+                 and still_ours(project, z, short(x.get("name")), "queued-resources")]       # gone since: nothing to do)
+            n = [(z, x) for z, x in n if owner(project, z, name)[0] != "gone" and still_ours(project, z, name)]
+        except Stop as e:
+            say(f"{name}: NOT deleted: {e}")
+            rc = 1
+            continue
         for z, x in q:
             if not delete_qr(project, z, short(x.get("name"))):
                 rc = 1
@@ -944,8 +1361,8 @@ def take_down(project, targets, nodes=None, qrs=None):
             say(f"{name}: delete sent, but the check failed: {e}\nCheck with: mashbox tpu status")
             rc = 1
             continue
-        still = [short(x.get("name")) for _, x in left if short(x.get("name")) == name] + \
-                [qr_node(x)[0] for _, x in lq if qr_node(x)[0] == name]
+        still = [short(x.get("name")) for z, x in left if z == zone and short(x.get("name")) == name] + \
+                [qr_node(x)[0] for z, x in lq if z == zone and qr_node(x)[0] == name]
         if still:
             say(f"{name}: STILL LISTED after delete; check: gcloud compute tpus tpu-vm list --zone {zone}")
             rc = 1
@@ -959,16 +1376,22 @@ def cmd_down(a):
     project = preflight(a.project)
     zones = [a.zone] if a.zone else all_zones()
     names, nodes, qrs = pick(project, a.name, zones)
+    if a.name:                  # found even without our label, so it is never reported as "nothing" while it bills
+        one_place(a.name, [(z, x) for z, x in nodes if short(x.get("name")) == a.name],
+                  [(z, x) for z, x in qrs if qr_node(x)[0] == a.name],
+                  f"mashbox takes down only chips it made. If this one is yours: gcloud compute tpus tpu-vm delete "
+                  f"{a.name} --zone ZONE --project {project}")
     prune(nodes, qrs, zones)
     if not names:
         say(f"Nothing to take down: no mashbox chip or queued request{' named ' + a.name if a.name else ''} in project "
             f"{project} (zones checked: {', '.join(zones)}).")
         return 0
-    if len(names) > 1 and not a.all:
-        raise Stop("several mashbox chips: " + ", ".join(names) + ". Name one (mashbox tpu down <name>) or use --all")
-    zone_of = {short(x.get("name")): z for z, x in nodes}
-    zone_of.update({qr_node(x)[0]: z for z, x in qrs if qr_node(x)[0] not in zone_of})
-    return take_down(project, [(zone_of[n], n) for n in names], nodes, qrs)
+    targets = list(dict.fromkeys([(z, short(x.get("name"))) for z, x in nodes if short(x.get("name")) in names]
+                                 + [(z, qr_node(x)[0]) for z, x in qrs if qr_node(x)[0] in names]))
+    if len(targets) > 1 and not a.all:
+        raise Stop("several mashbox chips: " + ", ".join(f"{n} ({z})" for z, n in targets)
+                   + ". Name one (mashbox tpu down <name>, with --zone when two zones have that name) or use --all")
+    return take_down(project, targets, nodes, qrs)
 
 
 def cmd_status(a):
@@ -1005,13 +1428,17 @@ def cmd_status(a):
 
 def target(a):
     project = preflight(a.project)
-    names, nodes, _ = pick(project, a.name, list(dict.fromkeys(([a.zone] if a.zone else []) + all_zones())))
+    names, nodes, qrs = pick(project, a.name, [a.zone] if a.zone else all_zones())
+    if a.name:
+        one_place(a.name, [(z, x) for z, x in nodes if short(x.get("name")) == a.name],
+                  [(z, x) for z, x in qrs if qr_node(x)[0] == a.name], "mashbox opens only chips it made.")
     ready = [(z, x) for z, x in nodes if short(x.get("name")) in names]
     if not ready:
         raise Stop("no mashbox chip" + (f" named {a.name}" if a.name else "") + " is running. Start one: mashbox tpu up <model>")
     if len(ready) > 1:
         raise Stop("several mashbox chips: " + ", ".join(short(x.get("name")) for _, x in ready) + ". Name one")
-    return project, ready[0][0], ready[0][1]
+    zone, x = ready[0]
+    return project, zone, still_ours(project, zone, short(x.get("name")))       # ssh and tunnel go to it by name
 
 
 def cmd_ssh(a):

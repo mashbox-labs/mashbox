@@ -1,0 +1,37 @@
+{
+ "name": "qwen35-f32",
+ "arch": "qwen35",
+ "made_by": "gguf-py",
+ "gguf_sha256": "1244611df3d079f54c4b803751d76008900cecddbaf9e5c5ebdab1d2c47d2825",
+ "gguf_bytes": 15350944,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "597a0f33f4fa0f9e88aba88371e3daa90ef2c94a787d121bd7cd6bb1ab761420",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "qwen35",
+  "seed": 0,
+  "layers": 8,
+  "make": "gguf-py",
+  "quant": null
+ }
+}

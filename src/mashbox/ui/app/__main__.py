@@ -1,3 +1,3 @@
 from . import main
 
-main()
+raise SystemExit(main())

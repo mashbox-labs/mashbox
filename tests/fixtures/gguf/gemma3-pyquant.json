@@ -1,0 +1,46 @@
+{
+ "name": "gemma3-pyquant",
+ "arch": "gemma3",
+ "made_by": "gguf-py",
+ "gguf_sha256": "bc6cfc31b8f0f1594bf13917d53adb44e922641c65be3e0903f68b8628241933",
+ "gguf_bytes": 2091552,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 286,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "b99bce9e909eb8f1392efe15ce49d55ad14ed6879a28f5c5b45e7d8132d71304",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "gemma3",
+  "seed": 31,
+  "layers": 6,
+  "make": "gguf-py",
+  "quant": [
+   "Q8_0",
+   "Q4_0",
+   "Q5_0",
+   "Q4_1",
+   "Q5_1"
+  ]
+ },
+ "f32ref_logits_sha256": "be78e5918d74129e8da5e0c6b6309eac5c28195aeba3cad3451318c7febe7dd9",
+ "f32ref_gguf_sha256": "865aa45fc2f13378ff3507269d229082d1a2ef211af7ddebe1ad8b9febe9709a",
+ "f32ref": "llama.cpp CPU on an all-F32 copy holding gguf-py's dequantization of every tensor"
+}

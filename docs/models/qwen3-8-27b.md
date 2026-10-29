@@ -79,9 +79,9 @@ Wait 10 s before you start it again ([why](../faq.md#how-do-i-stop-a-server-and-
 <!-- cli:start run -->
 | Option | Default | What it does |
 |---|---|---|
-| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b) |
+| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, or a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0) |
 | `--weights FILE` |  | a local .bshj file instead of the download (its sha256 is still checked) |
-| `--no-kernels` | off | plain JAX only (slower decode, same outputs within rounding) |
+| `--no-kernels` | off | plain JAX only: a catalog model runs without its TPU kernels (slower decode, same outputs within rounding) |
 | `--prompt TEXT` |  | answer one chat turn, print it and exit; without it, start the server |
 | `--thinking` | off | thinking mode for --prompt |
 | `--max-tokens N` | `512` | most new tokens for --prompt |
@@ -91,11 +91,13 @@ Wait 10 s before you start it again ([why](../faq.md#how-do-i-stop-a-server-and-
 | `--seed N` | `0` | seed for sampled --prompt answers |
 | `--host H` | `127.0.0.1` | server address; keep it on 127.0.0.1 and use an SSH tunnel |
 | `--port N` | `8000` | server port |
-| `--api-key-file FILE` |  | require an API key from FILE (one per line; each key has its own prompt cache) on /v1 requests; also MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host a key made in ~/.config/mashbox/api-key |
+| `--api-key-file FILE` |  | require an API key from FILE on /v1 requests: one per line, a key or a key then its tenant's name; keys of one tenant share one prompt cache and one waiting queue, and a key without a name is its own tenant; only you may read or write FILE (chmod 600). Also MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host a key made in ~/.config/mashbox/api-key |
 | `--ui` | off | also serve the MASHBOX Chat page at http://127.0.0.1:<port>/ |
 | `--ctx N` | `2048` | context per request in tokens (prompt plus answer) |
-| `--slots N` | `8` | requests decoded together; the kernel bundle is built for 8, other values run plain JAX |
+| `--slots N` | `8` | requests decoded together; a catalog model's kernels are built for 8 and other values run it on plain JAX; at the default, a GGUF file takes as many as fit the chip's memory |
 | `--steps N` | `8` | decode steps per device call |
+| `--mtp K` |  | speculative decoding with the model's own multi-token-prediction head: K drafts per verify pass (1 to 3; 0 = off). Default: on only on chips where it passed its checks, else off. Uses the model's draft file (Qwen3.8-27B: --mtp 2); one chip only |
+| `--mtp-file FILE` |  | a local draft .bshj file instead of the download (its sha256 is still checked) |
 | `--tensor-parallel-size N` | `0` | chips to split the model across, as vLLM (1, 2 or 4); default: the chips of this host, at most 4 (1 on a TPU v6e-1, 4 on a TPU v5e-4 or v6e-4) |
 | `--cache-dir DIR` |  | compile cache (default ~/.cache/mashbox/xla, or JAX_COMPILATION_CACHE_DIR) |
 | `--no-warm` | off | skip compiling the first request's programs before ready |
@@ -109,7 +111,7 @@ Wait 10 s before you start it again ([why](../faq.md#how-do-i-stop-a-server-and-
 
 ### Recommended settings
 
-The default is greedy (temperature 0): the same prompt gives the same answer. For sampled answers with thinking off, Qwen's settings are below; send them in each server request.
+The default is greedy (temperature 0): the model always takes its most likely next token. For sampled answers with thinking off, Qwen's settings are below; send them in each server request.
 
 | Request field | Our default | Qwen's settings, thinking off |
 |---|---|---|
@@ -123,10 +125,10 @@ With these settings the `mashbox` server gives 33.0 tokens/s for one request at 
 ### Server routes and sampling
 
 <!-- api:start -->
-Routes: `GET /v1/health`, `GET /health`, `GET /`, `HEAD /v1/health`, `GET /v1/models`, `GET /v1/models/{model}`, `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/messages`, `POST /v1/messages/count_tokens`, `POST /v1/responses`, `GET /openapi.json`. Each one, with every request field and response shape: [Server API](../server-api.md); the same as an OpenAPI file at `GET /openapi.json`. Send `"stream": true` for server-sent events. Sampling fields on every generating route: `max_tokens`, `max_completion_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `seed`, `stop`, `stop_sequences`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `n`; temperature 0 (the default) is greedy.
+Routes: `GET /v1/health`, `GET /health`, `GET /`, `HEAD /v1/health`, `GET /v1/models`, `GET /v1/models/{model}`, `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/messages`, `POST /v1/messages/count_tokens`, `POST /v1/responses`, `GET /metrics`, `GET /openapi.json`. Each one, with every request field and response shape: [Server API](../server-api.md); the same as an OpenAPI file at `GET /openapi.json`. Send `"stream": true` for server-sent events. Sampling fields on every generating route: `max_tokens`, `max_completion_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `seed`, `stop`, `stop_sequences`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `n`; temperature 0 (the default) is greedy.
 <!-- api:end -->
 
-Thinking mode: `"chat_template_kwargs": {"enable_thinking": true}`. Requests sent within 20 ms of each other share the chip in one batch of up to 8. A request that arrives while a batch is running waits for that batch to finish, then runs with the others that arrived meanwhile.
+Thinking mode: `"chat_template_kwargs": {"enable_thinking": true}`. Requests sent within 20 ms of each other start together, and up to 8 share the chip at once. A request that arrives while others are answering takes a free slot at the next device call and runs alongside them; when all 8 slots are busy it waits for one.
 
 ## Variants
 
@@ -159,6 +161,18 @@ The engine on its own does 38.6 tokens/s for 1 request and 269 tokens/s for 8 ([
 
 Quality from the installed package on the same chip: mean KL 0.00065 and top-1 agreement 99.72% against Hugging Face transformers in bf16 on 8 fixed prompts (367 token positions), the same as in [Variants](#variants).
 
+### Speculative decoding
+
+`mashbox run` drafts tokens with the model's own multi-token-prediction (MTP) head, which Qwen ships with the weights: the head proposes 2 tokens, the main weights check them in one pass and keep the ones they agree with, plus one of their own. It is off by default: `--mtp 2` turns it on with 2 drafts per pass (`--mtp K` takes 1 to 3). It uses the draft file `Qwen3.8-27B-MTP-BQ8_R.bshj`, downloaded with the weights and checked by sha256 like them. It runs on one chip: `--mtp` with `--tensor-parallel-size` above 1 stops with an error. Greedy, sampled and penalised requests all use it.
+
+| Greedy, 256 new tokens, 8 chat prompts | `--mtp 2` | Off (default) |
+|---|---|---|
+| 1 request at a time (median of the 8 prompts) | 74.84 tokens/s | 37.77 tokens/s |
+| The 8 prompts at once (total) | 436.87 tokens/s | 244.69 tokens/s |
+
+The output is not always the same as without it. With greedy decoding the text was identical on 5 of 8 prompts. Where it differs, the two best next tokens had equal scores, or scores one bf16 step apart, and a pass that checks 3 tokens rounds differently from one that reads 1. The engine's own two paths without speculation (compiled kernels and plain JAX) split at such ties too: they gave identical text on 3 of 8 prompts. Sampled requests keep the token the sampler draws without speculation at each position (same settings and seed), so each token is drawn from the model's own distribution.
+
+The other tables on this page were measured with `mashbox` 0.1.0, which decodes without speculation.
 
 ### Compared with vLLM TPU on the same chip
 
@@ -192,7 +206,7 @@ Claude Code, Codex and Pi can use Qwen3.8-27B as their LLM: start the server wit
 ## FAQ
 
 - **Does it run on TPU v5e?** Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB.
-- **Can several people use one server?** Yes. Requests sent together share the chip in one batch of up to 8; a request that arrives while a batch runs waits for it to finish. With 8 users each sending a new request as soon as the last answer came back, the server gave 258 tokens/s in total on TPU v6e-1 ([Performance](#performance)).
+- **Can several people use one server?** Yes. Up to 8 requests share the chip at once; a request that arrives while others are answering takes a free slot at the next device call, or waits for one when all 8 are busy. With 8 users each sending a new request as soon as the last answer came back, the server gave 258 tokens/s in total on TPU v6e-1 ([Performance](#performance)).
 - **How do I turn on thinking mode?** `--thinking` for `--prompt`, or `"chat_template_kwargs": {"enable_thinking": true}` in a server request.
 
 ## Changelog

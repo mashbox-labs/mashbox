@@ -1,0 +1,37 @@
+{
+ "name": "granite-f32",
+ "arch": "granite",
+ "made_by": "gguf-py",
+ "gguf_sha256": "d593ba8b84ca4979f69ee44192f1e02fe85205257ded37ba018ce02560391a39",
+ "gguf_bytes": 7626720,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "f7156f5a54dd337684b316e1e798108b0cdcfcb05af6236fbc389014262cd7db",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "granite",
+  "seed": 33,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": null
+ }
+}

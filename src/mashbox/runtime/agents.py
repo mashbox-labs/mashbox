@@ -22,6 +22,24 @@ class TooLong(BadRequest):
     pass
 
 
+class NotReady(Exception):
+    """No engine is ready (the model loads, or its worker restarts after a fault): 503 on the OpenAI routes, 529
+    overloaded_error on the Anthropic route, with Retry-After and x-should-retry: true."""
+
+    def __init__(self, msg, retry_after=1):
+        super().__init__(msg)
+        self.retry_after = int(retry_after)
+
+
+class WorkerFault(Exception):
+    """The request failed on the device (the worker hit a fault, ran out of memory or hung): 500 before the response
+    starts, the route's error event after."""
+
+    def __init__(self, msg, code=None, retried=False):
+        super().__init__(msg)
+        self.code, self.retried = code, retried
+
+
 def rid(prefix):
     return prefix + uuid.uuid4().hex[:24]
 

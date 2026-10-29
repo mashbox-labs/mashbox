@@ -23,8 +23,9 @@ def new_state(c, S, CTX):
 
 
 def make_forward(c, decode_kernels=None):
-    def fwd(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, verify=False, hidden=False):
-        # the model forward's signature (verify, hidden: speculative decoding, which this stand-in has no head for)
+    def fwd(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, verify=False, hidden=False, keep=None):
+        # the model forward's signature (verify, hidden: speculative decoding, which this stand-in has no head for; keep:
+        # the rows whose state a call may change, which a stand-in with no linear state has nothing to hold back for)
         (K_, V_), (R, C) = ck, cv
         B, T = toks.shape
         x = jnp.where(jnp.arange(T)[None, :] < lens[:, None], toks.astype(jnp.float32) * W["w"], 0.0)

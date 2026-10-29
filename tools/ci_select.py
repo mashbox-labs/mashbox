@@ -5,7 +5,8 @@
     python3 tools/ci_select.py --files src/mashbox/cli.py      # an explicit list
     python3 tools/ci_select.py --all
 
-Areas are one per models.json row (the id with underscores, e.g. hy_nomas) plus `core`:
+Areas are one per models.json row (the id with underscores, e.g. hy_nomas), `gguf` (the GGUF reader, its ops and
+kernels, fixtures and test_gguf_*.py) plus `core`:
 - a model area is its port folder, apps/<id>/, its own models.json row and the tests whose file names carry the id
 - core (the shared package, pyproject.toml, test config, workflows, tools) runs every area, because it touches every model
 - docs, licences, cards and templates run T0 only; a tests/tpu file runs T0 plus the area of any CPU test that reads it
@@ -30,9 +31,16 @@ CORE_DIRS = ("src/mashbox/runtime/", ".github/workflows/", "tools/")
 CORE_FILES = {"pyproject.toml", "tests/conftest.py"}
 
 
+AREAS_EXTRA = ("gguf",)                         # areas that are not a models.json row: GGUF files (reader, ops, kernels)
+GGUF_DIRS = ("src/mashbox/gguf/", "src/mashbox/ops/", "tools/gguf_fixtures/", "tests/fixtures/gguf/")
+GGUF_FILES = {"tools/gguf_check.py"}
+# cli.main imports these two on every run (is_gguf_request, the GGUF dispatch), so a change to them runs every area
+GGUF_CORE_FILES = {"src/mashbox/gguf/__init__.py", "src/mashbox/gguf/resolve.py"}
+
+
 def model_areas(text=None):
     reg = json.loads(text if text is not None else (ROOT / "models.json").read_text())
-    return [m["id"].replace("-", "_") for m in reg["models"]]
+    return [m["id"].replace("-", "_") for m in reg["models"]] + list(AREAS_EXTRA)
 
 
 def test_area(file_name, areas):
@@ -72,6 +80,10 @@ def classify(path, areas, base=None, head=None):
         return tpu_file_users(path, areas)
     if path in T0_ONLY_FILES or path.startswith(T0_ONLY_DIRS) or path.endswith(".md"):
         return set()
+    if path in GGUF_CORE_FILES:
+        return {"core"}
+    if path in GGUF_FILES or path.startswith(GGUF_DIRS):
+        return {"gguf"}
     if path in ("models.json", "src/mashbox/models.json"):
         return registry_areas(base, head) if base else {"core"}
     if path in CORE_FILES or path.startswith(CORE_DIRS):

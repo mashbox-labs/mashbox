@@ -68,6 +68,12 @@ mashbox tpu up qwen3-8-27b --agents --restart
 
 Then set your agent's base URL as [Use with coding agents](agents-on-tpu.md) shows.
 
+## Run line 2 again
+
+- A server already running on the chip is kept when it is the same `mashbox` and the same model and settings; otherwise `up` starts it again. `--agents` puts the model's coding-agent settings on the server's command line, so adding it or leaving it out starts the server again. `--restart` always starts it again.
+- `up` uses and deletes only chips and queued requests that `mashbox` made (they carry the `mashbox` label). One of the same name without the label is left as it is, and `up` stops and says so.
+- The local port opens only after the chip's server refuses a request sent as if from another web site, so a page open in your browser cannot use a server that lacks that check.
+
 ## See what is running, and take it down
 
 ```bash
@@ -93,6 +99,14 @@ Measured on a TPU v6e-1. The wait for a chip is Google's and is counted apart.
 | `down`, until the chip is gone | 99 s |
 
 From create to delete the chip bills for about 17 minutes: about $0.76 at Google's on-demand list price.
+
+## Environment variables
+
+| Variable | Where it is read | What it does |
+|---|---|---|
+| `MASHBOX_WHEEL` | your machine, by `mashbox tpu up` | installs this wheel file (or an http(s) URL of one) on the chip instead of the release from PyPI; the chip checks its sha256 before it installs |
+| `MASHBOX_AOT` | the machine that runs `mashbox run` | `0` turns off the saved programs ([FAQ](faq.md#why-is-the-first-start-slow-and-later-starts-fast)) |
+| `MASHBOX_STALL_S` | the machine that runs `mashbox run` | seconds a response may wait for a client that reads nothing before the server ends it (default 30) |
 
 ## Next
 

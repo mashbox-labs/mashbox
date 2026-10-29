@@ -317,6 +317,8 @@ if TOKDIR:
                    finish=full["choices"][0]["finish_reason"], concurrent_equal=all(o["choices"][0]["message"]["content"] ==
                                                                                      full["choices"][0]["message"]["content"] for o in outs))
     R["T9_pass"] = R["T9"]["stream_equals_nonstream"] and R["T9"]["concurrent_equal"] and full["usage"]["completion_tokens"] > 0
+else:
+    R["T8_T9_not_run"] = "no tokenizer dir given (argv 2): the chat template (T8) and server (T9) checks did not run"
 
 R["ALL_PASS"] = all(v for k, v in R.items() if k.endswith("_pass"))
 R["jax"] = jax.__version__

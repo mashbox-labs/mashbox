@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "github": {
     "org": "mashbox-labs",
     "repo": "mashbox"
@@ -7,7 +7,7 @@
   "hf": {
     "org": "mashbox-labs"
   },
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "Apache-2.0",
   "company_line": "MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.",
   "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]\"",
@@ -26,7 +26,18 @@
       "name": "Hy-Nomas",
       "kind": "world",
       "version": "0.1.0",
-      "summary": "Tencent's open video world model, playable in the browser from a TPU v6e-4.",
+      "summary": "Tencent's open video world model, playable in the browser from a TPU v6e-4. The full pipeline also fits on a single TPU v6e chip (32 GB), at 2.46 s of compute per second of video.",
+      "catalog": {
+        "source": "ours",
+        "format": "port",
+        "family": "Hy-Nomas",
+        "params_b": {
+          "total": null,
+          "active": null
+        },
+        "experimental": false,
+        "number": null
+      },
       "in": "text and movement keys",
       "out": "video",
       "path": "src/mashbox/models/hy_nomas",
@@ -60,13 +71,14 @@
         ]
       },
       "hf_repo": "mashbox-labs/Hy-Nomas-TPU",
-      "hf_revision": "c4f07d0ed20290af82325a0073c8151229dcb5b3",
+      "hf_revision": "344a34563d2eb76d41b2431ba9542b6f98c1108c",
       "pipeline_tag": null,
       "chips": {
         "v6e": {
           "status": "not supported",
           "reason": "runs only on a v6e-4 (a TPU v6e slice of 4 chips)",
-          "accelerator": "v6e-1"
+          "accelerator": "v6e-1",
+          "note": "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4"
         },
         "v5e": {
           "status": "not supported",
@@ -122,6 +134,14 @@
           "value": "1 min 20.7 s",
           "baseline": "10 min 40.1 s without them (about 9 minutes of it compiling), same chip",
           "date": "2026-10-28"
+        },
+        {
+          "chip": "TPU v6e-1 (one chip, 32 GB)",
+          "metric": "Compute per second of video, full pipeline on one chip, 720p, main model in our 4-bit format",
+          "value": "2.46 s (60 s run)",
+          "baseline": "1.00 s = real time",
+          "date": "2026-10-26",
+          "highlight": "compute per second of video, full pipeline on a single TPU v6e chip (v6e-1, 32 GB), 720p, main model in our 4-bit format; this version of `mashbox run` starts on a v6e-4"
         }
       ],
       "files": [
@@ -188,6 +208,19 @@
       "kind": "llm-tpu",
       "version": "0.1.0",
       "summary": "Qwen's 27B hybrid-attention language model on one Google Cloud TPU v6e chip, with an OpenAI-compatible server.",
+      "catalog": {
+        "source": "ours",
+        "format": "bshj-build",
+        "family": "Qwen3.8",
+        "params_b": {
+          "total": 26.9,
+          "active": null
+        },
+        "experimental": false,
+        "number": {
+          "headline": 0
+        }
+      },
       "path": "src/mashbox/models/qwen3_8_27b",
       "run": "~/.local/bin/mashbox run qwen3-8-27b",
       "in": "text",
@@ -202,7 +235,7 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "11640ad5065f621ca9c35ada2c857b8f875bb33b",
+      "hf_revision": "21e88d98ba8757a620abbc331a9a92b73c440afa",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
       "chat": {
@@ -501,8 +534,54 @@
               "Same server and chip."
             ]
           }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Decode speed with speculative decoding (the model's own MTP head, 2 drafts per pass, --mtp 2), 1 request (8 chat prompts (chat, code, math, summary), 256 new tokens, greedy, ctx 2048, median of 3 runs per prompt, then the median of the 8)",
+          "value": "74.84 tokens/s, 1.98x; greedy output identical to decoding without it on 5 of 8 prompts",
+          "baseline": "same engine and chip, --mtp 0: 37.77 tokens/s (its compiled-kernel and plain-JAX paths give identical output on 3 of 8)",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Decode speed, 1 request, speculative decoding",
+            "ours": "74.84 tok/s",
+            "vs": "off: 37.77 tok/s",
+            "notes": [
+              "The model's own MTP head drafts 2 tokens per pass. 8 chat prompts (chat, code, math, summary), 256 new tokens, greedy, ctx 2048, median of 3 runs per prompt, then the median of the 8.",
+              "Greedy output identical to decoding without it on 5 of 8 prompts; the others split where the two best next tokens score equal or one bf16 step apart."
+            ],
+            "vs_notes": [
+              "Same engine, chip and prompts, --mtp 0."
+            ]
+          }
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Decode speed with speculative decoding, 8 requests at once (the same 8 prompts together, 256 new tokens, greedy, ctx 2048, median of 3 runs)",
+          "value": "436.87 tokens/s total; greedy output identical to decoding without it on 4 of 8 requests",
+          "baseline": "same engine and chip, --mtp 0: 244.69 tokens/s total",
+          "date": "2026-10-28",
+          "short": {
+            "measure": "Decode speed, 8 requests at once, speculative decoding",
+            "ours": "436.87 tok/s total",
+            "vs": "off: 244.69 tok/s total",
+            "notes": [
+              "The same 8 prompts sent together, 256 new tokens each, greedy."
+            ],
+            "vs_notes": [
+              "Same engine, chip and prompts, --mtp 0."
+            ]
+          }
         }
       ],
+      "drafter": {
+        "kind": "mtp",
+        "id": "qwen38-mtp",
+        "version": 1,
+        "file": "Qwen3.8-27B-MTP-BQ8_R.bshj",
+        "k_default": 2,
+        "k_max": 3,
+        "gate": {}
+      },
       "files": [
         {
           "name": "Qwen3.8-27B-BQ8_R.bshj",
@@ -517,6 +596,26 @@
           "bpw": 8.013,
           "quality": "mean KL 0.00065, top-1 agreement 99.72% vs bf16 (8 prompts x 32 tokens)",
           "speed": "38.6 tokens/s for 1 request, 269 tokens/s for 8 (TPU v6e-1)",
+          "date": "2026-10-28"
+        },
+        {
+          "name": "Qwen3.8-27B-MTP-BQ8_R.bshj",
+          "kind": "draft",
+          "format": "BSHJ",
+          "quant_type": "BQ8_R",
+          "default": false,
+          "variant": false,
+          "bytes": 425003008,
+          "sha256": "cf92e22cc45d1f650b86a1bf0ccd6d040449dd58ac9b09e6215106a38879bc4e",
+          "gb": 0.43,
+          "bpw": 8.005,
+          "draft": {
+            "method": "mtp",
+            "default_k": 2,
+            "for": "Qwen3.8-27B-BQ8_R.bshj"
+          },
+          "quality": "draft head for speculative decoding (every token is checked by the main weights); greedy output identical to decoding without it on 5 of 8 test prompts",
+          "speed": "74.84 tokens/s for 1 request (37.77 without), 436.87 tokens/s for 8 (244.69 without)",
           "date": "2026-10-28"
         },
         {
@@ -584,5 +683,7 @@
         }
       }
     }
-  ]
+  ],
+  "gguf": [],
+  "engine_kernels": []
 }

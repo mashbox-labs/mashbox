@@ -115,8 +115,9 @@ def test_create_accepted_then_sign_in_expired_names_the_chip(cloud, capsys):
     assert up() == 2
     S = read()
     assert creates(S) == Z[:1] and list(S["nodes"]) == [f"{Z[0]}/mashbox-qwen3-8-27b"]   # no second chip
-    deletes = [c for c in S["calls"] if c[2:4] == ["tpu-vm", "delete"]]
-    assert [d[d.index("--zone") + 1] for d in deletes] == [Z[0]]                          # tried by its exact name
+    looks = [c for c in S["calls"] if c[2:4] == ["tpu-vm", "describe"] and c[4] == "mashbox-qwen3-8-27b"]
+    assert [d[d.index("--zone") + 1] for d in looks] == [Z[0]]                            # looked up by its exact name
+    assert not [c for c in S["calls"] if c[2:4] == ["tpu-vm", "delete"]]                  # never deleted unchecked
     err = capsys.readouterr().err
     assert "gcloud auth login, then delete it: mashbox tpu down mashbox-qwen3-8-27b" in err
     assert f"gcloud compute tpus tpu-vm delete mashbox-qwen3-8-27b --zone {Z[0]} --project p1 --quiet" in err
@@ -186,7 +187,7 @@ def test_existing_ready_node_of_that_name_is_never_used(cloud, monkeypatch, caps
     monkeypatch.setattr(tpu, "remote_setup", lambda *a, **k: touched.append(("setup", a)))
     assert tpu.main(["up", "qwen3-8-27b", "--yes", "--name", "mine", "--queue-minutes", "0"]) == 2
     S = read()
-    assert not touched and f"{Z[0]}/mine" in S["nodes"] and creates(S) == Z[:1]
+    assert not touched and f"{Z[0]}/mine" in S["nodes"] and creates(S) == []       # found by name first: no create sent
     assert not [c for c in S["calls"] if c[2:4] == ["tpu-vm", "delete"]] and "mine" not in tpu.load_state()
     assert "already exists in " + Z[0] in capsys.readouterr().err
 
@@ -220,11 +221,11 @@ def test_down_goes_on_when_the_check_list_fails(cloud, monkeypatch, capsys):
     assert up() == 0
     real, n = tpu.scan, {"i": 0}
 
-    def scan(project, zones, unchanged=True):
+    def scan(project, zones, unchanged=True, names=()):
         n["i"] += 1
         if n["i"] == 2:                                              # the check list after the delete
             raise tpu.Stop("could not list chips in " + zones[0])
-        return real(project, zones, unchanged)
+        return real(project, zones, unchanged, names)
     monkeypatch.setattr(tpu, "scan", scan)
     capsys.readouterr()
     assert tpu.main(["down", "mashbox-qwen3-8-27b"]) == 1
@@ -404,7 +405,7 @@ def test_hy_nomas_row_and_staging_wheel(cloud, tmp_path, monkeypatch, capsys):
     assert S["copied"] == ["mashbox-install.sh", w.name]
     cmd = [c for c in S["calls"] if "--command" in c and "mashbox-install.sh" in c[c.index("--command") + 1]][0]
     script = cmd[cmd.index("--command") + 1]
-    assert "MASHBOX_EXTRAS=tpu,hy-nomas" in script and f"MASHBOX_WHEEL=$HOME/{w.name}" in script and "-lt 92" in script
+    assert "MASHBOX_EXTRAS=tpu,hy-nomas" in script and f'MASHBOX_WHEEL="$HOME"/{w.name}' in script and "-lt 92" in script
     assert re.search(r"Open +http://127\.0\.0\.1:8[78]\d\d/ in your browser", capsys.readouterr().out)
 
 
@@ -564,6 +565,123 @@ def test_f10_names_zones_projects_are_checked_before_gcloud(cloud, argv, capsys)
     assert read().get("calls", []) == []
 
 
+def test_chip_runs_the_wheel_it_was_given_and_a_server_from_another_mashbox_restarts(cloud, tmp_path, monkeypatch, capsys):
+    """The Mac app passes its own wheel (MASHBOX_WHEEL): the chip installs that wheel, never PyPI's release of the same
+    version number, and a server that was started from another mashbox (PyPI 0.1.0 had no request guard) is started
+    again instead of being reused under the package the install just replaced."""
+    w = tmp_path / "mashbox-0.1.0+gabc1234-py3-none-any.whl"
+    w.write_bytes(b"wheel bytes")
+    monkeypatch.setenv("MASHBOX_WHEEL", str(w))
+    read = cloud(plain={Z[0]: "ok"}, server="running", server_pkg="mashbox==0.1.0")
+    assert up("--agents") == 0
+    S = read()
+    assert S["copied"] == ["mashbox-install.sh", w.name]
+    script = [c for c in S["calls"] if "--command" in c and "mashbox-install.sh" in c[c.index("--command") + 1]][0]
+    script = script[script.index("--command") + 1]
+    sha = hashlib.sha256(b"wheel bytes").hexdigest()
+    assert f'MASHBOX_WHEEL="$HOME"/{w.name}' in script and "MASHBOX_VERSION" not in script
+    assert f"pkg='wheel sha256={sha}'" in script and 'echo "$pkg" > ~/.mashbox/serve.pkg' in script
+    out = capsys.readouterr().out
+    assert "came from another mashbox (mashbox==0.1.0)" in out and "server started" in out
+    assert S["server_pkg"] == f"wheel sha256={sha}"
+    assert up("--agents") == 0                                      # same wheel again: the server is kept
+    assert "server running" in capsys.readouterr().out and read()["starts"] == 2
+
+
+def test_without_a_wheel_the_chip_pins_this_version(cloud):
+    read = cloud(plain={Z[0]: "ok"})
+    assert up() == 0
+    script = [c for c in read()["calls"] if "--command" in c and "mashbox-install.sh" in c[c.index("--command") + 1]][0]
+    script = script[script.index("--command") + 1]
+    v = __import__("mashbox").__version__
+    assert f"MASHBOX_VERSION={v}" in script and f"pkg=mashbox=={v}" in script and "MASHBOX_WHEEL" not in script
+
+
+def test_a_second_start_with_other_settings_starts_the_server_again(cloud, capsys):
+    """A second Start on the same chip with other settings (the app's Coding agents box) starts the server again with
+    them; the same settings keep it running."""
+    read = cloud(plain={Z[0]: "ok"})
+    assert up() == 0
+    capsys.readouterr()
+    assert up("--agents") == 0
+    out = capsys.readouterr().out
+    assert "had other settings (run qwen3-8-27b)" in out and "server started" in out
+    assert up("--agents") == 0
+    assert "server running" in capsys.readouterr().out
+    S = read()
+    assert S["starts"] == 3 and len(creates(S)) == 1 and S["server_args"] == "run qwen3-8-27b --ctx 32768 --slots 1"
+
+
+def test_chip_script_keeps_a_server_only_for_the_same_model_and_settings(monkeypatch, tmp_path):
+    """The script `tpu up` runs on the chip, run by a real shell: a server keeps running only when it runs the same
+    mashbox, model and settings; otherwise it gets Ctrl-C (SIGINT) and starts again with the new ones."""
+    import shutil
+    import subprocess
+    import threading
+    import types
+    calls = []
+
+    def gc(args, project=None, timeout=None):
+        calls.append(args)
+        return types.SimpleNamespace(returncode=0, stdout="MBX_SERVER=started\n", stderr="")
+    monkeypatch.setattr(tpu, "gc", gc)
+    monkeypatch.setattr(tpu, "still_ours", lambda *a, **k: None)
+    monkeypatch.delenv("MASHBOX_WHEEL", raising=False)
+    monkeypatch.delenv("MASHBOX_HF_TOKEN_FILE", raising=False)
+
+    def script(mid, extra=()):
+        tpu.remote_setup(tpu.model(mid), "p", Z[0], "c1", list(extra))
+        return calls[-1][calls[-1].index("--command") + 1]
+    home, stub = tmp_path / "home", tmp_path / "bin"
+    home.mkdir()
+    stub.mkdir()
+    (home / "mashbox-install.sh").write_text("exit 0\n")
+    sleep = shutil.which("sleep")
+    for name, body in {"python3": 'echo started >> "$HOME/launched"\n',                # the server launch, recorded
+                       "df": "echo 'Filesystem 1024-blocks Used Available Capacity Mounted'\n"
+                             "echo '/dev/x 1 1 999999999999 1% /'\n",
+                       "sleep": f"exec {sleep} 0.05\n"}.items():
+        (stub / name).write_text("#!/bin/sh\n" + body)
+        (stub / name).chmod(0o755)
+    env = {"HOME": str(home), "PATH": f"{stub}:{os.environ['PATH']}"}
+
+    def run(text):
+        r = subprocess.run(["bash", "-c", text], env=env, capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, r.stdout + r.stderr
+        return r.stdout
+
+    def launched(n):                                # the launch runs in the background (&): wait for its record
+        import time
+        for _ in range(200):
+            f = home / "launched"
+            if f.exists() and f.read_text().count("started") >= n:
+                break
+            time.sleep(0.05)
+        assert (home / "launched").read_text().count("started") == n
+
+    def serving():                                  # a server process in its own group, as LAUNCH starts one
+        p = subprocess.Popen([sleep, "600"], start_new_session=True)
+        threading.Thread(target=p.wait, daemon=True).start()
+        (home / ".mashbox" / "serve.pid").write_text(f"{p.pid}\n")
+        return p
+    plain, agents = script("qwen3-8-27b"), script("qwen3-8-27b", ["--ctx", "32768", "--slots", "1"])
+    assert "MBX_SERVER=started" in run(plain)
+    assert (home / ".mashbox" / "serve.args").read_text() == "run qwen3-8-27b\n"
+    launched(1)
+    p = serving()
+    out = run(plain)                                 # same mashbox, model and settings: kept
+    assert "MBX_SERVER=running" in out and "MBX_ARGS=run qwen3-8-27b" in out and p.poll() is None
+    launched(1)
+    out = run(agents)                                # the Coding agents box: other settings
+    assert "MBX_CHANGED=run qwen3-8-27b" in out and "MBX_SERVER=started" in out
+    p.wait(timeout=10)
+    assert (home / ".mashbox" / "serve.args").read_text() == "run qwen3-8-27b --ctx 32768 --slots 1\n"
+    p = serving()
+    out = run(script("hy-nomas"))                    # another model on the same chip name
+    assert "MBX_CHANGED=run qwen3-8-27b --ctx 32768 --slots 1" in out and "MBX_SERVER=started" in out
+    p.wait(timeout=10)
+    launched(3)
+
 def test_up_chip_choices_come_from_passing_chip_rows():
     """`tpu up --chip` offers exactly the models.json chips rows that pass (one source with the docs chip tables)."""
     q = tpu.model("qwen3-8-27b")
@@ -675,7 +793,7 @@ def test_top_help_lists_tpu_and_every_tpu_command_has_help(capsys):
         cli.main(["--help"])
     out = capsys.readouterr().out
     flat = " ".join(out.split())        # argparse wraps help lines at the terminal width
-    assert "{env,tpu,run,download}" in flat and "mashbox tpu --help" in flat, out
+    assert "{env,tpu,run,download,models,inspect}" in flat and "mashbox tpu --help" in flat, out
     with pytest.raises(SystemExit):
         cli.main(["tpu", "--help"])
     out = capsys.readouterr().out

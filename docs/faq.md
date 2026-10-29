@@ -92,6 +92,8 @@ The first start depends mostly on your download speed: on a new TPU v6e-1 the do
 
 On TPU v6e with JAX 0.11.2, Qwen3.8-27B also downloads an 890 MB compile cache, so its first start loads compiled programs instead of compiling them.
 
+The Qwen3.8-27B server also saves the programs it compiled in an `aot` folder inside the compile cache folder, one per deployment (the same model, weights and settings). The next start of that deployment loads them before it compiles anything else. Each saved program is checked before use; one that fails is dropped and compiled again. Speculative decoding runs without them. `MASHBOX_AOT=0` turns the saved programs off. GGUF files do not use them.
+
 ### How do I stop a server, and what if the TPU will not start again?
 
 **What you see:** `Unable to initialize backend 'tpu': INTERNAL: TPU initialization failed: ... START_SESSION failed` when `mashbox` starts, after `TPU backend initialization is taking more than 60.0 seconds`.
@@ -115,7 +117,7 @@ On TPU v6e with JAX 0.11.2, Qwen3.8-27B also downloads an 890 MB compile cache, 
 <!-- chips:start -->
 | Model | Runs on | TPU v5e | TPU v6e | TPU v5p slice (v5p-8) | TPU v6e slice (v6e-4) |
 |---|---|---|---|---|---|
-| Hy-Nomas | TPU v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. One-chip mode in `mashbox run` ships in the next release; this version starts on a v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | Supported: 4 chips |
+| Hy-Nomas | TPU v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | Supported: 4 chips |
 | Qwen3.8-27B | TPU v6e-1 | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: one chip (v6e-1) | Not supported | Supported: 4 chips, split across them automatically |
 <!-- chips:end -->
 

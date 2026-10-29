@@ -1,4 +1,4 @@
-"""Live Hy-Nomas server: play a world in the browser, steer it with the keyboard, add timed actions.
+"""Live Hy-Nomas server: play a world in the browser, move through it with the keyboard, add timed actions.
 
 One process owns the chips. Each 5 s window is generated ahead of the play clock (``lead`` seconds before its first frame
 plays), decoded in parts in parallel on the decoder chips (four on a v6e-4), crossfaded at the part seams, and sent at its 24 fps play

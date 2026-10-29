@@ -7,7 +7,7 @@ the model named. It never carries a log of how it was made: no dated stamps ("ve
 2026-10-28"), no run stories ("our run", "we saw", "first-time user"), no status chatter ("yet", "pending", "coming
 soon", "for now"), no per-page date changelogs, no "read on <date>" source stamps, no notes to the people who
 maintain it, no record or run ids ("RUN-7", "ABC-12") and no hidden comments in Markdown, templates included. Dates
-belong in the version headings of the changelog (CORE-CHANGES.md) and in licence text only.
+belong in licence text only; the changelog (CORE-CHANGES.md) names each release by its version alone.
 
 What is read: Markdown and text by line; JSON by string value; Python by string literal; HTML by its visible text, its
 alt/title/aria-label/placeholder words, its comments and the string literals of its scripts; JavaScript by string
@@ -39,11 +39,11 @@ _MONTH = r"(?:January|February|March|April|May|June|July|August|September|Octobe
 _MON = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)"
 MAINTAINER_RULES = Path("internal") / "docs_lint_rules.json"   # maintainers' extra rules (names, paths); absent in a public tree
 
-# (rule, regex, what to write instead). DATE rules do not apply to the changelog by version or to licence text.
+# (rule, regex, what to write instead). DATE rules do not apply to licence text.
 DATE_RULES = [
-    ("iso-date", re.compile(r"(?<![\w/-])20\d\d-[01]\d-[0-3]\d(?:T\d\d:\d\d(?::\d\d)?(?:\.\d+)?Z?)?(?![\w-])"), "no dates on a page: dates go in the changelog by version"),
-    ("long-date", re.compile(rf"\b\d{{1,2}} {_MON}[a-z]*\.? 20\d\d\b"), "no dates on a page: dates go in the changelog by version"),
-    ("us-date", re.compile(rf"\b{_MON}[a-z]*\.? \d{{1,2}},? 20\d\d\b"), "no dates on a page: dates go in the changelog by version"),
+    ("iso-date", re.compile(r"(?<![\w/-])20\d\d-[01]\d-[0-3]\d(?:T\d\d:\d\d(?::\d\d)?(?:\.\d+)?Z?)?(?![\w-])"), "no dates on a page: the release version pins the page"),
+    ("long-date", re.compile(rf"\b\d{{1,2}} {_MON}[a-z]*\.? 20\d\d\b"), "no dates on a page: the release version pins the page"),
+    ("us-date", re.compile(rf"\b{_MON}[a-z]*\.? \d{{1,2}},? 20\d\d\b"), "no dates on a page: the release version pins the page"),
     ("month-year", re.compile(rf"\b{_MONTH} 20\d\d\b"), "no dates on a page: the release version pins the page"),
     ("day-month", re.compile(rf"\b\d{{1,2}} {_MONTH}\b"), "no dates on a page: the release version pins the page"),
     ("utc", re.compile(r"\bUTC\b"), "no measurement times on a page"),
@@ -86,19 +86,32 @@ RULES = [
     ("internal-id", re.compile(r"(?<![\w.-])(?!(?:SHA|UTF|ISO|IEC|RFC|CVE|CWE|PEP|IEEE|HTTP|TLS|GPL|LGPL|AGPL|MPL|BSD|MIT|CC|"
                                r"DDR|LPDDR|HBM|PCIE|USB)-)(?:[A-Z]{2,}(?:-[A-Z]{2,})*-\d+|[A-Z]\d+-[A-Z]{1,2}\d+)(?![\w-]|\.\d)"),
      "no internal ids: name the thing itself"),
+    # a request's answer can change with the other requests in its batch (row buckets change the rounding at a near tie)
+    ("batch-identity", re.compile(r"(?i)\bsame prompt gives the same answer\b|"
+                                  r"\b(?:same|identical) (?:answers?|outputs?|text|tokens)\b[^.;|()]{0,80}"
+                                  r"\b(?:batch(?:ed|es)?|alone|together|other (?:requests|users))\b|"
+                                  r"\b(?:alone|batched)\b[^.;|()]{0,80}\b(?:same|identical) (?:answers?|outputs?|text|tokens)\b"),
+     "an answer can differ when other requests share its batch: never promise the same answer alone and batched"),
+    # after a worker fault the front sends a request once more while its client has received nothing: not streamed, until
+    # its response is written (tokens the worker made stay in the front, so they never stop the retry); streamed, until
+    # its first output is sent. A page never ties the retry to output tokens or gives a non-streamed request with output 500
+    ("retry-rule", re.compile(r"(?i)\b(?:got|gets|has|had|have|produced|made|received) no output tokens?\b[^.;]{0,40}"
+                              r"\b(?:is|are|gets?|was|were) (?:sent|run|retried|tried)\b|"
+                              r"\b(?:non-streamed|not streamed)\b[^.;]{0,40}\b(?:with|has|had|got) (?:output|tokens)\b[^.;]{0,60}\b500\b|"
+                              r"\b(?:with|has|had|got) output\b[^.;]{0,80}\b(?:non-streamed|not streamed)\b[^.;]{0,30}\b500\b"),
+     "a request whose client has received nothing is sent once more: not streamed, until its response is written; "
+     "streamed, until its first output is sent"),
 ]
 DATE_IN_CODE = ("iso-date", "utc")       # read inside code blocks of the docs pages too (sample output keeps no run times)
-HEADING_DATE_RE = re.compile(r"^#{1,3} \d+\.\d+\.\d+ \(20\d\d-[01]\d-[0-3]\d\)\s*$")   # "## 0.1.1 (2026-10-28)"
 COMMENT_RE = re.compile(r"<!--(.*?)-->", re.S)
 MDX_COMMENT_RE = re.compile(r"\{/\*(.*?)\*/\}", re.S)   # an MDX page's hidden comment: {/* ... */}
 FENCE_RE = re.compile(r"^```.*?^```[ \t]*$", re.S | re.M)   # commands and program output: read as they are typed
 CODE_RE = re.compile(r"`[^`\n]+`")                          # inline code quotes a literal (an error message, a marker)
 # generated-block markers (llama.cpp HELP_START style) and the generated-file header of pages rendered from public code
-OK_COMMENT_RE = re.compile(r"^\s*(?:(?:models|cli|api|chips|cloud|charts|resources):(?:start|end)\b[^>]*|Generated (?:from|by) .*)$", re.S)
-CHANGELOGS = {"CORE-CHANGES.md", "CHANGELOG.md"}
+OK_COMMENT_RE = re.compile(r"^\s*(?:(?:models|cli|api|chips|cloud|charts|resources|catalog|archs):(?:start|end)\b[^>]*|Generated (?:from|by) .*)$", re.S)
 LEGAL = {"LICENSE", "LICENSE-KERNELS", "docs/licence.md"}
 TEXT_GLOBS = ("*.md", "*.mdx", "llms.txt", "hf/*.txt", "docs/media/*.txt", ".github/ISSUE_TEMPLATE/*.yml", "models.json", "docs/openapi.json")
-SKIP_PREFIX = ("tests/", "internal/", "licenses/", "src/mashbox/models.json")   # tests; private map; upstream texts; copy of models.json
+SKIP_PREFIX = ("tests/", "internal/", "addons/", "licenses/", "src/mashbox/models.json")   # tests; private map; private app add-ons; upstream texts; copy of models.json
 PY_ROOT = "src/mashbox/"                       # every string and docstring of the package: messages, help, UI text
 # the app pages people read: every .html, .svg and .js file under these folders (the files hf_github_sync_check.ui_pages reads)
 UI_ROOTS = ("src/mashbox/", "apps/", "docs/")
@@ -220,15 +233,13 @@ def load_private(repo):
 
 
 def lint_text(rel, text, allowed, used, extra=()):
-    """Problems in one file. rel is the repo-relative path (decides the changelog and legal exemptions).
+    """Problems in one file. rel is the repo-relative path (decides the legal exemption).
     Code blocks and inline code are not read for words (they quote commands, output and error text as printed), but
-    dates and UTC times in the code blocks of docs pages are. The changelog keeps a date only in its version headings.
+    dates and UTC times in the code blocks of docs pages are. The changelog keeps no dates, its version headings included.
     A hidden comment (<!-- -->, and {/* */} in MDX) fails in every public Markdown, MDX or text file, the page templates
     included."""
     probs = []
-    name = rel.rsplit("/", 1)[-1]
     rules = list(RULES) + list(extra)
-    changelog = name in CHANGELOGS
     if rel not in LEGAL:
         rules += DATE_RULES
     if rel.endswith((".md", ".mdx")):
@@ -251,8 +262,6 @@ def lint_text(rel, text, allowed, used, extra=()):
         flat = " ".join(line.split())
         name_only = in_code and " " not in flat   # 'pending' in code is a name, not a sentence
         for rule, rx, fix in rules:
-            if changelog and HEADING_DATE_RE.match(flat) and (rule, rx, fix) in DATE_RULES:
-                continue
             if name_only and rule in CODE_NAME_SKIP:
                 continue
             for mt in rx.finditer(flat):

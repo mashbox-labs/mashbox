@@ -2,8 +2,8 @@
  "openapi": "3.1.0",
  "info": {
   "title": "mashbox server",
-  "version": "0.1.2",
-  "description": "The HTTP server `mashbox run <model>` starts on 127.0.0.1 (reach it from your machine with an SSH tunnel). It speaks the OpenAI Chat Completions, Completions and Responses APIs and the Anthropic Messages API, so OpenAI and Anthropic clients and coding agents work against it unchanged. On 127.0.0.1 no API key is checked and any key a client sends is ignored; with `--api-key-file` or `MASHBOX_API_KEY`, and always when `--host` is not loopback, `/v1` routes and `/openapi.json` need a key (`Authorization: Bearer <key>` or `x-api-key: <key>`; 401 without). POST bodies must be `Content-Type: application/json` (415 otherwise), and a request from a web page of another origin, or naming the server by a host name it does not answer to, gets 403. Fields a route does not list are accepted and ignored."
+  "version": "0.1.3",
+  "description": "The HTTP server `mashbox run <model>` starts on 127.0.0.1 (reach it from your machine with an SSH tunnel). It speaks the OpenAI Chat Completions, Completions and Responses APIs and the Anthropic Messages API, so OpenAI and Anthropic clients and coding agents work against it unchanged. On 127.0.0.1 no API key is checked and any key a client sends is ignored; with `--api-key-file` or `MASHBOX_API_KEY`, and always when `--host` is not loopback, `/v1` routes, `/metrics` and `/openapi.json` need a key (`Authorization: Bearer <key>` or `x-api-key: <key>`; 401 without). POST bodies must be `Content-Type: application/json` (415 otherwise), and a request from a web page of another origin, or naming the server by a host name it does not answer to, gets 403. Fields a route does not list are accepted and ignored."
  },
  "servers": [
   {
@@ -22,7 +22,7 @@
   },
   {
    "name": "mashbox",
-   "description": "Health and this description."
+   "description": "Health, metrics and this description."
   }
  ],
  "paths": {
@@ -236,8 +236,38 @@
        }
       }
      },
+     "404": {
+      "description": "A model id other than the one this server serves (GET /v1/models), code model_not_found. Leaving model out is accepted.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant share it, a key without a name is its own tenant; without keys, 32 in all), or the server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "500": {
+      "description": "The request failed on the device: its one retry failed too, or it failed after its stream had sent output. A request whose client has received nothing is sent again (once, from the start): not streamed, until its response is written; streamed, until its first output is sent. A stream that has sent output is never retried by the server, since a second run could repeat what the client already has; it ends with the route's error event instead, carrying the response id as request_id.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
      "503": {
-      "description": "The model is still loading.",
+      "description": "The model is still loading. Retry after the Retry-After header's seconds.",
       "content": {
        "application/json": {
         "schema": {
@@ -303,8 +333,38 @@
        }
       }
      },
+     "404": {
+      "description": "A model id other than the one this server serves (GET /v1/models), code model_not_found. Leaving model out is accepted.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant share it, a key without a name is its own tenant; without keys, 32 in all), or the server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "500": {
+      "description": "The request failed on the device: its one retry failed too, or it failed after its stream had sent output. A request whose client has received nothing is sent again (once, from the start): not streamed, until its response is written; streamed, until its first output is sent. A stream that has sent output is never retried by the server, since a second run could repeat what the client already has; it ends with the route's error event instead, carrying the response id as request_id.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
      "503": {
-      "description": "The model is still loading.",
+      "description": "The model is still loading. Retry after the Retry-After header's seconds.",
       "content": {
        "application/json": {
         "schema": {
@@ -364,8 +424,28 @@
        }
       }
      },
-     "503": {
-      "description": "The model is still loading.",
+     "429": {
+      "description": "Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant share it, a key without a name is its own tenant; without keys, 32 in all), or the server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AnthropicError"
+        }
+       }
+      }
+     },
+     "500": {
+      "description": "The request failed on the device: its one retry failed too, or it failed after its stream had sent output. A request whose client has received nothing is sent again (once, from the start): not streamed, until its response is written; streamed, until its first output is sent. A stream that has sent output is never retried by the server, since a second run could repeat what the client already has; it ends with the route's error event instead, carrying the response id as request_id.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AnthropicError"
+        }
+       }
+      }
+     },
+     "529": {
+      "description": "The model is still loading, or its worker is starting again after a fault, or the server's queue is full (256 waiting in all): overloaded_error. Retry after the Retry-After header's seconds (x-should-retry: true while not ready).",
       "content": {
        "application/json": {
         "schema": {
@@ -426,8 +506,8 @@
        }
       }
      },
-     "503": {
-      "description": "The model is still loading.",
+     "529": {
+      "description": "The model is still loading, or its worker is starting again after a fault, or the server's queue is full (256 waiting in all): overloaded_error. Retry after the Retry-After header's seconds (x-should-retry: true while not ready).",
       "content": {
        "application/json": {
         "schema": {
@@ -492,8 +572,38 @@
        }
       }
      },
+     "404": {
+      "description": "A model id other than the one this server serves (GET /v1/models), code model_not_found. Leaving model out is accepted.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "Too many requests are waiting for a slot: 32 of yours (per tenant: keys the key file names with one tenant share it, a key without a name is its own tenant; without keys, 32 in all), or the server's queue is full (256 waiting in all). Retry after the Retry-After header's seconds.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
+     "500": {
+      "description": "The request failed on the device: its one retry failed too, or it failed after its stream had sent output. A request whose client has received nothing is sent again (once, from the start): not streamed, until its response is written; streamed, until its first output is sent. A stream that has sent output is never retried by the server, since a second run could repeat what the client already has; it ends with the route's error event instead, carrying the response id as request_id.",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/Error"
+        }
+       }
+      }
+     },
      "503": {
-      "description": "The model is still loading.",
+      "description": "The model is still loading. Retry after the Retry-After header's seconds.",
       "content": {
        "application/json": {
         "schema": {
@@ -514,6 +624,28 @@
         "model": "qwen3-8-27b",
         "input": "Name three planets.",
         "max_output_tokens": 64
+       }
+      }
+     }
+    }
+   }
+  },
+  "/metrics": {
+   "get": {
+    "operationId": "metrics",
+    "summary": "Metrics (Prometheus text)",
+    "description": "What the server does, in the Prometheus text format: requests running and waiting, KV cache use, the cache layout (one slot holds one whole context: block_size = the context length, num_blocks = the slots), requests answered by finish reason, prompt and generated tokens, prefix cache lookups and hits (tokens), preemptions (never), worker restarts, programs compiled after ready, and histograms of time to first token, queue time, end-to-end time and time per output token. Every name starts with `mashbox:`. No label names a user, an API key or a session.",
+    "tags": [
+     "mashbox"
+    ],
+    "responses": {
+     "200": {
+      "description": "Prometheus text exposition format.",
+      "content": {
+       "text/plain": {
+        "schema": {
+         "type": "string"
+        }
        }
       }
      }
@@ -550,11 +682,86 @@
     "properties": {
      "status": {
       "type": "string",
-      "description": "ok when the model is loaded, loading before.",
+      "description": "ok when the model is loaded, loading before (and while its worker restarts).",
       "enum": [
        "ok",
        "loading"
       ]
+     },
+     "live_rows": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Requests being answered now."
+     },
+     "waiting": {
+      "type": "integer",
+      "description": "Requests waiting for a slot."
+     },
+     "cache_bytes": {
+      "type": "integer",
+      "description": "Bytes the prompt cache holds: host memory copies plus slot snapshots."
+     },
+     "host_cache_bytes": {
+      "type": "integer",
+      "description": "Bytes of prompt cache in host memory."
+     },
+     "snapshot_bytes": {
+      "type": "integer",
+      "description": "Bytes of saved slot state points."
+     },
+     "host_cache_cap_bytes": {
+      "type": "integer",
+      "description": "Most bytes the host memory prompt cache holds (0 = off)."
+     },
+     "host_cache_evictions": {
+      "type": "integer",
+      "description": "Prompt cache entries removed from host memory to stay under that cap."
+     },
+     "cache_namespace": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Id of what cached prompts are valid for: model, weights, tokenizer, chat template and cache policy."
+     },
+     "deployment_id": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Id of the compiled programs this server runs (null until set)."
+     },
+     "component_set_sha": {
+      "type": [
+       "string",
+       "null"
+      ],
+      "description": "Id of the model's component set (null until set)."
+     },
+     "certification": {
+      "type": "string",
+      "description": "Whether this server's build passed the certification gate on its chip.",
+      "enum": [
+       "certified",
+       "not_certified"
+      ]
+     },
+     "compiles_after_ready": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "description": "Programs compiled since the server reported ready, in every worker process it has run (0 when the start-up warm-up compiled every program the requests ran; null before ready or where this process does not count them)."
+     },
+     "worker_pid": {
+      "type": "integer",
+      "description": "Process id of the model's worker, when the engine runs in a worker process."
+     },
+     "worker_restarts": {
+      "type": "integer",
+      "description": "Times the worker was started again after a fault."
      }
     },
     "required": [
@@ -840,7 +1047,7 @@
      },
      "stream": {
       "type": "boolean",
-      "description": "Stream the answer as server-sent events (see the 200 text/event-stream response).",
+      "description": "Stream the answer as server-sent events (see the 200 text/event-stream response). A client that reads nothing from the stream for 30 s is disconnected and its answer stops.",
       "default": false
      },
      "stream_options": {
@@ -869,7 +1076,7 @@
      },
      "merge": {
       "type": "boolean",
-      "description": "false runs the request alone instead of sharing a batch with requests sent at the same time.",
+      "description": "Accepted and ignored: every request joins the running batch at the next device call, and no request field changes how other requests are scheduled.",
       "default": true
      },
      "prompt_cache_key": {
@@ -879,6 +1086,18 @@
      "store": {
       "type": "boolean",
       "description": "Accepted and ignored."
+     },
+     "logprobs": {
+      "type": "boolean",
+      "description": "Not supported (log probabilities): a request that sets it gets 400 naming the field."
+     },
+     "top_logprobs": {
+      "type": "integer",
+      "description": "Not supported (log probabilities): a request that sets it gets 400 naming the field."
+     },
+     "response_format": {
+      "type": "object",
+      "description": "Only {\"type\": \"text\"}. Not supported: json_object and json_schema (structured output), answered with 400."
      },
      "max_tokens": {
       "type": "integer",
@@ -1300,17 +1519,21 @@
      },
      "stream": {
       "type": "boolean",
-      "description": "Stream the answer as server-sent events (see the 200 text/event-stream response).",
+      "description": "Stream the answer as server-sent events (see the 200 text/event-stream response). A client that reads nothing from the stream for 30 s is disconnected and its answer stops.",
       "default": false
      },
      "merge": {
       "type": "boolean",
-      "description": "false runs the request alone instead of sharing a batch with requests sent at the same time.",
+      "description": "Accepted and ignored: every request joins the running batch at the next device call, and no request field changes how other requests are scheduled.",
       "default": true
      },
      "prompt_cache_key": {
       "type": "string",
       "description": "Tags the request's session in the server log (as the X-Session-Id header does)."
+     },
+     "logprobs": {
+      "type": "integer",
+      "description": "Not supported (log probabilities): a request that sets it gets 400 naming the field."
      },
      "max_tokens": {
       "type": "integer",
@@ -1572,7 +1795,7 @@
      },
      "stream": {
       "type": "boolean",
-      "description": "Stream the answer as server-sent events (see the 200 text/event-stream response).",
+      "description": "Stream the answer as server-sent events (see the 200 text/event-stream response). A client that reads nothing from the stream for 30 s is disconnected and its answer stops.",
       "default": false
      },
      "prompt_cache_key": {
@@ -1585,7 +1808,7 @@
      },
      "output_config": {
       "type": "object",
-      "description": "Accepted and ignored."
+      "description": "effort is accepted and ignored. Not supported: format (structured output), answered with 400."
      },
      "max_tokens": {
       "type": "integer",
@@ -1941,7 +2164,7 @@
      },
      "stream": {
       "type": "boolean",
-      "description": "Stream the answer as server-sent events (see the 200 text/event-stream response).",
+      "description": "Stream the answer as server-sent events (see the 200 text/event-stream response). A client that reads nothing from the stream for 30 s is disconnected and its answer stops.",
       "default": false
      },
      "prompt_cache_key": {
@@ -1952,13 +2175,21 @@
       "type": "boolean",
       "description": "Accepted and ignored."
      },
-     "include": {
-      "type": "array",
-      "description": "Accepted and ignored."
-     },
      "client_metadata": {
       "type": "object",
       "description": "Accepted and ignored."
+     },
+     "include": {
+      "type": "array",
+      "description": "Accepted and ignored, except an entry naming logprobs: 400 (log probabilities are not supported)."
+     },
+     "top_logprobs": {
+      "type": "integer",
+      "description": "Not supported (log probabilities): a request that sets it gets 400 naming the field."
+     },
+     "text": {
+      "type": "object",
+      "description": "Only format {\"type\": \"text\"}. Not supported: other formats (structured output), answered with 400."
      },
      "max_output_tokens": {
       "type": "integer",
@@ -2208,7 +2439,9 @@
        "response.custom_tool_call_input.delta",
        "response.custom_tool_call_input.done",
        "response.completed",
-       "response.incomplete"
+       "response.incomplete",
+       "error",
+       "response.failed"
       ]
      },
      "sequence_number": {
@@ -2258,7 +2491,7 @@
      "type",
      "sequence_number"
     ],
-    "description": "One `event:` + `data:` pair. An error mid-stream is sent as `data: {\"error\": ...}` then `data: [DONE]`."
+    "description": "One `event:` + `data:` pair. An error after the stream started is sent as event `error`, then `response.failed` (the response with status failed and its error)."
    }
   }
  }

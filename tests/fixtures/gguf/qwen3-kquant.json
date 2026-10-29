@@ -1,0 +1,48 @@
+{
+ "name": "qwen3-kquant",
+ "arch": "qwen3",
+ "made_by": "llama-quantize",
+ "gguf_sha256": "1b07744777735766e7862015c54582191ffe062974e47bebd6a084ddc6c825f1",
+ "gguf_bytes": 2328320,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "0226aa9a57468bcc476072227bd5988ce4834dbf312bca3d65796ec867a59154",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "qwen3",
+  "seed": 14,
+  "layers": 4,
+  "make": "llama-quantize",
+  "base": "Q4_K_M",
+  "tensor_types": [
+   "ffn_down=q6_k",
+   "ffn_up=q5_k",
+   "attn_v=iq4_nl",
+   "attn_output=iq4_xs",
+   "attn_q=q8_0",
+   "output=q6_k"
+  ]
+ },
+ "f32ref_logits_sha256": "37e54b4a0388d7e7cc7560c29ae7942face0aa9c98a0029c4cdda645b36f7654",
+ "f32ref_gguf_sha256": "984cd7a758a7d157619d03f8418f0ce228322d89d909f10fb3a597db6ae29aea",
+ "f32ref": "llama.cpp CPU on an all-F32 copy holding gguf-py's dequantization of every tensor"
+}

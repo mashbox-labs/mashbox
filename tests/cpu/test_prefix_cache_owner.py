@@ -1,5 +1,5 @@
 """Prefix cache owner rule: the cache key is (owner, token prefix) and the owner
-is the API key. A coding agent's parent and its subagents (Claude Code: same session id + x-claude-code-agent-id; Codex:
+is the tenant of the API key (an HMAC of the server's cache secret and the key, runtime/tenancy.py). A coding agent's parent and its subagents (Claude Code: same session id + x-claude-code-agent-id; Codex:
 same session-id + x-openai-subagent) are one owner, so they keep reusing their shared system prompt and tools; another
 key is another owner; without keys everything is one local owner. Session and agent headers never split the cache."""
 import json
@@ -72,9 +72,11 @@ def test_parent_and_subagents_on_one_key_share_the_cache_scope():
     assert post(port, "/v1/messages", {**a, "X-Claude-Code-Session-Id": "s1",
                                        "x-claude-code-agent-id": "sub-1"}, MSG) == 200                 # its subagent
     assert post(port, "/v1/responses", {**a, "session_id": "c1", "x-openai-subagent": "review"},
-                dict(model="m", input="hi", max_output_tokens=8)) == 200                               # a Codex subagent
+                dict(model="qwen3-8-27b", input="hi", max_output_tokens=8)) == 200                     # a Codex subagent
     assert post(port, "/v1/messages", {"x-api-key": "key-b", "X-Claude-Code-Session-Id": "s1"}, MSG) == 200   # other owner
-    assert eng.scopes == [[0], [0], [0], [1]]
+    from mashbox.runtime import tenancy as T
+    a_id, b_id = T.current().tenant_id("key-a"), T.current().tenant_id("key-b")
+    assert eng.scopes == [[a_id], [a_id], [a_id], [b_id]] and a_id != b_id
 
 
 def test_no_key_is_one_local_owner():
@@ -82,3 +84,21 @@ def test_no_key_is_one_local_owner():
     assert post(port, "/v1/messages", {"X-Claude-Code-Session-Id": "s1"}, MSG) == 200
     assert post(port, "/v1/messages", {"X-Claude-Code-Session-Id": "s2", "x-claude-code-agent-id": "x"}, MSG) == 200
     assert eng.scopes == [None, None]                    # no scopes passed: the engine's single shared scope
+
+
+def get(port, path, headers):
+    r = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers)
+    with urllib.request.urlopen(r, timeout=20) as x:
+        return json.loads(x.read())
+
+
+def test_health_load_fields_only_for_api_callers():
+    """/health stays open (status only); a caller with a key (or any caller of a server without keys) also gets the
+    load and cache fields checks read: live rows, waiting, cache bytes, the cache namespace, certification state."""
+    _, port = start(keys=["key-a"])
+    assert get(port, "/health", {}) == {"status": "ok"}
+    h = get(port, "/health", {"Authorization": "Bearer key-a"})
+    assert h["status"] == "ok" and h["waiting"] == 0 and h["certification"] == "not_certified"
+    assert {"live_rows", "cache_bytes", "cache_namespace", "component_set_sha", "deployment_id"} <= set(h)
+    _, port = start()
+    assert "waiting" in get(port, "/health", {})

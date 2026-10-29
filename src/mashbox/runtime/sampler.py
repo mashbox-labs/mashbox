@@ -37,6 +37,36 @@ def pack(rows, S):
     return out
 
 
+def check(r, V):
+    """None when sampling settings r (None = greedy) fit the engine's types (vocabulary V, int32 top_k, 64-bit seed,
+    finite floats), else the reason. The engine's admission phase 1 runs this per request, so one bad row never reaches
+    pack() for the batch."""
+    if not r:
+        return None
+    if not isinstance(r, dict):
+        return "sampling settings must be an object"
+    try:
+        f = {n: float(d if r.get(n) is None else r[n]) for n, d in (("temperature", 0.0), ("top_p", 1.0), ("min_p", 0.0),
+             ("repetition_penalty", 1.0), ("frequency_penalty", 0.0), ("presence_penalty", 0.0))}
+        k = r.get("top_k") or 0
+        seed = r.get("seed") or 0
+    except (TypeError, ValueError, OverflowError):
+        return "sampling settings must be numbers"
+    if not all(np.isfinite(v) for v in f.values()):
+        return "sampling settings must be finite numbers"
+    if isinstance(k, bool) or not isinstance(k, (int, np.integer)) or not 0 <= int(k) <= V:
+        return f"top_k must be an integer 0..{V} (the vocabulary size)"
+    if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)) or not -(1 << 63) <= int(seed) < (1 << 64):
+        return "seed must be an integer that fits 64 bits"
+    if not (f["temperature"] >= 0 and 0 < f["top_p"] <= 1 and 0 <= f["min_p"] < 1 and f["repetition_penalty"] > 0):
+        return "temperature >= 0, top_p (0, 1], min_p [0, 1), repetition_penalty > 0"
+    try:
+        pack([r], 1)
+    except Exception as e:
+        return f"sampling settings: {e}"
+    return None
+
+
 def to_device(sp):
     return {k: jnp.asarray(v) for k, v in sp.items()}
 

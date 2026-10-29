@@ -1,0 +1,44 @@
+{
+ "name": "granite-pyquant",
+ "arch": "granite",
+ "made_by": "gguf-py",
+ "gguf_sha256": "405c8e40f80f236482952f80920eae9b343c6f20cafd39e5584da10c5c339857",
+ "gguf_bytes": 1734624,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "3036ac949239a95fc801edcf3677a5cc648a5d3854c3a9bb2d45116ebe0e2742",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "granite",
+  "seed": 34,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": [
+   "Q8_0",
+   "Q4_0",
+   "Q5_0"
+  ]
+ },
+ "f32ref_logits_sha256": "618e9426304d5990432c27e573d5502db85a9443da6337c6a81d30bb373430eb",
+ "f32ref_gguf_sha256": "868c91ee035b84c9ae63e77a6e1a10a0c9931b4a3e9ad3ffaff8f1914bd39a74",
+ "f32ref": "llama.cpp CPU on an all-F32 copy holding gguf-py's dequantization of every tensor"
+}

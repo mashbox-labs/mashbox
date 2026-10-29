@@ -306,7 +306,7 @@ def test_f18_world_stream_relays_no_cookies_and_the_real_origin(ctx):
 
 
 def test_app_pages_cannot_be_framed_by_other_sites(ctx):
-    """Found while fixing the cross-site POST check: another site could frame the app and steer clicks onto Start or Delete chip."""
+    """Found while fixing the cross-site POST check: another site could frame the app and trick clicks onto Start or Delete chip."""
     for path in ("/", "/p/servers", "/p/agents"):
         h = req(ctx.port, "GET", path)[1]
         assert h.get("content-security-policy") == "frame-ancestors 'self'" and h.get("x-frame-options") == "SAMEORIGIN"
@@ -327,7 +327,7 @@ def test_f4_codex_config_takes_no_settings_from_the_server():
                       ("Qwen/Qwen3-8B", "http://127.0.0.1:8000")):
         srv = {"id": "s1", "name": "S", "url": base, "from": "url", "has_key": False}
         boxes = node("agents", str(ROOT / "src/mashbox/ui/app/view.js"),
-                     json.dumps({"state": {"servers": [srv], "active": "s1"}, "check": {"ok": True, "models": [{"id": mid, "context": 32768}]}}))
+                     json.dumps({"state": {"servers": [srv], "active": "s1"}, "check": {"ok": True, "url": base, "models": [{"id": mid, "context": 32768}]}}))
         codex = next(b["text"] for b in boxes if "model_providers" in b["text"])
         cfg = tomllib.loads(codex)
         assert set(cfg) <= {"model_provider", "model", "model_context_window", "model_auto_compact_token_limit",
@@ -357,3 +357,18 @@ def test_f6_links_in_replies_never_run_script_in_the_window():
     got = json.loads(r.stdout)
     assert 'href="mailto:javascript' not in got["html"] and 'href="mailto:me@x.org"' in got["html"]
     assert got["src"] == [None, None, "https://hf.co/m"]                        # the catalog's chat.source link
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_connect_agent_page_gives_settings_only_for_a_server_that_answers():
+    """F18: the page rendered settings whenever /api/state had a row, even when the check in the same
+    breath said there was no server (a TPU row whose tunnel just ended). Settings only with a passing check."""
+    srv = {"id": "tpu-c1", "name": "TPU c1", "url": "http://127.0.0.1:8000", "from": "tpu", "has_key": False}
+    st = {"servers": [srv], "active": "tpu-c1"}
+    view = str(ROOT / "src/mashbox/ui/app/view.js")
+    for chk in ({"ok": False, "error": "no server"}, {"ok": False, "error": "not running: TPU c1 stopped"}, {}):
+        assert node("agents", view, json.dumps({"state": st, "check": chk})) == []
+    other = {"ok": True, "url": "http://127.0.0.1:8001", "models": [{"id": "m1", "context": 32768}]}
+    assert node("agents", view, json.dumps({"state": st, "check": other})) == []     # a check of another server (F21)
+    ok = node("agents", view, json.dumps({"state": st, "check": dict(other, url=srv["url"])}))
+    assert ok and any("ANTHROPIC_BASE_URL" in b["text"] for b in ok)

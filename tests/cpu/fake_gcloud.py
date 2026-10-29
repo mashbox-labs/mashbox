@@ -1,16 +1,28 @@
 """A fake gcloud for the `mashbox tpu` CPU tests. State and scenario live in the JSON file named by FAKE_GCLOUD_STATE.
 
 Scenario keys: account, project, api (bool), plain {zone: ok|capacity|quota|no-access|vanish|accepted-auth|accepted-internal},
-qr_create {zone: ok|quota|accepted-auth|accepted-internal} (accepted-*: Google made it, then the call ended in that error;
-accepted-auth also leaves the sign-in expired, so every later call fails as UNAUTHENTICATED),
-grant {zone: describes before ACTIVE}, list_error {zone: auth|other}, probe ("404" or "403"), armed (int), server ("running" or ""),
-tunnel_fail (bool: the SSH forward cannot be set up).
+qr_create {zone: ok|quota|accepted-auth|accepted-internal|raced-auth|raced-internal} (accepted-*: Google made it, then the
+call ended in that error; accepted-auth also leaves the sign-in expired, so every later call fails as UNAUTHENTICATED;
+raced-*: Google did not make it, someone else made one of that name without our label, then the call ended in that
+error; plain takes raced-* too),
+grant {zone: describes before ACTIVE}, swap_after_list ["zone/name": the node or queued request listed is replaced by
+one of that name without our label right after a list of that zone], list_error {zone: auth|other}, probe ("404" or "403"), armed (int), server ("running" or ""),
+tunnel_fail (true: the SSH forward cannot be set up; "long": as OpenSSH says when the socket path is too long), guard ("403" default: the server refuses a foreign Origin as
+mashbox's request guard does; "200" answers it, as a server without the guard; "404" has no such route; "drop" closes
+the connection), copied_sha {file: sha256 of the bytes scp sent},
+swap_on {"zone/name": scp|install|probe|tail|tunnel: the node is deleted and made again without our label during that
+call (the call itself still reaches the node it was given)}, tunnel_drop (int: that many forwards exit at once, as ssh
+does when the connection drops, without a forward error), ready (false: the server answers 503 to a request without a
+foreign Origin, as one still loading).
 Every call is appended to state["calls"]. `tpu-vm ssh ... -- -N -L SOCKET:...` serves HTTP 200 ("ok") on that Unix
-socket (the tunnel's forward), until killed; with -L 127.0.0.1:L:... (mashbox before the held port) on 127.0.0.1:L, and
+socket (the tunnel's forward), and the `guard` answer to a request with a foreign Origin, until killed; with -L 127.0.0.1:L:... (mashbox before the held port) on 127.0.0.1:L, and
 it exits as ssh does with ExitOnForwardFailure when L is taken.
 """
 import fcntl
+import hashlib
 import json
+import shlex
+import re
 import os
 import socketserver
 import sys
@@ -53,6 +65,14 @@ def labels(args):
     return dict(kv.split("=", 1) for kv in (opt(args, "--labels") or "").split(",") if "=" in kv)
 
 
+def unlabelled(args):
+    """The same create made by someone else: no mashbox label."""
+    if "--labels" not in args:
+        return list(args)
+    i = args.index("--labels")
+    return args[:i] + args[i + 2:]
+
+
 def node(name, zone, args, qr=None):
     n = {"name": f"projects/p/locations/{zone}/nodes/{name}", "state": "READY", "createTime": stamp(),
          "acceleratorType": opt(args, "--accelerator-type"), "labels": labels(args), "metadata": meta(args),
@@ -62,11 +82,26 @@ def node(name, zone, args, qr=None):
     return n
 
 
-def tunnel(args):
+def tunnel(args, guard="403", ready=True):
     spec = args[args.index("-L") + 1]
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
+            o = self.headers.get("Origin")
+            if not ready and not (o and not o.startswith("http://127.0.0.1:")):   # still loading
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if o and not o.startswith("http://127.0.0.1:"):                  # another web site's page
+                if guard == "drop":
+                    self.close_connection = True
+                    return
+                if guard != "200":
+                    self.send_response(int(guard))
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
             self.send_response(200)
             self.send_header("Content-Length", "2")
             self.end_headers()
@@ -94,9 +129,31 @@ def tunnel(args):
     srv.serve_forever()
 
 
+def call_kind(args):
+    """(node name, kind) of a call that reaches a node by name: scp, install, probe, tail, tunnel or ssh."""
+    if args[2:4] == ["tpu-vm", "scp"]:
+        return next(a for a in args if a.endswith(":"))[:-1], "scp"
+    if args[2:4] != ["tpu-vm", "ssh"]:
+        return None, None
+    cmd = opt(args, "--command") or ""
+    k = ("tunnel" if "-L" in args else "install" if "mashbox-install.sh" in cmd else "probe" if "MBX_PROBE_NODE" in cmd
+         else "tail" if "MBX_ALIVE" in cmd else "ssh")
+    return args[4], k
+
+
+def swap_during(S, args):
+    """swap_on: the node of that name is replaced by one without our label while this call runs."""
+    name, k = call_kind(args)
+    key = f"{opt(args, '--zone')}/{name}"
+    if k and S.get("swap_on", {}).get(key) == k and key in S.get("nodes", {}):
+        S["nodes"][key] = dict(S["nodes"][key], labels={})
+        S.setdefault("swapped", []).append(k)
+
+
 def run(S, args):
     pos = [a for a in args if not a.startswith("--")]
     z = opt(args, "--zone")
+    swap_during(S, args)
     if args[:2] == ["auth", "list"]:
         print(S.get("account", ""))
         return 0
@@ -118,6 +175,11 @@ def run(S, args):
         name, out = pos[4], S.get("plain", {}).get(z, "capacity")
         if f"{z}/{name}" in nodes:
             print(f"ERROR: (gcloud.compute.tpus.tpu-vm.create) ALREADY_EXISTS: {name} already exists", file=sys.stderr)
+            return 1
+        if out.startswith("raced-"):                # another actor made that name (no mashbox label), ours errored
+            nodes[f"{z}/{name}"] = dict(node(name, z, unlabelled(args)), state="CREATING")
+            S["expired"] = out == "raced-auth"
+            print(ERR[out.split("-", 1)[1]].replace("{z}", z), file=sys.stderr)
             return 1
         if out.startswith("accepted-"):             # Google made it, then the call failed (a 9 min create, seen 10-28)
             nodes[f"{z}/{name}"] = dict(node(name, z, args), state="CREATING")
@@ -143,6 +205,16 @@ def run(S, args):
             return 1
         rows = nodes if res == "tpu-vm" else qrs
         print(json.dumps([v for k, v in rows.items() if k.startswith(z + "/")]))
+        for k in S.get("vanish_after_list", []):        # deleted (its max lifetime) right after this list
+            if k.startswith(z + "/") and k in rows and len(S["calls"]) > 1 and S["calls"][-1][3] == "list":
+                S.setdefault("listed", []).append(k)
+                if S["listed"].count(k) == 1:
+                    rows.pop(k)
+        for k in S.get("swap_after_list", []):          # deleted and made again without our label after this list
+            if k.startswith(z + "/") and k in rows:
+                rows[k] = dict(rows[k], labels={})
+                if "tpu" in rows[k]:
+                    rows[k]["tpu"] = {"nodeSpec": [{"nodeId": rows[k]["tpu"]["nodeSpec"][0]["nodeId"], "node": {}}]}
         return 0
     if res == "tpu-vm" and verb == "delete":
         n = nodes.pop(f"{z}/{pos[4]}", None)
@@ -158,12 +230,14 @@ def run(S, args):
         if out == "quota":
             print(ERR["quota"].replace("{z}", z), file=sys.stderr)
             return 1
+        if out.startswith("raced-"):
+            args = unlabelled(args)
         qrs[f"{z}/{q}"] = {"name": f"projects/p/locations/{z}/queuedResources/{q}", "createTime": stamp(),
                            "state": {"state": "WAITING_FOR_RESOURCES"}, "describes": 0, "args": args,
                            "tpu": {"nodeSpec": [{"nodeId": nid, "node": {"acceleratorType": opt(args, "--accelerator-type"),
                                                                        "labels": labels(args), "metadata": meta(args)}}]}}
-        if out.startswith("accepted-"):
-            S["expired"] = out == "accepted-auth"
+        if out.startswith(("accepted-", "raced-")):
+            S["expired"] = out.endswith("-auth")
             print(ERR[out.split("-", 1)[1]].replace("tpu-vm.create", "queued-resources.create"), file=sys.stderr)
             return 1
         return 0
@@ -191,16 +265,37 @@ def run(S, args):
     if res == "tpu-vm" and verb == "scp":
         dest = next(i for i, a in enumerate(args) if a.endswith(":"))
         S.setdefault("copied", []).extend(os.path.basename(a) for a in args[4:dest])
+        for a in args[4:dest]:
+            with open(a, "rb") as f:
+                S.setdefault("copied_sha", {})[os.path.basename(a)] = hashlib.sha256(f.read()).hexdigest()
         return 0
     if res == "tpu-vm" and verb == "ssh":
         if "-L" in args:
+            if S.get("tunnel_drop", 0) > 0:                       # the connection drops at once (no forward error)
+                S["tunnel_drop"] -= 1
+                return "tunnel-drop"
             return "tunnel-fail" if S.get("tunnel_fail") else "tunnel"
         cmd = opt(args, "--command") or ""
         if "mashbox-install.sh" in cmd:
-            print("    mashbox install: done: /home/u/.local/bin/mashbox (mashbox 0.1.0)")
+            m = re.search(r'^got=\$\(sha256sum "\$HOME"/(\S+) \| cut -c1-64\)\n\[ "\$got" = ([0-9a-f]{64}) \]', cmd, re.M)
+            if m:                                                  # the chip checks the wheel it got before installing
+                got = S.get("copied_sha", {}).get(shlex.split(m.group(1))[0], "")
+                if got != m.group(2):
+                    print("MBX_WHEEL_SHA=" + got)
+                    return 4
             print("MBX_DISK free_gb=80 have_gb=80")
-            print("MBX_SERVER=" + ("running" if S.get("server") else "started"))
-            S["server"] = "running"
+            m = re.search(r"^pkg=(.*)$", cmd, re.M)              # the mashbox this install puts on the chip
+            pkg = shlex.split(m.group(1))[0] if m else ""
+            m = re.search(r"^want=(.*)$", cmd, re.M)             # the server's model and settings
+            want = shlex.split(m.group(1))[0] if m else ""
+            same = S.get("server_pkg", pkg) == pkg                 # a server started from another one is restarted
+            same_args = S.get("server_args", want) == want         # as is one with another model or other settings
+            if S.get("server") and not same:
+                print("MBX_STALE=" + S["server_pkg"])
+            elif S.get("server") and not same_args:
+                print("MBX_CHANGED=" + S["server_args"])
+            print("MBX_SERVER=" + ("running" if S.get("server") and same and same_args else "started"))
+            S["server"], S["server_pkg"], S["server_args"] = "running", pkg, want
             S["starts"] = S.get("starts", 0) + 1
         elif "MBX_PROBE_NODE" in cmd:
             print(f"MBX_PROBE_NODE={S.get('probe', '404')}")
@@ -226,7 +321,15 @@ def main():
         with open(path, "w") as f:
             json.dump(S, f)
     if rc == "tunnel":
-        tunnel(args)
+        tunnel(args, S.get("guard", "403"), S.get("ready", True))
+    if rc == "tunnel-drop":
+        print("Connection to 192.0.2.10 closed by remote host.", file=sys.stderr)
+        sys.exit(255)
+    if rc == "tunnel-fail" and S.get("tunnel_fail") == "long":   # OpenSSH's own words for a socket path too long
+        sock = args[args.index("-L") + 1].split(":")[0]
+        print(f'unix_listener: path "{sock}" too long for Unix domain socket\nCould not request local forwarding.',
+              file=sys.stderr)
+        sys.exit(255)
     if rc == "tunnel-fail":                               # as ssh -o ExitOnForwardFailure=yes when it cannot bind
         print("unix_listener: cannot bind to path: Permission denied\nCould not request local forwarding.", file=sys.stderr)
         print("Error: Port forwarding failed.", file=sys.stderr)

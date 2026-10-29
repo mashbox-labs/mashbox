@@ -55,6 +55,8 @@ docs/models/hy-nomas.md | take for a 5 s window divided by 5 s | how the speed i
 docs/models/hy-nomas.md | Download of the 87.4 GB of weights | Hy-Nomas download, the sum of its files
 docs/models/hy-nomas.md | wait 10 s after it exits | advice: how long to wait before the next start
 docs/models/hy-nomas.md | the clock jumps after 0.5 s | the app's sync threshold (a setting)
+docs/mac-app.md | when it opens and every 6 hours | how often the Mac app checks for an update (a setting in the app), not a measurement
+
 README.md | Peak bf16 per chip | 918 TFLOPs | 197 TFLOPs | TPU v6e and v5e peak bf16 compute per chip, Google's published spec
 README.md | Peak int8 per chip | 1,836 TOPs | 393 TOPs | TPU v6e and v5e peak int8 compute per chip, Google's published spec
 docs/chips.md | Peak bf16 per chip | 918 TFLOPs | 197 TFLOPs | TPU v6e and v5e peak bf16 compute per chip, Google's published spec
@@ -85,10 +87,13 @@ docs/models/qwen3-8-27b.md | 64-token prompt, 128 new tokens | the speed test's 
 docs/models/qwen3-8-27b.md | Chat prompts of about 30 tokens | the load test's prompts (a test setting)
 docs/models/qwen3-8-27b.md | 8 fixed prompts (367 token positions) | size of the agreement test (a test setting)
 docs/models/qwen3-8-27b.md | 790-token prompts, greedy | the long-prompt speed test's prompt length (a test setting)
+docs/models/qwen3-8-27b.md | the head proposes 2 tokens | drafts per verify pass with --mtp 2 (a setting)
+docs/models/qwen3-8-27b.md | a pass that checks 3 tokens | tokens one verify pass reads with --mtp 2: the current token and its 2 drafts (a setting)
 docs/tpu-vs-gpu.md | 64-token prompts, 128 new tokens | the speed test's prompt and answer length (a test setting)
 src/mashbox/ui/shell/README.md | orange at 16 / 30 / 60 % | brown at 18 / 32 %, orange 70 % | colour mix percentages of the shell's palette (design values)
 docs/models/hy-nomas.md | 34.2 + 6.1 + 31.6 on disk | Hy-Nomas file sizes in GB (main model, LoRA, video decoder) as downloaded, not a measurement
 docs/server-api.md | integer | | 1, 2, 3, ... | generated from the spec: the values a counter field takes
+docs/server-api.md | reads nothing from the stream for 30 s is disconnected | the server's write timeout for a client that stops reading, a setting, not a measurement
 src/mashbox/models/hy_nomas/page.html | play back in the next 5 s window | the length of one video window (the model makes 120 frames at 24 fps)
 src/mashbox/models/hy_nomas/page.html | drew more than 100 ms after their time | the page's threshold for counting a frame as late (a setting)
 src/mashbox/models/hy_nomas/page.html | The TPU makes each 5 s of video | the length of one video window (model design)

@@ -7,7 +7,8 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-ALLOWED = {"numpy", "jax", "jaxlib", "ml_dtypes", "tokenizers", "jinja2", "huggingface_hub", "mashbox"}
+ALLOWED = {"numpy", "jax", "jaxlib", "ml_dtypes", "tokenizers", "jinja2", "huggingface_hub", "mashbox",
+           "gguf"}                                  # gguf: llama.cpp's GGUF reader, pinned in pyproject (NOTICE)
 IMPORT_NAME = {"pyyaml": "yaml", "imageio-ffmpeg": "imageio_ffmpeg", "pillow": "PIL"}     # pip name -> import name
 
 
@@ -207,8 +208,9 @@ def test_sync_check_catches_typed_drift(tmp_path):
 
 
 def test_public_text_is_clean():
-    """Public pages describe the release as plain facts (tools/docs_lint.py): no dates outside the changelog and licence
-    text, no run stories, status words, hidden notes, labels or internal ids. Each planted kind fails, so the lint stays on."""
+    """Public pages describe the release as plain facts (tools/docs_lint.py): no dates outside licence text (the
+    changelog's version headings carry none either), no run stories, status words, hidden notes, labels or internal
+    ids. Each planted kind fails, so the lint stays on."""
     import importlib.util
     r = subprocess.run([sys.executable, str(ROOT / "tools" / "docs_lint.py"), "--repo", str(ROOT)],
                        capture_output=True, text=True, timeout=120)
@@ -223,18 +225,36 @@ def test_public_text_is_clean():
                "Later starts: <!-- r:qwen3-8-27b/3 -->6.6 s<!-- /r -->.\n"
                "It has happened twice. Its owners should switch it (skill example-guide section 4).\n"
                '```text\n{"t": "2026-10-28T09:19:46Z"}\n```\n')
-    kinds = {p.split("[", 1)[1].split("]", 1)[0] for p in dl.lint_text("docs/x.md", planted, {}, set())}
+    kinds_of_text = lambda rel, text: {p.split("[", 1)[1].split("]", 1)[0] for p in dl.lint_text(rel, text, {}, set())}
+    kinds = kinds_of_text("docs/x.md", planted)
     for k in ("verified", "our-run", "yet", "long-date", "comment", "iso-date", "utc", "record-id", "coming-soon", "label",
               "marker", "story", "owner-note", "skill"):
         assert k in kinds, (k, kinds)
     assert any("code block" in p for p in dl.lint_text("docs/x.md", planted, {}, set()))
-    assert dl.lint_text("CORE-CHANGES.md", "## 0.1.0 (2026-10-28)\n", {}, set()) == []
+    # no dates in public files, the changelog included: a version heading is the version alone
+    assert "iso-date" in kinds_of_text("CORE-CHANGES.md", "## 0.1.0 (2026-10-28)\n")
+    assert dl.lint_text("CORE-CHANGES.md", "## 0.1.0\n", {}, set()) == []
     assert dl.lint_text("CORE-CHANGES.md", "1. Why: on 2026-10-28 the create failed.\n", {}, set())   # a date in an entry
     assert dl.lint_text("docs/x.md", "Run `mashbox run qwen3-8-27b` and wait.\n\n```text\nnot supported yet\n```\n", {}, set()) == []
     assert dl.lint_text("docs/x.md", "A test set of noisy, partly hidden tracks.\n<!-- resources:start -->\n<!-- resources:end -->\n",
                         {}, set()) == []   # plain meaning and a generated block
     assert dl.lint_text("docs/x.md", "It partly works on v5e.\n", {}, set())
     kinds_of = lambda rel, text: {p.split("[", 1)[1].split("]", 1)[0] for p in dl.lint_text(rel, text, {}, set())}
+    # an answer can change with the other requests in its batch: no page promises the same answer alone and batched
+    assert "batch-identity" in kinds_of("docs/x.md", "| Greedy | Temperature 0, so the same prompt gives the same answer. |\n")
+    assert "batch-identity" in kinds_of("docs/x.md", "A greedy prompt gives identical answers alone or batched.\n")
+    assert "batch-identity" in kinds_of("docs/x.md", "Batched rows get the same tokens as a request alone.\n")
+    # after a worker fault a request is sent once more while its client has received nothing: not streamed, until its
+    # response is written (the worker's tokens never stop it); streamed, until its first output is sent
+    assert "retry-rule" in kinds_of("CORE-CHANGES.md", "A request that got no output tokens is sent once more from the start.\n")
+    assert "retry-rule" in kinds_of("CORE-CHANGES.md", "A non-streamed request with output, or one whose retry fails too, gets 500.\n")
+    assert "retry-rule" in kinds_of("docs/x.md", "A request that has received no output tokens is retried once.\n")
+    assert "retry-rule" in kinds_of("docs/x.md", "A request that already has output ends: a stream gets the route's error event "
+                                                 "(with the response id), a non-streamed request gets 500.\n")
+    assert kinds_of("docs/x.md", "A request whose client has received nothing is sent again (once, from the start): not streamed, "
+                                 "until its response is written; streamed, until its first output is sent. A stream that has "
+                                 "sent output ends with the route's error event; a request whose retry fails too gets 500.\n") == set()
+    assert kinds_of("docs/x.md", "Plain JAX: slower, with the same outputs within rounding.\n") == set()
     # a page template is a public page: a hidden note to the writer fails like any other hidden comment
     assert "comment" in kinds_of("docs/_templates/model.md", "<!--\nCopy to docs/models/<id>.md and keep the headings.\n-->\n# <Name>\n")
     assert "comment" in kinds_of("docs/_templates/guide.md", "## 1. <Step>\n\n<!-- Media slot: one screenshot. -->\n")
@@ -250,7 +270,7 @@ def test_public_text_is_clean():
     assert {"verified", "internal-id", "staging", "yet"} <= kinds_of("src/mashbox/x.py", py), kinds_of("src/mashbox/x.py", py)
     assert dl.lint_text("src/mashbox/x.py", 'STATE = "pending"\nSTAMP = "verified"\n', {}, set()) == []   # names in code
     assert {"our-run", "internal-id"} <= kinds_of("src/mashbox/ui/x.js", "el.textContent = 'Seen in our run SYNC-77';\n")
-    # Codex's D04: visible text added to the app page fails the lint; the page as shipped passes
+    # Review D04: visible text added to the app page fails the lint; the page as shipped passes
     app = ROOT / "src" / "mashbox" / "ui" / "app" / "index.html"
     lines = app.read_text().splitlines(keepends=True)
     d04 = "".join(lines[:17] + ["<p>Verified on October 28, 2026 in our run SYNC-77; partly ready.</p>\n"] + lines[17:])
@@ -281,7 +301,9 @@ def test_chip_status_keeps_its_condition():
         for chip, row in m["chips"].items():
             want = sc.chip_text(m, chip)
             why = row.get("note") if row.get("status") == "passing" else (row.get("reason") or row.get("note"))
-            if why and row.get("status") != "pending":
+            if sc.chip_note(m, chip):  # a public note replaces "Not supported: <reason>" (test_chip_note_replaces_not_supported)
+                assert want == row["note"], (m["id"], chip, want)
+            elif why and row.get("status") != "pending":
                 assert want.endswith(": " + why), (m["id"], chip, want)
             page = f"Status: <!-- r:{m['id']}/chip-{chip} -->x<!-- /r -->."
             got = sc.fill_numbers(reg, page, "docs/x.md", sc.Problems())
@@ -507,3 +529,27 @@ def test_version_has_one_source():
     assert pp["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "mashbox.__version__"}
     init = (ROOT / "src/mashbox/__init__.py").read_text()
     assert not re.search(r"__version__\s*=\s*[\"']", init), "src/mashbox/__init__.py writes a version literal"
+
+
+def test_chip_note_replaces_not_supported():
+    """A chips row that is not supported can carry a public note (Hy-Nomas on one v6e chip: it fits, at 2.46 s of
+    compute per second of video, while this version of mashbox run starts on a v6e-4). Every view prints the note in
+    place of "Not supported: <reason>"; the status stays, so mashbox run is unchanged. A result can carry its own
+    highlight line for the card."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    note = "One chip: it fits on one chip. This version starts on four"
+    m = {"id": "x", "name": "X", "chips": {"v6e": {"status": "not supported", "reason": "runs only on four", "note": note}},
+         "results": [{"chip": "TPU v6e-1", "metric": "Speed", "value": "2 s", "baseline": "n/a", "highlight": "own words"}],
+         "files": []}
+    assert sc.chip_cell(m, "v6e") == "Not supported"
+    assert sc.chip_text(m, "v6e") == note
+    assert "| One chip | it fits on one chip. This version starts on four |" in sc.chips_table(m)
+    assert sc.highlights(m) == "- **2 s**: own words"
+    reg = json.loads((ROOT / "models.json").read_text())
+    hy = next(x for x in reg["models"] if x["id"] == "hy-nomas")
+    assert hy["chips"]["v6e"]["status"] == "not supported"
+    assert sc.chip_text(hy, "v6e").startswith(
+        "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video.")

@@ -23,9 +23,9 @@ mashbox run MODEL [options]
 
 | Option | Default | What it does |
 |---|---|---|
-| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b) |
+| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, or a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0) |
 | `--weights FILE` |  | a local .bshj file instead of the download (its sha256 is still checked) |
-| `--no-kernels` | off | plain JAX only (slower decode, same outputs within rounding) |
+| `--no-kernels` | off | plain JAX only: a catalog model runs without its TPU kernels (slower decode, same outputs within rounding) |
 | `--prompt TEXT` |  | answer one chat turn, print it and exit; without it, start the server |
 | `--thinking` | off | thinking mode for --prompt |
 | `--max-tokens N` | `512` | most new tokens for --prompt |
@@ -35,11 +35,13 @@ mashbox run MODEL [options]
 | `--seed N` | `0` | seed for sampled --prompt answers |
 | `--host H` | `127.0.0.1` | server address; keep it on 127.0.0.1 and use an SSH tunnel |
 | `--port N` | `8000` | server port |
-| `--api-key-file FILE` |  | require an API key from FILE (one per line; each key has its own prompt cache) on /v1 requests; also MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host a key made in ~/.config/mashbox/api-key |
+| `--api-key-file FILE` |  | require an API key from FILE on /v1 requests: one per line, a key or a key then its tenant's name; keys of one tenant share one prompt cache and one waiting queue, and a key without a name is its own tenant; only you may read or write FILE (chmod 600). Also MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host a key made in ~/.config/mashbox/api-key |
 | `--ui` | off | also serve the MASHBOX Chat page at http://127.0.0.1:<port>/ |
 | `--ctx N` | `2048` | context per request in tokens (prompt plus answer) |
-| `--slots N` | `8` | requests decoded together; the kernel bundle is built for 8, other values run plain JAX |
+| `--slots N` | `8` | requests decoded together; a catalog model's kernels are built for 8 and other values run it on plain JAX; at the default, a GGUF file takes as many as fit the chip's memory |
 | `--steps N` | `8` | decode steps per device call |
+| `--mtp K` |  | speculative decoding with the model's own multi-token-prediction head: K drafts per verify pass (1 to 3; 0 = off). Default: on only on chips where it passed its checks, else off. Uses the model's draft file (Qwen3.8-27B: --mtp 2); one chip only |
+| `--mtp-file FILE` |  | a local draft .bshj file instead of the download (its sha256 is still checked) |
 | `--tensor-parallel-size N` | `0` | chips to split the model across, as vLLM (1, 2 or 4); default: the chips of this host, at most 4 (1 on a TPU v6e-1, 4 on a TPU v5e-4 or v6e-4) |
 | `--cache-dir DIR` |  | compile cache (default ~/.cache/mashbox/xla, or JAX_COMPILATION_CACHE_DIR) |
 | `--no-warm` | off | skip compiling the first request's programs before ready |
@@ -58,9 +60,34 @@ mashbox download MODEL [options]
 
 | Option | Default | What it does |
 |---|---|---|
-| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b) |
+| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, or a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0) |
 | `--weights FILE` |  | a local .bshj file instead of the download (its sha256 is still checked) |
-| `--no-kernels` | off | plain JAX only (slower decode, same outputs within rounding) |
+| `--no-kernels` | off | plain JAX only: a catalog model runs without its TPU kernels (slower decode, same outputs within rounding) |
+
+## mashbox models
+
+The models in this version's catalog, by publisher, then model, then file.
+
+```
+mashbox models [options]
+```
+
+| Option | Default | What it does |
+|---|---|---|
+| `--json` | off | the same list as JSON |
+
+## mashbox inspect
+
+What a GGUF file or repo holds (architecture, block types, tokenizer) and how it would run here, without loading it.
+
+```
+mashbox inspect MODEL [options]
+```
+
+| Option | Default | What it does |
+|---|---|---|
+| `MODEL` |  | a .gguf file or a Hugging Face GGUF repo[:quant tag] |
+| `--no-download` | off | for a repo: only show which file llama.cpp's rule picks |
 
 ## mashbox tpu up
 

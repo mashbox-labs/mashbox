@@ -280,7 +280,8 @@ def test_f17_api_keys_and_their_own_prefix_cache_scope(model_dir):
     assert call(port, "/v1/models", headers={"Authorization": "Bearer key-a"})[0] == 200
     assert call(port, "/v1/chat/completions", CHAT, {"Authorization": "Bearer key-a"})[0] == 200
     assert call(port, "/v1/messages", dict(CHAT, max_tokens=8), {"x-api-key": "key-b"})[0] == 200
-    assert eng.scopes == [[0], [1]]                            # each key is its own cache scope
+    from mashbox.runtime import tenancy as T                     # each key is its own cache scope: its tenant id (A10)
+    assert eng.scopes == [[T.current().tenant_id("key-a")], [T.current().tenant_id("key-b")]]
     assert call(port, "/v1/models", headers={"Host": "my-vm.example:8000", "Authorization": "Bearer key-b"})[0] == 200
     code, body, _ = call(port, "/v1/models", headers={"Authorization": "Bearer key-c"})
     assert b"key-a" not in body and b"key-b" not in body and b"key-c" not in body
@@ -302,6 +303,7 @@ def test_f17_non_loopback_host_turns_a_key_on(tmp_path, monkeypatch, capsys):
     assert cli.api_keys(a) == ["k1", "k2"]
     f = tmp_path / "keys"
     f.write_text("k3\n\nk4\n")
+    f.chmod(0o600)                                             # a key file only its owner can read (R10 #4)
     a = cli.build_parser().parse_args(["run", "qwen3-8-27b", "--api-key-file", str(f)])
     assert cli.api_keys(a) == ["k3", "k4"]
 
@@ -317,8 +319,83 @@ def test_f17_an_empty_key_source_never_starts_open(tmp_path, monkeypatch):
         cli.api_keys(a)
     monkeypatch.delenv("MASHBOX_API_KEY")
     open(cli.KEY_FILE, "w").close()                                     # a start killed between making and writing the file
-    with pytest.raises(SystemExit):
+    os.chmod(cli.KEY_FILE, 0o600)                                       # as the server makes it: refused for being empty
+    with pytest.raises(SystemExit, match="holds no key"):
         cli.api_keys(a)
+
+
+KEY_FILE_BAD = {"group_read": 0o640, "world_read": 0o604, "group_write": 0o620, "world_write": 0o602}
+
+
+@pytest.mark.parametrize("case", sorted(KEY_FILE_BAD) + ["other_owner", "symlink", "fifo"])
+@pytest.mark.parametrize("which", ["api_key_file", "default"])
+def test_r10_a_key_file_others_can_read_or_write_is_refused(tmp_path, monkeypatch, which, case):
+    """Review R10 #4: an API key file (--api-key-file, or the default ~/.config/mashbox/api-key when it already exists)
+    is used only when it is a regular file of the server's user that no one else can read or write; otherwise the start
+    ends with one plain error naming the file, never a key. A key others can read lets them act as its tenant."""
+    from mashbox import cli
+    monkeypatch.delenv("MASHBOX_API_KEY", raising=False)
+    path = tmp_path / "cfg" / "api-key"
+    path.parent.mkdir()
+    real = tmp_path / "real-key"
+    real.write_text("secret-k1\n")
+    real.chmod(0o600)
+    if case == "symlink":
+        path.symlink_to(real)                                   # the target itself is fine; the link is not followed
+    elif case == "fifo":
+        os.mkfifo(path, 0o600)
+    else:
+        path.write_text("secret-k1\n")
+        path.chmod(KEY_FILE_BAD.get(case, 0o600))
+        if case == "other_owner":
+            uid = os.getuid()
+            monkeypatch.setattr(os, "getuid", lambda: uid + 1)  # the file belongs to someone other than the server
+    if which == "default":
+        monkeypatch.setattr(cli, "KEY_FILE", str(path))
+        a = cli.build_parser().parse_args(["run", "qwen3-8-27b", "--host", "0.0.0.0"])
+    else:
+        a = cli.build_parser().parse_args(["run", "qwen3-8-27b", "--api-key-file", str(path)])
+    with pytest.raises(SystemExit) as e:
+        cli.api_keys(a)
+    msg = str(e.value)
+    assert str(path) in msg and "chmod 600" in msg and "secret-k1" not in msg, msg
+
+
+def test_r10_public_text_says_keys_of_one_tenant_share_its_cache_and_queue():
+    """Review R10 #5: keys the key file names with one tenant are one owner, with one prefix cache and one waiting queue
+    (runtime/tenancy.py; test_tenancy pins it), so the public text says per tenant, never per key: the --api-key-file
+    help, both 429 descriptions, and the pages generated from them."""
+    import argparse
+    from mashbox import cli
+    from mashbox.runtime import openapi
+    sub = next(x for x in cli.build_parser()._actions if isinstance(x, argparse._SubParsersAction))
+    helps = [x.help for x in sub.choices["run"]._actions if "--api-key-file" in x.option_strings]
+    assert len(helps) == 1
+    for t in helps + [openapi.BUSY_OWNER, openapi.BUSY_OWNER_ANTH]:
+        assert "tenant" in t and "share" in t and "its own tenant" in t, t
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for page in ("docs/cli.md", "docs/models/qwen3-8-27b.md", "docs/server-api.md", "docs/openapi.json"):
+        with open(os.path.join(root, page)) as f:
+            text = f.read()
+        for wrong in ("each key has its own", "per API key"):
+            assert wrong not in text, (page, wrong)
+
+
+@pytest.mark.parametrize("which", ["api_key_file", "default"])
+def test_r10_a_key_file_only_its_owner_can_read_is_used(tmp_path, monkeypatch, which):
+    """The control for the refusals above: the same file at mode 600 (400 too) gives its keys."""
+    from mashbox import cli
+    monkeypatch.delenv("MASHBOX_API_KEY", raising=False)
+    path = tmp_path / "api-key"
+    path.write_text("secret-k1\nsecret-k2\n")
+    for mode in (0o600, 0o400):
+        path.chmod(mode)
+        if which == "default":
+            monkeypatch.setattr(cli, "KEY_FILE", str(path))
+            a = cli.build_parser().parse_args(["run", "qwen3-8-27b", "--host", "0.0.0.0"])
+        else:
+            a = cli.build_parser().parse_args(["run", "qwen3-8-27b", "--api-key-file", str(path)])
+        assert cli.api_keys(a) == ["secret-k1", "secret-k2"]
 
 
 # -------------------------------------------------------------------- prefix cache across API keys, the real engine

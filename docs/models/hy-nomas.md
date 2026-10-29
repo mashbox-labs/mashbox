@@ -1,6 +1,6 @@
 # Hy-Nomas on TPU
 
-Tencent Hunyuan's open video world model, playable in your browser from a Google Cloud TPU v6e-4. You type a world (or pick one), then steer it with the keyboard while it generates 1280x704 video at 24 frames per second, 5 seconds at a time. With Tencent's video decoder (the default) each second of video takes 1.045 s of compute on a v6e-4, slightly slower than real time, so a few frames reach the browser late; with the MASHBOX Fast Decoder (`--decoder fast`) it takes 0.689 s, faster than real time. The full pipeline also fits on a single TPU v6e chip (32 GB), at 2.46 s of compute per second of video ([Other chips](#performance)).
+Tencent Hunyuan's open video world model, playable in your browser from a Google Cloud TPU v6e-4. You type a world (or pick one), then move through it with the keyboard while it generates 1280x704 video at 24 frames per second, 5 seconds at a time. With Tencent's video decoder (the default) each second of video takes 1.045 s of compute on a v6e-4, slightly slower than real time, so a few frames reach the browser late; with the MASHBOX Fast Decoder (`--decoder fast`) it takes 0.689 s, faster than real time.
 
 ## What it is
 
@@ -16,7 +16,7 @@ How it runs:
 | Chip | Status |
 |---|---|
 | TPU v6e slice (v6e-4: 4 chips, one VM) | Supported: 4 chips ([Performance](#performance)) |
-| TPU v6e (one chip, v6e-1) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. One-chip mode in `mashbox run` ships in the next release; this version starts on a v6e-4 ([Other chips](#performance)) |
+| TPU v6e (one chip, v6e-1) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 |
 | TPU v5e | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips); the compiled kernels load and run on v5e ([Performance](#performance)) |
 | TPU v5p slice (v5p-8) | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) |
 
@@ -146,7 +146,6 @@ Other chips:
 
 | Chip | Result |
 |---|---|
-| TPU v6e (one chip, v6e-1) | The full pipeline fits on a single TPU v6e chip (32 GB): 2.46 s of compute per second of video, 720p at 24 fps over a 60 s run, with the main model in our 4-bit format and the main model and video decoder taking turns on the one chip (peak 25.42 GiB of its 32 GB). That is slower than real time on one chip. One-chip mode in `mashbox run` ships in the next release of this package; this version starts on a v6e-4. |
 | TPU v5e | All 28 compiled kernels of this release load and run on a TPU v5e-1 (JAX 0.11.2 for TPU). Against plain JAX on the same chip: 4 give identical outputs and the rest differ only by bf16 rounding (largest relative L2 difference 0.0032). The model itself on v5e: Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips). A v5e chip has 16 GB, and the video decoder takes 12.99 GiB and its share of the main model about 4 GiB (estimate from measured sizes). |
 
 ## Use it with your coding agent
@@ -177,7 +176,7 @@ Point your agent (Claude Code, Codex, Gemini CLI or any other) at this repo and 
 ## FAQ
 
 - **Does typing a new world recompile the model?** No. Every text is padded to 256 or 512 tokens, so new text reuses the compiled programs (see [Options](#in-the-browser)).
-- **Can I run it on one TPU v6e chip or on TPU v5e?** One TPU v6e chip: yes, the full pipeline fits on a single v6e chip, at 2.46 s of compute per second of video; one-chip mode in `mashbox run` ships in the next release, this version starts on a v6e-4. TPU v5e: Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) ([Performance](#performance)).
+- **Can I run it on one TPU v6e chip or on TPU v5e?** One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4. TPU v5e: Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) ([Performance](#performance)).
 - **Can I try the app without a chip?** Yes: `--stub` serves the same browser app with test frames instead of the model ([Run](#run)).
 - **Where does a rendered clip go?** `--out out.mp4` writes it on the VM. Copy it to your machine with `gcloud compute tpus tpu-vm scp hy-nomas:out.mp4 . --zone=asia-northeast1-b` before you delete the chip.
 

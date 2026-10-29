@@ -1,0 +1,44 @@
+{
+ "name": "exaone-pyquant",
+ "arch": "exaone",
+ "made_by": "gguf-py",
+ "gguf_sha256": "bce2e8389b43bf1960e527c074cf9b83df21d5ba009cc9ac43972a5f91e3ad8f",
+ "gguf_bytes": 1749120,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "0e59135f916fcbb01872a966dd56afe2ad16b8227a599e022dba40b2e6c53612",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "exaone",
+  "seed": 35,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": [
+   "Q8_0",
+   "Q4_0",
+   "Q5_0"
+  ]
+ },
+ "f32ref_logits_sha256": "bc05944169e21519c857866fc8c14da5536868bcaa42fe1001e34f56e202a7aa",
+ "f32ref_gguf_sha256": "2a13e7f23f509dfa776165d9b218a55455cfeb7eb60fec575bde11d4ff46c8e2",
+ "f32ref": "llama.cpp CPU on an all-F32 copy holding gguf-py's dequantization of every tensor"
+}

@@ -13,6 +13,9 @@ Views:
   docs/openapi.json    the server's OpenAPI 3.1 description, from src/mashbox/runtime/openapi.py
   docs/server-api.md   the Server API page, from the same module (one section per route)
   docs/cli.md          every command and option, from the package's argparse parsers
+  docs pages           a block between <!-- catalog:start --> and <!-- catalog:end -->: the catalog (mashbox/catalog.py,
+                       the same render as `mashbox models`): by publisher, then model, then file
+  docs/gguf.md         the block between <!-- archs:start --> and <!-- archs:end -->: catalog.arch_rows (ARCHS with a passing chip row)
   docs pages           blocks between <!-- cli:start CMD --> / <!-- cli:end --> (option table of `mashbox CMD`)
                        and <!-- api:start --> / <!-- api:end --> (routes and sampling fields) in docs/*.md, docs/models/*.md
   versions             models.json is the one source: src/mashbox/__init__.py reads it, pyproject.toml takes it
@@ -82,6 +85,7 @@ SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 BIT_LABEL_RE = re.compile(r"\d+[-_ ]?bit\b", re.I)  # our files are named by bpw, never "N-bit"
+PRIVATE_RE = re.compile(r"private", re.I)   # models.json is public: no private repository's name in it, at any depth
 DEFAULT_TEMPLATES = Path(__file__).resolve().parent.parent / "org" / "templates" / "hf"
 
 
@@ -91,6 +95,16 @@ class Problems(list):
 
 
 # ---------------------------------------------------------------- validation
+def private_labels(obj, path="models.json"):
+    """Every (where, text) in models.json, keys and values at any depth, that says "private". models.json ships in the
+    wheel and the export and every view renders from it, so a private repository's name must never be in it."""
+    if isinstance(obj, dict):
+        return [x for k, v in obj.items() for x in private_labels(k, path) + private_labels(v, f"{path}.{k}")]
+    if isinstance(obj, list):
+        return [x for j, v in enumerate(obj) for x in private_labels(v, f"{path}[{j}]")]
+    return [(path, obj)] if isinstance(obj, str) and PRIVATE_RE.search(obj) else []
+
+
 
 def validate(reg, repo_root, problems, release=False):
     for key in ("schema", "github", "hf", "version", "license", "company_line", "install", "prices", "models"):
@@ -98,8 +112,11 @@ def validate(reg, repo_root, problems, release=False):
             problems.add("models.json", f"missing key {key!r}")
     if problems:
         return
-    if reg["schema"] != 1:
-        problems.add("models.json", f"schema {reg['schema']!r} is not 1")
+    for where, text in private_labels(reg):
+        problems.add(where, f"{text[:80]!r} names a private repository: models.json is public (the wheel, the export and "
+                            "every view carry it)")
+    if reg["schema"] not in SCHEMAS:
+        problems.add("models.json", f"schema {reg['schema']!r} is not one of {SCHEMAS}")
     if not SEMVER_RE.match(str(reg["version"])):
         problems.add("models.json", f"version {reg['version']!r} is not X.Y.Z")
     hf_org = reg["hf"].get("org", "")
@@ -200,6 +217,9 @@ def validate(reg, repo_root, problems, release=False):
                 problems.add(where, f"files[{j}] needs name, format and gb (number)")
             if BIT_LABEL_RE.search(str(f.get("name", ""))):
                 problems.add(where, f"files[{j}] name says N-bit; name our files by bpw")
+            if "repo" in f:     # a row may pin its own revision of hf_repo, never another repo (a private one, say)
+                problems.add(where, f"files[{j}] {f.get('name')} names its own repo {f['repo']!r}: every file of a model "
+                                    "is in its one public repo (hf_repo)")
         kern = m.get("kernels", [])
         if kern and m["hf_repo"] is None:
             problems.add(where, "kernel bundles live in the model's HF repo; hf_repo is null")
@@ -219,7 +239,7 @@ def validate(reg, repo_root, problems, release=False):
         pj = m.get("plain_jax", {"status": "tested"})
         if pj.get("status") not in ("tested", "not supported") or (pj.get("status") == "not supported" and not pj.get("reason")):
             problems.add(where, "plain_jax.status must be tested, or not supported with a reason")
-        if release:  # applies to EVERY model in a release (Codex F08)
+        if release:  # applies to EVERY model in a release (review F08)
             lic = str(reg["license"]).lower()
             if "proposed" in lic or "not chosen" in lic or not lic.strip():
                 problems.add(where, "release: our licence is not chosen")
@@ -238,6 +258,191 @@ def validate(reg, repo_root, problems, release=False):
             for j, f in enumerate(m["files"]):
                 if f.get("variant") and not (f.get("quality") and f.get("speed") and f.get("date")):
                     problems.add(where, f"release: variant files[{j}] needs measured quality, speed and date")
+    validate_catalog(reg, problems)
+
+
+# ---------------------------------------------------------------- catalog (schema 2: catalog blocks, gguf[], engine_kernels[])
+
+SCHEMAS = (1, 2)
+CATALOG_SOURCES = ("ours",)
+CATALOG_FORMATS = ("bshj-build", "port", "own-model")
+KERNELS_FILE_RE = re.compile(r"^mashbox_engine_kernels-[0-9A-Za-z_.+-]+\.whl$")
+GGUF_KEYS = ("id", "model", "publisher", "family", "maker", "repo", "revision", "file", "tag", "sha256", "bytes", "arch", "moe", "params_b",
+             "types", "license", "license_link", "base", "in", "out", "run", "experimental", "chips")
+GGUF_CHIP_KEYS = ("status", "accelerator", "ctx", "slots", "kernel_path", "measured")
+UNQUANTIZED = ("F32", "F16", "BF16")
+HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _dated(obj):
+    """True when obj holds a date anywhere: a key that names one, or a string value with YYYY-MM-DD in it"""
+    if isinstance(obj, dict):
+        return any("date" in str(k).lower() or _dated(v) for k, v in obj.items())
+    if isinstance(obj, (list, tuple)):
+        return any(_dated(v) for v in obj)
+    return isinstance(obj, str) and bool(DATE_RE.search(obj))
+
+
+def _params_ok(p):
+    return isinstance(p, dict) and set(p) == {"total", "active"} and all(
+        v is None or (isinstance(v, (int, float)) and v > 0) for v in p.values())
+
+
+def validate_catalog(reg, problems):
+    """Schema 2. models[].catalog: source, format, family, params_b {total, active} (billions or null), experimental, number
+    (null, {"headline": i} or {"result": i}). gguf[]: one GGUF file confirmed on a chip with this engine, pinned by repo,
+    40-hex revision, file and sha256, its licence copied as stated on the repo card, the exact command, and per chip
+    the run's outcome (passing or failing), accelerator, ctx, slots, kernel path and measured speed; no row stores a
+    support level (mashbox/catalog.py computes it). engine_kernels[]: the engine's one kernels package
+    (mashbox_engine_kernels), one row per (chip, JAX). No dates in any of them, as a key or in a value (the records
+    behind a row are kept outside this repository)."""
+    if reg["schema"] == 1:
+        for key in ("gguf", "engine_kernels"):
+            if key in reg:
+                problems.add("models.json", f"{key} needs schema 2")
+        return
+    for key in ("gguf", "engine_kernels"):
+        if not isinstance(reg.get(key), list):
+            problems.add("models.json", f"schema 2 needs {key} (a list, empty when there is none)")
+            return
+    ids = {m.get("id") for m in reg["models"]}
+    for i, m in enumerate(reg["models"]):
+        where = f"models[{i}] {m.get('id', '?')}"
+        c = m.get("catalog")
+        if not isinstance(c, dict):
+            problems.add(where, "schema 2: missing the catalog block")
+            continue
+        if c.get("source") not in CATALOG_SOURCES:
+            problems.add(where, f"catalog.source must be one of {CATALOG_SOURCES}")
+        if c.get("format") not in CATALOG_FORMATS:
+            problems.add(where, f"catalog.format must be one of {CATALOG_FORMATS}")
+        if not str(c.get("family", "")).strip():
+            problems.add(where, "catalog.family is empty")
+        if not _params_ok(c.get("params_b")):
+            problems.add(where, "catalog.params_b must be {total, active}, each a number of billions or null")
+        if not isinstance(c.get("experimental"), bool):
+            problems.add(where, "catalog.experimental must be true or false")
+        if "status" in c or "level" in c:
+            problems.add(where, "catalog: the support level is computed by mashbox/catalog.py, never stored")
+        n = c.get("number")
+        if n is not None:
+            k = next(iter(n), None) if isinstance(n, dict) and len(n) == 1 else None
+            arr = {"headline": m.get("headline") or [], "result": m.get("results") or []}.get(k)
+            if arr is None or not isinstance(n[k], int) or not 0 <= n[k] < len(arr):
+                problems.add(where, "catalog.number must be null, {\"headline\": i} or {\"result\": i} naming one that exists")
+        if _dated(c):
+            problems.add(where, "catalog: no dates (the records behind a row are kept outside this repository)")
+    kern_types, builds = {}, set()
+    for j, k in enumerate(reg["engine_kernels"]):
+        where = f"engine_kernels[{j}]"
+        for key in ("for", "file", "url", "sha256", "jax", "libtpu", "chips", "types"):
+            if not k.get(key):
+                problems.add(where, f"{key} is empty")
+        if k.get("for") != "gguf":
+            problems.add(where, "for must be \"gguf\"")
+        if k.get("file") and not KERNELS_FILE_RE.match(k["file"].rsplit("/", 1)[-1]):
+            problems.add(where, "file must be a mashbox_engine_kernels-*.whl (the engine's one kernels package)")
+        build = (tuple(k.get("chips") or []), k.get("jax"))
+        if len(build[0]) != 1 or build in builds:
+            problems.add(where, "one row per (chip, JAX): chips names one chip, and no other row has that chip and jax")
+        builds.add(build)
+        if k.get("url") and not str(k["url"]).startswith("https://"):
+            problems.add(where, "url must be https")
+        if k.get("sha256") and not HEX64_RE.match(k["sha256"]):
+            problems.add(where, "sha256 is not 64 hex characters")
+        if any(ch not in CHIPS for ch in k.get("chips") or []):
+            problems.add(where, f"chips must be from {CHIPS}")
+        if _dated(k):
+            problems.add(where, "no dates (the records behind a row are kept outside this repository)")
+        for ch in k.get("chips") or []:
+            kern_types.setdefault(ch, set()).update(k.get("types") or [])
+    names = {}
+    for j, g in enumerate(reg["gguf"]):
+        where = f"gguf[{j}] {g.get('id', '?')}"
+        miss = [key for key in GGUF_KEYS if key not in g]
+        if miss:
+            problems.add(where, f"missing keys {miss}")
+            continue
+        if not ID_RE.match(str(g["id"])):
+            problems.add(where, "id must be lower case words joined by hyphens")
+        if g["id"] in ids:
+            problems.add(where, "duplicate id (ids are unique across models[] and gguf[])")
+        ids.add(g["id"])
+        if not SHA_RE.match(str(g["revision"])):
+            problems.add(where, "revision must be the 40-character commit the run used")
+        if not HEX64_RE.match(str(g["sha256"])):
+            problems.add(where, "sha256 must be the 64-hex sha256 of the file that ran")
+        if not isinstance(g["bytes"], int) or g["bytes"] <= 0:
+            problems.add(where, "bytes must be the file's size")
+        if not str(g["file"]).endswith(".gguf"):
+            problems.add(where, "file must be a .gguf path in the repo")
+        if "/" not in str(g["repo"]):
+            problems.add(where, "repo must be owner/name on Hugging Face")
+        if not ID_RE.match(str(g["model"])):
+            problems.add(where, "model must be the model's id: lower case words joined by hyphens")
+        if g["publisher"] != str(g["repo"]).split("/")[0]:
+            problems.add(where, "publisher must be the Hugging Face owner of repo (the views group rows by it)")
+        name = str(g["base"] or g["family"]).split("/")[-1]
+        if names.setdefault((g["publisher"], g["model"]), name) != name:
+            problems.add(where, f"one name per model: {g['publisher']}/{g['model']} is already "
+                                f"{names[(g['publisher'], g['model'])]!r}, this row's base or family says {name!r}")
+        if not isinstance(g["moe"], bool):
+            problems.add(where, "moe must be true or false (from the file's expert count)")
+        if not _params_ok(g["params_b"]):
+            problems.add(where, "params_b must be {total, active}, each a number of billions or null")
+        act, tot = (g["params_b"] or {}).get("active"), (g["params_b"] or {}).get("total")
+        moe = g["moe"] is True or (isinstance(act, (int, float)) and act != tot)    # the file's metadata, never a name
+        if moe and g["moe"] is not True:
+            problems.add(where, f"params_b active {act} is not total {tot}: the file is a mixture of experts, so moe is true")
+        if not isinstance(g["types"], list) or not g["types"]:
+            problems.add(where, "types must list the block types in the file's header")
+        if str(g["license"]).strip().lower() in UNCONFIRMED or not str(g["license_link"]).startswith("https://"):
+            problems.add(where, "license and license_link: copy them as stated on the repo card at the revision")
+        if not isinstance(g["experimental"], bool):
+            problems.add(where, "experimental must be true or false")
+        if "status" in g or "level" in g:
+            problems.add(where, "the support level is computed by mashbox/catalog.py, never stored")
+        want = f"mashbox run {g['repo']}:{g['tag']}"
+        if not (g["run"] == want or str(g["run"]).startswith(want + " ")):
+            problems.add(where, f"run must start with {want!r} (the command the record ran)")
+        if _dated(g):
+            problems.add(where, "no dates (the records behind a row are kept outside this repository)")
+        chips = g["chips"] if isinstance(g["chips"], dict) else {}
+        if not chips or any(ch not in CHIPS for ch in chips):
+            problems.add(where, f"chips must name at least one chip from {CHIPS}")
+        elif not any(isinstance(r, dict) and r.get("status") == "passing" for r in chips.values()):
+            problems.add(where, "no passing chip: a row is only added from a passing run (a failing outcome sits only "
+                                "beside a passing one)")
+        for ch, r in chips.items():
+            if not isinstance(r, dict) or any(key not in r for key in GGUF_CHIP_KEYS):
+                problems.add(where, f"chips.{ch} needs {GGUF_CHIP_KEYS}")
+                continue
+            if r["status"] not in ("passing", "failing"):
+                problems.add(where, f"chips.{ch}.status must be passing or failing (the outcome of the run's record)")
+            if r["kernel_path"] not in ("bundle", "exact"):
+                problems.add(where, f"chips.{ch}.kernel_path must be bundle or exact")
+            if moe and r["status"] == "passing":      # no mixture of experts without its experts on the kernel
+                if r.get("routed_experts") != "kernel":
+                    problems.add(where, f"chips.{ch}: a mixture of experts passes only with a sealed chip record of its "
+                                        "routed experts on the kernel (routed_experts \"kernel\")")
+                if not all(isinstance((r["measured"] or {}).get(f"goodput_roofline_pct_{n}"), (int, float))
+                           for n in ("1_user", "8_users")):
+                    problems.add(where, f"chips.{ch}: a mixture of experts passes only with its goodput as % of the "
+                                        "roofline for 1 and 8 users (measured.goodput_roofline_pct_1_user and "
+                                        "goodput_roofline_pct_8_users, from its record)")
+            if not moe and "routed_experts" in r:
+                problems.add(where, f"chips.{ch}.routed_experts on a row whose file has no experts")
+            tok = (r["measured"] or {}).get("decode_tok_s_1_user")
+            if not isinstance(tok, (int, float)) or tok <= 0:
+                problems.add(where, f"chips.{ch}.measured.decode_tok_s_1_user must be the record's number")
+            if r["kernel_path"] == "bundle":
+                need = {t for t in g["types"] if t not in UNQUANTIZED}
+                lack = sorted(need - kern_types.get(ch, set()))
+                if lack:
+                    problems.add(where, f"chips.{ch}: kernel_path bundle, but no engine_kernels row for {ch} has {lack}")
 
 
 # ---------------------------------------------------------------- number guard (headline and short cells)
@@ -298,6 +503,13 @@ def chip_cell(m, chip):
     return "Not supported" if st in ("failing", "not supported") else "n/a"
 
 
+def chip_note(m, chip):
+    """The public note of a chips row that is not supported (e.g. "One chip: the full pipeline fits ..."): views print it
+    in place of "Not supported: <reason>". The status stays as it is, so mashbox run behaves the same. "" when none."""
+    c = m["chips"].get(chip) or {}
+    return c.get("note", "") if c.get("note") and chip_cell(m, chip) == "Not supported" else ""
+
+
 def weights_cell(m):
     if m["hf_repo"]:
         return f"[{m['hf_repo'].split('/', 1)[1]}](https://huggingface.co/{m['hf_repo']})"
@@ -321,7 +533,8 @@ def models_table(reg, absolute):
         link = code_url(reg, m) if absolute else m["path"]
         rows.append([f"**[{m['name']}]({link})**<br>by {m['upstream']['maker']}",
                      f"{KINDS[m['kind']]['label']}: {m['in']} in, {m['out']} out",
-                     "<br>".join(f"{chip_label(m, c)}: {chip_cell(m, c)}" for c in CHIPS), readme_measured(m), weights_cell(m)])
+                     "<br>".join(f"{chip_label(m, c)}: {chip_note(m, c) or chip_cell(m, c)}" for c in CHIPS), readme_measured(m),
+                     weights_cell(m)])
     return table(["Model", "What it does", "Chips", "Measured", "Weights"], rows)
 
 
@@ -438,6 +651,11 @@ def chips_table(m):
     rows = []
     for chip in CHIPS:
         c = m["chips"].get(chip) or {}
+        own = chip_note(m, chip)
+        if own:  # "One chip: the full pipeline fits ..." -> status "One chip", note the rest
+            head, _, rest = own.partition(": ")
+            rows.append([CHIP_LABEL[chip], head, rest] if rest else [CHIP_LABEL[chip], own, ""])
+            continue
         note = c.get("reason") or c.get("note") or ""
         rows.append([CHIP_LABEL[chip], chip_cell(m, chip), note])
     return table(["Chip", "Status", "Note"], rows)
@@ -507,7 +725,8 @@ def own_files_licence(repo, m):
 
 
 def highlights(m):
-    out = [f"- **{r['value']}**: {r['metric'][0].lower() + r['metric'][1:]}, on {r['chip']}" for r in m["results"]]
+    out = [f"- **{r['value']}**: " + (r["highlight"] if r.get("highlight") else f"{r['metric'][0].lower() + r['metric'][1:]}, on {r['chip']}")
+           for r in m["results"]]
     for f in m["files"]:
         if f.get("quality") and f.get("default"):
             out.append(f"- **{f['quant_type'] if f.get('quant_type') else f['name']}** ({f['gb']:.2f} GB, "
@@ -752,6 +971,8 @@ def render_all(reg, repo, profile, templates, problems, places=None):
 CLI_RE = re.compile(r"(<!-- cli:start ([a-z ]+) -->)(.*?)(<!-- cli:end -->)", re.S)
 API_RE = re.compile(r"(<!-- api:start -->)(.*?)(<!-- api:end -->)", re.S)
 CHIPS_RE = re.compile(r"(<!-- chips:start -->)(.*?)(<!-- chips:end -->)", re.S)
+CATALOG_RE = re.compile(r"(<!-- catalog:start -->)(.*?)(<!-- catalog:end -->)", re.S)   # a docs page (mashbox.catalog)
+ARCHS_RE = re.compile(r"(<!-- archs:start -->)(.*?)(<!-- archs:end -->)", re.S)         # docs/gguf.md (gguf.archs.ARCHS)
 CLI_NOTE = ("Generated from the argparse parsers in src/mashbox/cli.py and src/mashbox/tpu/__init__.py by "
             "tools/hf_github_sync_check.py render --write. Do not edit.")
 
@@ -784,7 +1005,7 @@ def _package(repo, problems):
     if src not in sys.path:
         sys.path.insert(0, src)
     try:
-        mods = {n: importlib.import_module(f"mashbox{n}") for n in ("", ".cli", ".tpu", ".runtime.openapi")}
+        mods = {n: importlib.import_module(f"mashbox{n}") for n in ("", ".cli", ".tpu", ".runtime.openapi", ".catalog")}
     except Exception as e:
         problems.add("src/mashbox", f"cannot import the package to render the docs: {type(e).__name__}: {e}")
         return None
@@ -871,6 +1092,8 @@ def chip_text(m, chip):
     shows the line up to its first " (" still carries it."""
     c = m["chips"].get(chip) or {}
     cell = chip_cell(m, chip)
+    if chip_note(m, chip):
+        return chip_note(m, chip)
     why = c.get("note") if cell == "Supported" else (c.get("reason") or c.get("note"))
     return cell + (f": {why}" if why and cell != "Not tested" else "")
 
@@ -920,12 +1143,15 @@ def docs_views(reg, repo, problems):
         new = CLI_RE.sub(cli_sub, text)
         new = API_RE.sub(lambda mt: f"{mt.group(1)}\n{api_block(mods, rel)}\n{mt.group(3)}", new)
         new = CHIPS_RE.sub(lambda mt: f"{mt.group(1)}\n{chips_block(reg)}\n{mt.group(3)}", new)
+        C = mods[".catalog"]
+        new = CATALOG_RE.sub(lambda mt: f"{mt.group(1)}\n{C.render_markdown(reg)}\n{mt.group(3)}", new)
+        new = ARCHS_RE.sub(lambda mt: f"{mt.group(1)}\n{C.archs_block(reg)}\n{mt.group(3)}", new)
         if CLOUD_RE.search(text):
             if cloud is None:
                 problems.add(rel, f"cloud blocks need {CLOUD.as_posix()}")
             else:
                 new = CLOUD_RE.sub(lambda mt: f"{mt.group(1)}\n{cloud_block(mt.group(2), cloud, reg)}\n{mt.group(4)}", new)
-        if new != text or CLI_RE.search(text) or API_RE.search(text) or CHIPS_RE.search(text) or CLOUD_RE.search(text):
+        if new != text or any(rx.search(text) for rx in (CLI_RE, API_RE, CHIPS_RE, CLOUD_RE, CATALOG_RE, ARCHS_RE)):
             views[rel] = new
     return views
 
@@ -1105,6 +1331,7 @@ def figure_text(reg, owner, key):
 
 
 NUMBERS = Path("internal") / "numbers.json"   # the maintainers' number map: not in the public tree
+PRIVATE_DIRS = ("addons/",)   # private app add-ons: held from the public tree, never a public page
 _BEFORE = 40                                  # characters of the page kept before each number to find it again
 
 
@@ -1218,7 +1445,7 @@ WORD_NUM_RE = re.compile(rf"\b(?:{_WORDS})(?:[\s-](?:and a half|{_WORDS}))*[\s-]
                          rf"times|tokens|frames|percent|gigabytes|megabytes)\b", re.I)
 CODE_LANGS = r"(?:bash|sh|shell|zsh|json|jsonc|toml|python|py|yaml|yml|js|javascript|ts|html|css|ini|diff|powershell|ps1)"
 STRIP_RES = (re.compile(rf"^```{CODE_LANGS}\b[^\n]*\n.*?^```", re.S | re.M),   # code; output blocks (text, console, plain) are read
-             re.compile(r"<!-- (models|cli|api|chips):start.*?<!-- (models|cli|api|chips):end -->", re.S),
+             re.compile(r"<!-- (models|cli|api|chips|catalog|archs):start.*?<!-- (models|cli|api|chips|catalog|archs):end -->", re.S),
              CLOUD_BLOCK_RE,  # rendered from docs/data/cloud-prices.json and checked by render-and-diff (check_cloud)
              re.compile(r"\]\([^)\s]*\)"), re.compile(r"^```.*$", re.M))  # inline code is read: a number there is public too
 TAG_RE = re.compile(r"<[^>]*>")   # a tag is dropped, the words it shows or exposes read (tag_words)
@@ -1517,7 +1744,8 @@ def _prose(repo):
     except (OSError, subprocess.CalledProcessError):
         files = [f for g in ("*.md", "*.mdx") for f in repo.rglob(g) if not _SKIP_DIRS & set(f.relative_to(repo).parts[:-1])] \
             + [repo / "llms.txt"]
-    return sorted({f for f in files if f.is_file() and f.relative_to(repo).as_posix() not in HISTORY},
+    return sorted({f for f in files if f.is_file() and f.relative_to(repo).as_posix() not in HISTORY
+                   and not f.relative_to(repo).as_posix().startswith(PRIVATE_DIRS)},
                   key=lambda f: f.relative_to(repo).as_posix())
 
 
@@ -1591,6 +1819,7 @@ def check_prose(reg, repo, problems):
     pages += [("pyproject.toml", "\n".join(re.findall(r'^description\s*=\s*"(.*)"', pp.read_text(), re.M)))] if pp.exists() else []
     pages += docstrings(repo)   # help() shows them
     for rel, text in pages:   # anywhere the company is described ("MASHBOX Labs makes/builds/is ...", "MASHBOX Labs, a ..."), it is the line itself
+        text = CATALOG_RE.sub("", text)   # the generated catalog block ("## MASHBOX Labs (Hugging Face)") is checked against its render
         text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", TAG_RE.sub(lambda mt: tag_words(mt.group(0)), text)).replace("**", "").replace("__", "")
         text = " ".join(html.unescape(text).replace("\u00a0", " ").split())
         for mt in COMPANY_RE.finditer(text):
@@ -2004,6 +2233,29 @@ class Fetcher:
             return 0
 
 
+def public_file_problems(m, rev, listing, fetch):
+    """Every files[] row of a released model is in its one public repo (hf_repo), at the pinned revision or at the row's
+    own revision of that repo, read from the Hub's file list (siblings). The release export is checked logged out, so a
+    file that only a private repo holds never passes."""
+    out, lists = [], {rev: listing}
+    for j, f in enumerate(m.get("files") or []):
+        if f.get("repo", m["hf_repo"]) != m["hf_repo"]:
+            out.append(f"files[{j}] {f['name']} is in {f['repo']}: every file of a released model is in its one public "
+                       f"repo {m['hf_repo']}")
+            continue
+        r = f.get("revision") or rev
+        if r not in lists:
+            st, body = fetch.get(f"https://huggingface.co/api/models/{m['hf_repo']}/revision/{r}")
+            lists[r] = body if st == 200 else ""
+        try:
+            names = {s.get("rfilename") for s in json.loads(lists[r] or "{}").get("siblings") or []}
+        except ValueError:
+            names = set()
+        if f["name"] not in names:
+            out.append(f"files[{j}] {f['name']} is not in {m['hf_repo']} at {r[:12]}")
+    return out
+
+
 def check_online(reg, views, fetch, problems, repo=None):
     hf_org = reg["hf"]["org"]
     st, body = fetch.get(f"https://huggingface.co/api/models?author={hf_org}&limit=1000")
@@ -2036,12 +2288,14 @@ def check_online(reg, views, fetch, problems, repo=None):
         if not rev:
             problems.add(where, "hf_revision not pinned in models.json")
             continue
-        if info.get("sha") != rev:  # the visible head must be the pinned, rendered revision (Codex F09)
+        if info.get("sha") != rev:  # the visible head must be the pinned, rendered revision (review F09)
             problems.add(where, f"HF head {str(info.get('sha'))[:12]} is not the pinned revision {rev[:12]}")
-        st, _ = fetch.get(f"https://huggingface.co/api/models/{m['hf_repo']}/revision/{rev}")
+        st, listing = fetch.get(f"https://huggingface.co/api/models/{m['hf_repo']}/revision/{rev}")
         if st != 200:
             problems.add(where, f"pinned revision {rev[:12]} not found (HTTP {st})")
             continue
+        for x in public_file_problems(m, rev, listing, fetch):
+            problems.add(where, x)
         st, card = fetch.get(f"https://huggingface.co/{m['hf_repo']}/raw/{rev}/README.md")
         want = views.get(f"hf/{m['id']}/README.md")
         if st != 200:

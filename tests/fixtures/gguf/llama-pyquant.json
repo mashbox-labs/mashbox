@@ -1,0 +1,46 @@
+{
+ "name": "llama-pyquant",
+ "arch": "llama",
+ "made_by": "gguf-py",
+ "gguf_sha256": "9fb75caf2441902c0cb2b8851e5eef22e11c3e25ae1ccefcecc618c26a48b6b1",
+ "gguf_bytes": 1700736,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "269ca14d90c039e5d9620e6dfee4069cc5b0a285ce7667d5eee6ad3c720c3f8f",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "llama",
+  "seed": 13,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": [
+   "Q8_0",
+   "Q4_0",
+   "Q5_0",
+   "Q4_1",
+   "Q5_1"
+  ]
+ },
+ "f32ref_logits_sha256": "eba9c98ef081dce95c09040980852ed3686dcb309136f8f834d0b58b308c7110",
+ "f32ref_gguf_sha256": "820a3d895bba9594b87f97f5dc81c60b275b1fc9cbb62724d59d8abc120d57bd",
+ "f32ref": "llama.cpp CPU on an all-F32 copy holding gguf-py's dequantization of every tensor"
+}

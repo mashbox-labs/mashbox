@@ -12,9 +12,13 @@
     * [Codex](agents/codex.md)
     * [Pi](agents/pi.md)
 * [Frequently asked questions](faq.md)
+* [GGUF files](gguf.md)
+    * [Unsloth fine-tunes](unsloth.md)
+    * [Add a GGUF architecture](add-an-architecture.md)
 
 ## Models
 
+* [Supported models](supported-models.md)
 * [Qwen3.8-27B](models/qwen3-8-27b.md)
 * [Hy-Nomas](models/hy-nomas.md)
 

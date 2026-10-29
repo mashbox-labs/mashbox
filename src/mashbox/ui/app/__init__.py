@@ -9,9 +9,14 @@ server, and this module's screens (index.html with view.js): Models, Servers, Co
 Where models run: the user's own Cloud TPU through `mashbox tpu up | status | tunnel | down` (this package's CLI, run
 as a child process), or any MASHBOX or OpenAI-compatible server URL. /v1/... and /health go to the server in use.
 
-Models load at run time: the catalog is models.json from CATALOG_URL (cached for offline, else the copy in this
-package), merged with what the server in use lists at /v1/models. A row's `kind` picks its module, so a new model of a
-known kind shows up with no app update; a new kind needs a newer app.
+Models load at run time: the catalog is models.json from CATALOG_URL, used only with a valid MASHBOX Labs signature
+(signed.py; cached for offline, else the copy in this package), merged with what the server in use lists at /v1/models.
+A row's `kind` picks its module, so a new model of a known kind shows up with no app update; a new kind needs a newer app.
+
+Adding a model by Hugging Face id (seam: answers 501, not supported in this release): POST /api/models/add {"hf": "org/name[:tag]"} checks the id and
+answers 501 today. When `mashbox run <hf-repo[:tag]>` (GGUF files) is in a release, that route stores the id in
+state.json `added`, catalog() lists those rows next to the catalog's (kind "gguf" -> the chat module), and Servers starts
+them with `mashbox tpu up <hf-repo[:tag]>` like any catalog model.
 
 State lives in the app's data folder (state.json; server keys in keys.json, mode 600).
 
@@ -21,6 +26,9 @@ header; the app's own pages carry it (a page from another site can neither read 
 preflight, which this server never approves). The world model server's page, files and stream are served from a second
 origin, the next port (`--world-port`), which has no /api or /v1, so that page never runs where the token and the
 stored keys are.
+
+Add-on modules (addons.py): sidebar modules an app build carries outside this package; their pages are /m/<id>/ and
+their routes /<id>/... and /api/<id>..., answered after the same guard and token check as /api.
 """
 from __future__ import annotations
 
@@ -34,6 +42,7 @@ import signal
 import socket
 import ssl
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -46,8 +55,11 @@ from importlib import resources
 from ... import __version__
 from ...runtime.guard import HEADER, Guard, new_token
 from .. import chat, shell
+from . import addons, signed
 
 CATALOG_URL = "https://raw.githubusercontent.com/mashbox-labs/mashbox/main/models.json"
+CATALOG_SIG_URL = "https://github.com/mashbox-labs/mashbox/releases/download/mac-app/models.json.minisig"
+HF_ID = re.compile(r"[A-Za-z0-9][-\w.]{0,95}/[-\w.]{1,96}(:[-\w.]{1,64})?")   # a Hugging Face repo id, optional :tag
 MODULES = {"llm": "chat", "llm-tpu": "chat", "world": "world"}      # model kind -> module page
 VIEWS = {"models": "Models", "servers": "Servers", "agents": "Connect your agent", "settings": "Settings",
          "world": "World model"}
@@ -108,9 +120,49 @@ def keys() -> dict:
     return _load("keys.json", {})
 
 
+def holder(x):
+    """The running job whose tunnel serves this TPU row and whose server passed the guard check at that very address
+    (Job.ok), else None; "" for a row added by address (used as it is)."""
+    if x.get("from") != "tpu":
+        return ""
+    return next((j for j in list(JOBS.values()) if j.ok and j.running() and j.chip == x.get("chip")
+                  and j.url == x.get("url")), None)
+
+
+def tpu_live(x):
+    """A server row from a TPU tunnel is used only while the job that opened it runs and the server behind it passed the
+    guard check at that very address (Job.ok). After that job ends, or after a relaunch (no job), the row is never used:
+    its local port may by then belong to another tunnel or another program. Rows added by address are used as they are."""
+    return holder(x) is not None
+
+
+class NotLive(OSError):
+    """The TPU row's job ended around the connection: the port may belong to another program now."""
+
+
+def reach(x, timeout, connect=None):
+    """A connection to server row `x`, made before any byte is sent. For a TPU row: its job is taken BEFORE the connect
+    and must still run (and hold its check) AFTER it. `mashbox tpu` keeps its local port bound until its process exits,
+    so a job alive on both sides of the connect held the port during it: the connection reached that job's port, not a
+    program that took the port after the job ended. Otherwise NotLive (nothing was sent). `connect(url, timeout)` makes
+    the raw connection (default: an HTTP(S) connection, connected now); returns (connection, base path)."""
+    j = holder(x)
+    if j is None:
+        raise NotLive(f"{x.get('name')} is not running")
+    if connect:
+        c, base = connect(x["url"], timeout), urllib.parse.urlsplit(x["url"]).path.rstrip("/")
+    else:
+        c, base = _conn(x["url"], timeout)
+        c.connect()
+    if j != "" and not (j.ok and j.running()):
+        c.close()
+        raise NotLive(f"{x.get('name')} stopped")
+    return c, base
+
+
 def active_server(s=None):
     s = s or state()
-    return next((x for x in s["servers"] if x["id"] == s["active"]), None)
+    return next((x for x in s["servers"] if x["id"] == s["active"] and tpu_live(x)), None)
 
 
 _world: dict = {}
@@ -119,9 +171,9 @@ _world: dict = {}
 def world_server(check=False):
     """The world model server the World model module shows: the first world server in the list that answers (checked
     when the page opens; its page, files and stream then come through /m/world/ from this one)."""
-    rows = [x for x in state()["servers"] if x.get("module") == "world"]
+    rows = [x for x in state()["servers"] if x.get("module") == "world" and tpu_live(x)]
     if check:
-        _world["srv"] = next((x for x in rows if probe(x["url"], keys().get(x["id"]), timeout=3)["ok"]), None)
+        _world["srv"] = next((x for x in rows if probe(x["url"], keys().get(x["id"]), timeout=3, row=x)["ok"]), None)
     elif _world.get("srv") not in rows:
         _world["srv"] = rows[0] if rows else None
     return _world.get("srv")
@@ -143,6 +195,28 @@ def latest_release(timeout=4):
     return _rel["v"]
 
 
+VERSION = re.compile(r"(\d+(?:\.\d+)*)(?:(a|b|rc)(\d+))?(?:\.post(\d+))?(?:\.dev(\d+))?(?:\+([a-z0-9.]+))?")
+
+
+def newer_release(latest, version):
+    """True when the release `latest` is newer than the runtime's `version`, compared as version numbers (0.1.10 is
+    after 0.1.9; 0.2.0rc1 before 0.2.0). None when it cannot be said: a build from source (a local version such as
+    0.1.0+g3006b09 is built from code that may be past any release) or a number this does not read."""
+    def key(v):
+        m = VERSION.fullmatch((v or "").strip().lower())
+        if not m:
+            return None
+        rel = tuple(int(x) for x in m.group(1).split("."))
+        rel += (0,) * (8 - len(rel))
+        pre = ({"a": 0, "b": 1, "rc": 2}[m.group(2)], int(m.group(3))) if m.group(2) else (3, 0)
+        dev = (0, int(m.group(5))) if m.group(5) else (1, 0)
+        return rel, (pre if not m.group(5) or m.group(2) else (-1, 0)), int(m.group(4) or -1), dev, m.group(6)
+    a, b = key(latest), key(version)
+    if a is None or b is None or b[4] or a[4]:
+        return None
+    return a[:4] > b[:4]
+
+
 def runtime_source():
     """What the app installed as its runtime: the stamp the host writes next to the wheel (release file or source build)."""
     try:
@@ -159,13 +233,17 @@ def _conn(url, timeout):
     return cls(u.hostname, u.port or (443 if u.scheme == "https" else 80), timeout=timeout), u.path.rstrip("/")
 
 
-def probe(url, key=None, timeout=6) -> dict:
-    """What a server answers: its models (/v1/models) and /health, with the time it took."""
+def probe(url, key=None, timeout=6, row=None) -> dict:
+    """What a server answers: its models (/v1/models) and /health, with the time it took. With `row` (a saved server),
+    every connection goes through reach(): a TPU row whose job ended gets nothing sent."""
     out = {"url": url, "ok": False, "models": [], "health": None, "error": None}
     t0 = time.time()
     hdr = {"Authorization": f"Bearer {key}"} if key else {}
+
+    def opened(u, t):
+        return reach(row, t) if row else _conn(u, t)
     try:
-        c, base = _conn(url, timeout)
+        c, base = opened(url, timeout)
         c.request("GET", base + "/v1/models", headers=hdr)
         r = c.getresponse()
         body = r.read()
@@ -177,7 +255,7 @@ def probe(url, key=None, timeout=6) -> dict:
         else:
             out["error"] = f"/v1/models answered HTTP {r.status}"
         c.close()
-        c, base = _conn(url, timeout)
+        c, base = opened(url, timeout)
         c.request("GET", base + "/health", headers=hdr)
         r = c.getresponse()
         r.read()
@@ -186,13 +264,15 @@ def probe(url, key=None, timeout=6) -> dict:
             out["ok"], out["error"] = True, None          # a server with a page and no model list (a world model)
         c.close()
         if not out["ok"]:                                   # no /health either: a page at its address (the world model)
-            c, base = _conn(url, timeout)
+            c, base = opened(url, timeout)
             c.request("GET", base + "/", headers=hdr)
             r = c.getresponse()
             r.read()
             if r.status == 200 and "html" in (r.getheader("Content-Type") or ""):
                 out["ok"], out["error"], out["page"] = True, None, True
             c.close()
+    except NotLive as e:
+        out.update(ok=False, models=[], error=f"not running: {e}")
     except (OSError, ValueError) as e:
         out["error"] = out["error"] or f"not reachable: {e}"
     out["ms"] = round((time.time() - t0) * 1000)
@@ -208,8 +288,22 @@ def _valid(reg):
         isinstance(m, dict) and m.get("id") and m.get("kind") for m in reg["models"])
 
 
+def _fetch(url, timeout=6):
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return r.read()
+
+
+def _sig_for(url):
+    """Where a catalog's signature is: ours sits on the app's GitHub release; any other address, next to the file."""
+    return CATALOG_SIG_URL if url == CATALOG_URL else url + ".minisig"
+
+
 def registry(refresh=False) -> tuple[dict, dict]:
-    """(catalog, where it came from). The URL first (cached 10 minutes), else the last good copy, else this package's."""
+    """(catalog, where it came from). The URL first (cached 10 minutes), else the last good copy, else this package's.
+
+    The default catalog (CATALOG_URL, the public repo's models.json) is used only with a valid MASHBOX Labs signature
+    (signed.py) that is not older than the copy already saved; anything else falls back to that copy or the package's.
+    A catalog address the user typed in Settings may be unsigned (shown as such); a signature next to it must match."""
     s = state()
     url = s.get("catalog_url") or CATALOG_URL
     with LOCK:
@@ -217,19 +311,36 @@ def registry(refresh=False) -> tuple[dict, dict]:
             return _cat["reg"], _cat["src"]
         pkg = shell.registry()
         reg, src = None, None
+        cache = _load("catalog-cache.json", None)
+        cache = cache if cache and cache.get("url") == url and _valid(cache.get("reg")) and (
+            url != CATALOG_URL or cache.get("signed")) else None
         try:
-            with urllib.request.urlopen(url, timeout=6) as r:
-                got = json.loads(r.read())
+            raw = _fetch(url)
+            got = json.loads(raw)
             if not _valid(got):
                 raise ValueError("not a MASHBOX models.json (needs a models list with id and kind)")
+            try:
+                sig = _fetch(_sig_for(url)).decode("utf-8", "replace")
+            except OSError:
+                sig = None
+            trusted = signed.verify(raw, sig) if sig else None
+            if sig and trusted is None:
+                raise ValueError("its signature does not match (not from MASHBOX Labs, or changed on the way)")
+            if url == CATALOG_URL and trusted is None:
+                raise ValueError("no MASHBOX Labs signature for it")
+            utc = signed.fields(trusted).get("utc")
+            if trusted is not None and not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", utc or ""):
+                raise ValueError("its signature carries no signing time (utc=), so it cannot be checked for age")
+            if utc and cache and (cache.get("utc") or "") > utc:
+                raise ValueError("it is older than the signed catalog saved here")
             reg = got
-            src = {"from": "url", "url": url, "at": time.time()}
-            _save("catalog-cache.json", {"url": url, "at": src["at"], "reg": got})
+            src = {"from": "url", "url": url, "at": time.time(), "signed": bool(trusted), "signed_utc": utc}
+            _save("catalog-cache.json", {"url": url, "at": src["at"], "reg": got, "signed": bool(trusted), "utc": utc})
         except (OSError, ValueError) as e:
             err = str(e)
-            cache = _load("catalog-cache.json", None)
-            if cache and cache.get("url") == url and _valid(cache.get("reg")):
-                reg, src = cache["reg"], {"from": "cache", "url": url, "at": cache.get("at"), "error": err}
+            if cache:
+                reg, src = cache["reg"], {"from": "cache", "url": url, "at": cache.get("at"), "error": err,
+                                          "signed": bool(cache.get("signed")), "signed_utc": cache.get("utc")}
             else:
                 reg, src = pkg, {"from": "package", "url": url, "at": None, "error": err}
         for k in ("github", "hf", "version", "license", "schema"):    # what the shell needs for its links
@@ -243,7 +354,7 @@ def catalog(refresh=False) -> dict:
     srv = active_server()
     served = []
     if srv:
-        p = probe(srv["url"], keys().get(srv["id"]), timeout=4)
+        p = probe(srv["url"], keys().get(srv["id"]), timeout=4, row=srv)
         served = [m["id"] for m in p["models"]]
     rows = []
     for m in reg["models"]:
@@ -255,6 +366,14 @@ def catalog(refresh=False) -> dict:
                      "accelerator": (m.get("cloud") or {}).get("accelerator"),
                      "tpu": bool(m.get("cloud")), "agents": bool((m.get("cloud") or {}).get("agents")),
                      "served": m["id"] in served, "has_chat_settings": bool(m.get("chat"))})
+    for m in addons.tpu_rows():                     # TPU rows of the add-ons this app carries (Start lists them too)
+        if m["id"] in {r["id"] for r in rows}:
+            continue                                # the catalog's own row of that id wins
+        c = m["cloud"]
+        rows.append({"id": m["id"], "name": m["name"], "kind": "addon", "module": m["module"],
+                     "summary": m.get("summary", ""), "launch": None, "maker": m.get("maker"),
+                     "chips": [f"TPU {c['accelerator']}"], "accelerator": c["accelerator"], "tpu": True, "agents": False,
+                     "served": False, "has_chat_settings": False})
     known = {r["id"] for r in rows}
     extra = [{"id": i, "name": i, "kind": "llm", "module": "chat", "summary": "Listed by the server in use.",
               "served": True, "from_server": True, "chips": [], "tpu": False} for i in served if i not in known]
@@ -266,7 +385,57 @@ def child_env():
     env = dict(os.environ, PYTHONUNBUFFERED="1")
     parts = env.get("PATH", "").split(os.pathsep)
     env["PATH"] = os.pathsep.join(parts + [p for p in EXTRA_PATH if p not in parts])
+    w = os.environ.get("MASHBOX_APP_WHEEL")         # the wheel the Mac app installed this runtime from
+    if w:                                           # `tpu up` puts that same wheel on the chip, never another build;
+        env["MASHBOX_WHEEL"] = w                    # a copy that is missing stops `tpu up` (never a PyPI install)
     return env
+
+
+def wheel_missing():
+    """Run by the Mac app (MASHBOX_APP_VERSION set) without the wheel it installed this runtime from: `tpu up` must not
+    start, since it would put another mashbox on the chip. The error to show, else None."""
+    w = os.environ.get("MASHBOX_APP_WHEEL", "")
+    if os.environ.get("MASHBOX_APP_VERSION") and not (w and os.path.isfile(w)):
+        return ("This app's own mashbox wheel is missing from its runtime folder, so it cannot put the same mashbox on "
+                "a chip. Quit and reopen MASHBOX; if this stays, install MASHBOX again from the download.")
+    return None
+
+
+GUARD_CHECK = "http://mashbox-guard-check.invalid"
+AS_DATA = {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"}   # /v1 answers: data, never a page
+
+
+def guarded(url, path="/health", timeout=10):
+    """True only when the server behind a tunnel refuses what a page on another web site would send (a foreign Origin)
+    on a route it serves (`path`, the model's health route: /health for a chat server, / for the world model): 403, or
+    401 for a key it wants first. An answer, a 404 (a server without that route or without the guard), anything
+    malformed or no answer is False: the tunnel is not used, since any site open in a browser could reach it."""
+    u = urllib.parse.urlsplit(url)
+    c = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+    try:
+        c.request("GET", path, headers={"Origin": GUARD_CHECK})
+        status = c.getresponse().status
+    except (OSError, http.client.HTTPException, ValueError):
+        return False
+    finally:
+        c.close()
+    return status in (401, 403)
+
+
+UNGUARDED = ("MASHBOX closed this tunnel: the server on {chip} did not refuse a request from another web site (its "
+             "mashbox has no request guard, or it did not answer the check). Press Start again: that installs this "
+             "app's mashbox on the chip and starts the server again.")
+
+
+def tpu_row(model):
+    """The catalog's row of this id when it has TPU settings, else the TPU row of an add-on this app carries, else None."""
+    row = next((m for m in registry()[0]["models"] if m["id"] == model and m.get("cloud")), None)
+    return row or next((m for m in addons.tpu_rows() if m["id"] == model), None)
+
+
+def health_path(model):
+    row = next((m for m in registry()[0]["models"] if m["id"] == model), None) or tpu_row(model)
+    return ((row or {}).get("cloud") or {}).get("health") or "/health"
 
 
 def tpu_cmd(*args, project=None):
@@ -283,6 +452,7 @@ class Job:
         self.kind, self.model, self.cmd = kind, model, cmd
         self.lines: list[str] = []
         self.url = self.chip = None
+        self.checked = self.refused = self.ok = False
         self.started = time.time()
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                      text=True, bufsize=1, env=child_env(), start_new_session=True)
@@ -298,11 +468,20 @@ class Job:
             m = re.search(r" is running on (\S+) \(TPU", line)
             if m:
                 self.chip = m.group(1)
-            if self.url and self.chip and self.model:
-                add_tpu_server(self.model, self.chip, self.url)
+            if self.url and self.chip and self.model and not self.checked:
+                self.checked = True              # before anything uses it: coding agents reach it at this URL too
+                if not (guarded(self.url, health_path(self.model)) and self.running()):
+                    self.refused = True
+                    self.lines.append(UNGUARDED.format(chip=self.chip))
+                    threading.Thread(target=self.stop, daemon=True).start()
+                else:
+                    self.ok = True
+                    add_tpu_server(self.model, self.chip, self.url)
             if self.chip and line.startswith(f"{self.chip} is gone"):    # deleted elsewhere or by its max lifetime
                 forget_chip(self.chip)
         self.proc.wait()
+        if self.ok:                              # the tunnel is closed: its address is no server of ours any more
+            drop_tpu_rows(self.chip, self.url)
 
     def running(self):
         return self.proc.poll() is None
@@ -317,11 +496,17 @@ class Job:
 
     def view(self):
         return {"kind": self.kind, "model": self.model, "running": self.running(), "code": self.proc.poll(),
-                "url": self.url, "chip": self.chip, "lines": self.lines[-120:], "started": self.started,
+                "url": None if self.refused else self.url, "refused": self.refused, "chip": self.chip,
+                "lines": self.lines[-120:], "started": self.started,
                 "cmd": " ".join(["mashbox"] + self.cmd[self.cmd.index("tpu"):])}
 
 
 JOBS: dict = {}          # one `mashbox tpu` run per model: a chat model and a world model can each hold a tunnel
+
+
+def naming(j, name):
+    """The run is for chip `name`: it said so, or its command names it (up --name=NAME, tunnel NAME)."""
+    return j.chip == name or f"--name={name}" in j.cmd or (j.kind == "tunnel" and name in j.cmd[j.cmd.index("tunnel") + 1:])
 
 
 def job_for(model=None, chip=None):
@@ -342,12 +527,27 @@ def add_tpu_server(model, chip, url):
             row = {"id": sid, "from": "tpu"}
             s["servers"].append(row)
         reg, _ = registry()
-        kind = next((m["kind"] for m in reg["models"] if m["id"] == model), "llm")
-        module = MODULES.get(kind, "chat")
+        kind = next((m["kind"] for m in reg["models"] if m["id"] == model), None)
+        add = None if kind else next((m for m in addons.tpu_rows() if m["id"] == model), None)
+        module = add["module"] if add else MODULES.get(kind or "llm", "chat")   # an add-on's row: that add-on's page
         row.update(name=f"TPU {chip}", url=url, model=model, chip=chip, module=module)
         if module == "chat":                    # the server in use is the chat's; a world server is the World model's
             s["active"] = sid
         _save("state.json", s)
+
+
+def drop_tpu_rows(chip=None, url=None):
+    """Drop TPU tunnel rows no running job holds: all of them (at launch), or the one of this chip at this address (when
+    its job ends). The server in use moves to the first row left."""
+    with LOCK:
+        s = state()
+        keep = [x for x in s["servers"] if x.get("from") != "tpu" or tpu_live(x)
+                or (chip is not None and (x.get("chip"), x.get("url")) != (chip, url))]
+        if len(keep) != len(s["servers"]):
+            s["servers"] = keep
+            if not any(x["id"] == s["active"] for x in keep):
+                s["active"] = next_active(s)
+            _save("state.json", s)
 
 
 def forget_chip(name):
@@ -378,10 +578,46 @@ def chip_listed(name, project):
     return ""
 
 
+CLOSING = threading.Event()        # set when the app quits: no new `mashbox tpu` job starts after it
+JOBS_LOCK = threading.Lock()       # held from the CLOSING check until a new job is in JOBS (request threads only)
+
+
+def close_jobs(timeout=10.0):
+    """Quit: close every tunnel at once (Ctrl-C to each `mashbox tpu up` / `tunnel` run), wait `timeout` seconds in
+    total, then stop what is left. A chip keeps its own max lifetime. The Mac app waits 12 s for this. Short commands
+    (status, down, gcloud config) and a started `gcloud auth login` finish on their own: a `down` cut off halfway could
+    leave a chip running, and the others end within seconds."""
+    with JOBS_LOCK:                    # a job being started right now is in JOBS once this returns
+        CLOSING.set()
+    deadline, sent, live = time.time() + timeout, set(), []
+    while True:
+        live = [j for j in list(JOBS.values()) if j.running()]
+        for j in live:
+            if j.proc.pid not in sent:                  # also a job that started while this runs
+                sent.add(j.proc.pid)
+                try:
+                    os.killpg(j.proc.pid, signal.SIGINT)
+                except OSError:
+                    pass
+        if not live or time.time() >= deadline:
+            break
+        time.sleep(0.05)
+    for j in live:
+        try:
+            os.killpg(j.proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
 def run_quick(cmd, timeout=120):
+    # Output goes to a file, not a pipe: a command still running when the app quits (a `tpu down`) keeps writing and
+    # finishes, instead of dying on a closed pipe halfway.
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=child_env(), stdin=subprocess.DEVNULL)
-        return {"code": r.returncode, "out": (r.stdout + r.stderr).strip()}
+        with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as out:
+            r = subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT, timeout=timeout, env=child_env(),
+                               stdin=subprocess.DEVNULL)
+            out.seek(0)
+            return {"code": r.returncode, "out": out.read().strip()}
     except subprocess.TimeoutExpired:
         return {"code": -1, "out": f"no answer within {timeout} s"}
     except OSError as e:
@@ -419,7 +655,7 @@ def asset(path):
         ext = "." + sub.rsplit(".", 1)[-1] if "." in sub else ""
         body = own_file(sub) if ext in TYPES else None
         return (body, TYPES[ext]) if body is not None else None
-    return shell.asset(rel) or chat.asset(rel)
+    return shell.asset(rel) or chat.asset(rel) or addons.asset(rel)
 
 
 def view_page(view, reg, token=None):
@@ -451,7 +687,7 @@ def chat_page(reg, token=None):
     srv = active_server()
     model = srv.get("model") if srv else None
     if srv:
-        p = probe(srv["url"], keys().get(srv["id"]), timeout=4)
+        p = probe(srv["url"], keys().get(srv["id"]), timeout=4, row=srv)
         if p["models"]:
             model = p["models"][0]["id"]
     try:
@@ -515,7 +751,12 @@ class _Base(BaseHTTPRequestHandler):
     def world(self, srv, method, rest, page=False):
         n = int(self.headers.get("Content-Length") or 0)
         data = self.rfile.read(n) if n else None
-        c, base = _conn(srv["url"], 60)
+        try:
+            c, base = reach(srv, 60)
+        except NotLive:
+            return self.send(503, {"error": "No world model server. Add one or start one in Servers."})
+        except OSError as e:
+            return self.send(502, {"error": f"{srv['name']} is not reachable: {e}"})
         try:
             hdr = {k: v for k, v in self.headers.items() if k.lower() in ("content-type", "accept", "range", "origin", HEADER.lower())}
             key = keys().get(srv["id"])
@@ -551,10 +792,13 @@ class _Base(BaseHTTPRequestHandler):
         only the WebSocket headers (never its cookies), then bytes both ways."""
         u = urllib.parse.urlsplit(srv["url"])
         host = u.hostname + (f":{u.port}" if u.port else "")
+        def raw(url, t):
+            x = socket.create_connection((u.hostname, u.port or (443 if u.scheme == "https" else 80)), timeout=t)
+            return ssl.create_default_context().wrap_socket(x, server_hostname=u.hostname) if u.scheme == "https" else x
         try:
-            up = socket.create_connection((u.hostname, u.port or (443 if u.scheme == "https" else 80)), timeout=10)
-            if u.scheme == "https":
-                up = ssl.create_default_context().wrap_socket(up, server_hostname=u.hostname)
+            up, _ = reach(srv, 10, raw)
+        except NotLive:
+            return self.send(503, {"error": "No world model server. Add one or start one in Servers."})
         except OSError as e:
             return self.send(502, {"error": f"{srv['name']} is not reachable: {e}"})
         lines = [f"GET {u.path.rstrip('/')}{rest} HTTP/1.1", f"Host: {host}"]
@@ -617,10 +861,17 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
         def proxy(self, method):
             srv = active_server()
             if not srv:
-                return self.send(503, {"error": {"message": "No server in use. Add one or start a TPU in Servers."}})
+                return self.send(503, {"error": {"message": "No server in use. Add one or start a TPU in Servers."}},
+                                 extra=AS_DATA)
             n = int(self.headers.get("Content-Length") or 0)
             data = self.rfile.read(n) if n else None
-            c, base = _conn(srv["url"], 600)
+            try:
+                c, base = reach(srv, 600)
+            except NotLive:
+                return self.send(503, {"error": {"message": "No server in use. Add one or start a TPU in Servers."}},
+                                 extra=AS_DATA)
+            except OSError as e:
+                return self.send(502, {"error": {"message": f"{srv['name']} is not reachable: {e}"}}, extra=AS_DATA)
             try:
                 hdr = {k: v for k, v in self.headers.items() if k.lower() in ("content-type", "accept")}
                 key = keys().get(srv["id"])
@@ -635,8 +886,8 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                         self.send_header(k, v)
                 self.send_header("Content-Type", ctype if ctype.split(";")[0].strip().lower() in PROXY_TYPES
                                  else "application/octet-stream")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                self.send_header("Content-Security-Policy", "sandbox")
+                for k, v in AS_DATA.items():
+                    self.send_header(k, v)
                 self.end_headers()
                 while True:
                     chunk = r.read1(65536)
@@ -648,7 +899,7 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                 pass
             except OSError as e:
                 try:
-                    self.send(502, {"error": {"message": f"{srv['name']} is not reachable: {e}"}})
+                    self.send(502, {"error": {"message": f"{srv['name']} is not reachable: {e}"}}, extra=AS_DATA)
                 except OSError:
                     pass
             finally:
@@ -657,7 +908,7 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
         def do_GET(self):
             p = urllib.parse.urlsplit(self.path)
             path, q = p.path, urllib.parse.parse_qs(p.query)
-            if self.refused(auth=path.startswith(("/v1/", "/api/")) or path == "/health"):
+            if self.refused(auth=path.startswith(("/v1/", "/api/") + addons.prefixes()) or path == "/health"):
                 return
             if (self.headers.get("Upgrade") or "").lower() == "websocket":
                 return self.send(404, {"error": {"message": "no stream here"}})
@@ -669,6 +920,9 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                 body = own_file(path[1:])
                 ext = "." + path.rsplit(".", 1)[-1]
                 return self.send(200, body, TYPES[ext]) if body and ext in TYPES else self.send(404, b"", "text/plain")
+            a = addons.for_path(path)
+            if a:
+                return None if a.get(self, path, q) else self.send(404, {"error": "no such call"})
             if path.startswith("/api/"):
                 return self.api_get(path, q)
             if path == "/m/world" or path.startswith("/m/world/"):      # the world page lives on its own origin
@@ -680,6 +934,9 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                 if not active_server():
                     return self.go("/p/servers?need=chat")
                 return self.page(chat_page(reg, token))
+            a = addons.page_for(path)
+            if a:
+                return self.page(in_app(a.page(reg), token))
             m = re.fullmatch(r"/p/(\w+)/?", path)
             if m and m.group(1) in VIEWS:
                 return self.page(view_page(m.group(1), reg, token))
@@ -694,6 +951,9 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                 return
             if path.startswith("/v1/"):
                 return self.proxy("POST")
+            a = addons.for_path(path)
+            if a:
+                return None if a.post(self, path) else self.send(404, {"error": "no such call"})
             if path.startswith("/api/"):
                 return self.api_post(path, self.body())
             self.send(404, b"", "text/plain")
@@ -706,25 +966,28 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                 job = job_for()
                 return self.send(200, {
                     "version": __version__, "app_version": os.environ.get("MASHBOX_APP_VERSION"),
+                    "updates": os.environ.get("MASHBOX_APP_UPDATES"),
                     "data_dir": data_dir(), "catalog_url": s["catalog_url"], "catalog_default": CATALOG_URL,
-                    "project": s["project"], "active": s["active"],
-                    "servers": [dict(x, has_key=x["id"] in k) for x in s["servers"]],
-                    "job": job.view() if job else None})
+                    "project": s["project"], "active": (active_server(s) or {}).get("id"),
+                    "servers": [dict(x, has_key=x["id"] in k) for x in s["servers"] if tpu_live(x)],
+                    "job": job.view() if job else None, "addons": addons.views(s)})
             if path == "/api/catalog":
                 return self.send(200, catalog(refresh="refresh" in q))
             if path == "/api/check":
                 sid = (q.get("id") or [None])[0]
-                srv = next((x for x in state()["servers"] if x["id"] == sid), None) or active_server()
+                srv = next((x for x in state()["servers"] if x["id"] == sid and tpu_live(x)), None) if sid else active_server()
                 if not srv:
                     return self.send(200, {"ok": False, "error": "no server"})
-                return self.send(200, probe(srv["url"], keys().get(srv["id"])))
+                return self.send(200, probe(srv["url"], keys().get(srv["id"]), row=srv))
             if path == "/api/gcloud":
                 return self.send(200, gcloud_info())
             if path == "/api/tpu/status":
                 return self.send(200, run_quick(tpu_cmd("status", project=state()["project"]), 120))
             if path == "/api/release":
                 src = runtime_source()
-                return self.send(200, {"version": __version__, "source": src, "latest": latest_release(),
+                latest = latest_release()
+                return self.send(200, {"version": __version__, "source": src, "latest": latest,
+                                       "newer": newer_release(latest, __version__),
                                        "release_file": bool(src and " release " in f" {src} ")})
             if path == "/api/tpu/job":
                 job = job_for((q.get("model") or [None])[0])
@@ -742,10 +1005,12 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                 for suffix in ("/v1",):
                     url = url[: -len(suffix)] if url.endswith(suffix) else url
                 p = probe(url, b.get("key") or None)
+                mods = ("chat", "world") + addons.ids()
+                own = None if b.get("module") in mods else addons.module_of(url, b.get("key") or None)
                 with LOCK:
                     s = state()
                     sid = "srv-" + uuid.uuid4().hex[:8]
-                    module = b.get("module") if b.get("module") in ("chat", "world") else (
+                    module = b.get("module") if b.get("module") in mods else own or (
                         "chat" if p["models"] else "world" if p["ok"] else "chat")
                     s["servers"].append({"id": sid, "name": b.get("name") or u.hostname, "url": url, "from": "url",
                                          "module": module, "model": p["models"][0]["id"] if p["models"] else None})
@@ -783,6 +1048,12 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                     _save("state.json", s)
                 _cat.clear()
                 return self.send(200, {"ok": True})
+            if path == "/api/models/add":           # the Hugging Face seam (see the module docstring)
+                hf = str(b.get("hf") or "").strip()
+                if not HF_ID.fullmatch(hf):
+                    return self.send(400, {"error": "A Hugging Face model id looks like org/name or org/name:tag."})
+                return self.send(501, {"error": "Adding a Hugging Face model by id comes with GGUF support in a later "
+                                                "release. Models in the catalog run today."})
             if path == "/api/open":
                 url = str(b.get("url", ""))
                 if re.match(r"https?://", url) and sys.platform == "darwin":
@@ -796,6 +1067,8 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 return self.send(200, {"ok": True})
             if path in ("/api/tpu/up", "/api/tpu/tunnel"):
+                if CLOSING.is_set():
+                    return self.send(503, {"ok": False, "error": "MASHBOX is closing"})
                 prj = state()["project"]
                 name = str(b.get("name") or "")
                 model = str(b.get("model") or "")
@@ -806,8 +1079,10 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                 job = JOBS.get(model)
                 if job and job.running():
                     return self.send(409, {"error": "A TPU run for this model is already going. Stop it first."})
+                if path == "/api/tpu/up" and wheel_missing():
+                    return self.send(409, {"error": wheel_missing()})
                 if path == "/api/tpu/up":
-                    row = next((m for m in registry()[0]["models"] if m["id"] == model and m.get("cloud")), None)
+                    row = tpu_row(model)
                     if row is None or not re.fullmatch(r"[a-z0-9][-a-z0-9._]*", model):
                         return self.send(400, {"error": "Pick a model from the list."})
                     zone = str(b.get("zone") or "")
@@ -828,13 +1103,20 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                         args.append("--spot")
                     if b.get("agents"):
                         args.append("--agents")
-                    job = Job("up", model, tpu_cmd(*args, project=prj))
+                    kind, cmd = "up", tpu_cmd(*args, project=prj)
                 else:
-                    job = Job("tunnel", model, tpu_cmd("tunnel", *([name] if name else []), project=prj))
-                JOBS[model] = job
+                    kind, cmd = "tunnel", tpu_cmd("tunnel", *([name] if name else []), project=prj)
+                with JOBS_LOCK:                                 # close_jobs() sees every job that starts
+                    if CLOSING.is_set():
+                        return self.send(503, {"ok": False, "error": "MASHBOX is closing"})
+                    job = JOBS.get(model)                       # checked again here: two clicks at once make one job
+                    if job and job.running():
+                        return self.send(409, {"error": "A TPU run for this model is already going. Stop it first."})
+                    job = JOBS[model] = Job(kind, model, cmd)
                 return self.send(200, job.view())
             if path == "/api/tpu/stop":
-                job = job_for(b.get("model"))
+                with JOBS_LOCK:                                 # a job being started now is in JOBS once this has it
+                    job = job_for(b.get("model"))
                 if job:
                     job.stop()
                 return self.send(200, job.view() if job else None)
@@ -842,10 +1124,14 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                 name = str(b.get("name") or "")
                 if name and not TPU_NAME.fullmatch(name):
                     return self.send(400, {"error": BAD_NAME})
-                job = job_for(chip=name) if name else job_for(b.get("model"))
-                name = name or (job.chip if job else "")
+                with JOBS_LOCK:                                 # a job being started now is in JOBS once this has it
+                    job = job_for(chip=name) if name else job_for(b.get("model"))
+                    name = name or (job.chip if job else "")
+                    starting = [j for j in list(JOBS.values()) if name and j is not job and j.running() and naming(j, name)]
                 if job and job.chip == name:
                     job.stop()
+                for j in starting:                              # a run for this chip that has not printed it yet
+                    j.stop()
                 prj = state()["project"]
                 r = run_quick(tpu_cmd("down", *([name] if name else []), project=prj), 300)
                 gone = r["code"] == 0
@@ -920,6 +1206,7 @@ def start(host="127.0.0.1", port=18930, world_port=None):
     except OSError:
         wsrv = ThreadingHTTPServer((host, 0), make_world_handler(ports, host))
     ports["world"] = wsrv.server_address[1]
+    drop_tpu_rows()                             # no tunnel survives a relaunch: Start or Reconnect opens and checks one
     for s in (srv, wsrv):
         s.daemon_threads = True
     return srv, wsrv
@@ -931,12 +1218,16 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=18930)
     ap.add_argument("--world-port", type=int, default=None, help="the world model page's own origin (default: --port + 1)")
     a = ap.parse_args(argv)
+    bad = addons.problems()
+    if bad:                     # the desktop app named these add-ons: one that does not load stops the start (fail closed)
+        sys.stderr.write("MASHBOX cannot start: an add-on module this app carries did not load. Install MASHBOX again "
+                         "from the download.\n" + "\n".join(bad) + "\n")
+        return 3
     srv, wsrv = start(a.host, a.port, a.world_port)
     threading.Thread(target=wsrv.serve_forever, daemon=True).start()
 
     def bye(*_):
-        for job in list(JOBS.values()):
-            job.stop()                          # closes the tunnel; a chip keeps its own max lifetime
+        close_jobs(10.0)
         os._exit(0)
 
     signal.signal(signal.SIGTERM, bye)

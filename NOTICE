@@ -1,0 +1,16 @@
+mashbox
+Copyright 2026 MASHBOX Labs. Licensed under the Apache License, Version 2.0 (LICENSE).
+
+Third-party work this package uses or adapts:
+
+GGUF support (src/mashbox/gguf/, src/mashbox/ops/)
+  GGUF and its block formats (Q4_0, Q8_0, Q4_K, IQ4_XS and the rest) are llama.cpp's, by the ggml authors:
+  https://github.com/ggml-org/llama.cpp
+  GGUF files are read with `gguf`, llama.cpp's Python package (gguf-py), MIT License, Copyright (c) 2023 Georgi
+  Gerganov, installed from PyPI as gguf==0.19.0 (not vendored). src/mashbox/ops/reference.py re-implements gguf-py's
+  NumPy dequantization (gguf/quants.py) in JAX, step for step; its MIT licence text is in licenses/gguf/LICENSE,
+  unchanged. The IQ codebooks are read from the installed package at run time.
+  The architecture files follow llama.cpp's model graphs and converter (src/models/, conversion/), and the tests check
+  them against llama.cpp's CPU logits at commit a37cc46 (tests/fixtures/gguf/*.json).
+
+Model weights keep their own licences (licenses/<model id>/LICENSE).
