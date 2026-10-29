@@ -4,6 +4,7 @@
     python3 tools/ci_select.py --base <sha> [--head <sha>]    # the files changed between two commits
     python3 tools/ci_select.py --files src/mashbox/cli.py      # an explicit list
     python3 tools/ci_select.py --all
+    python3 tools/ci_select.py --files-of core --shard 2/4      # the test files of one T1 job (an area's shard)
 
 Areas are one per models.json row (the id with underscores, e.g. hy_nomas), `gguf` (the GGUF reader, its ops and
 kernels, fixtures and test_gguf_*.py) plus `core`:
@@ -13,6 +14,8 @@ kernels, fixtures and test_gguf_*.py) plus `core`:
 - a models.json row runs its model and the core tests (the CLI and `mashbox tpu` tests read the rows)
 - a path nothing above claims runs every area, so a new kind of file is never silently untested
 tests/conftest.py uses test_area() to mark each test with its area, so the same rule picks the tests.
+An area in SHARDS runs as that many T1 jobs: its test files are dealt round robin in name order (--files-of), so every
+file runs in exactly one job and a job stays within the T1 timeout.
 """
 import argparse
 import json
@@ -29,6 +32,7 @@ CORE_TESTS = "+core"                            # run the core T1 job without ex
 T0_ONLY_FILES = {"llms.txt", "LICENSE", "LICENSE-KERNELS", ".github/pull_request_template.md", "tests/cpu/test_core.py"}
 CORE_DIRS = ("src/mashbox/runtime/", ".github/workflows/", "tools/")
 CORE_FILES = {"pyproject.toml", "tests/conftest.py"}
+SHARDS = {"core": 4}                            # T1 jobs per area (default 1); core is 55 test files, about 870 tests
 
 
 AREAS_EXTRA = ("gguf",)                         # areas that are not a models.json row: GGUF files (reader, ops, kernels)
@@ -116,6 +120,27 @@ def select(files, areas, base=None, head=None):
     return sorted(picked)
 
 
+def area_files(area, areas, root=ROOT):
+    """The T1 test files of one area: tests/cpu/**/test_*.py whose name gives that area (T0 files excluded), name order"""
+    cpu = root / "tests" / "cpu"
+    return sorted((p.relative_to(root).as_posix() for p in cpu.rglob("test_*.py")
+                   if p.name not in T0_TESTS and test_area(p.name, areas) == area), key=lambda f: (f.rsplit("/", 1)[-1], f))
+
+
+def shard_files(files, shard):
+    """files dealt round robin into shard 'i/n' (1-based): the n shards partition the list"""
+    i, n = (int(x) for x in shard.split("/"))
+    if not 1 <= i <= n:
+        raise ValueError(f"shard {shard}: want i/n with 1 <= i <= n")
+    return files[i - 1::n]
+
+
+def jobs(picked):
+    """the T1 matrix rows: one per area, or SHARDS[area] rows for a sharded area"""
+    return [{"area": x, "extra": EXTRA.get(x, ""), "shard": f"{i}/{SHARDS.get(x, 1)}"}
+            for x in picked for i in range(1, SHARDS.get(x, 1) + 1)]
+
+
 def changed_files(base, head):
     if not base or set(base) == {"0"}:
         return None                             # first push of a branch: no base to compare
@@ -130,8 +155,17 @@ def main(argv=None):
     ap.add_argument("--files", nargs="*")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--github-output", action="store_true", help="write matrix and any to $GITHUB_OUTPUT")
+    ap.add_argument("--files-of", metavar="AREA", help="print the test files of AREA's T1 job --shard (default 1/1)")
+    ap.add_argument("--shard", default="1/1")
     a = ap.parse_args(argv)
     areas = model_areas()
+    if a.files_of:
+        files = shard_files(area_files(a.files_of, areas), a.shard)
+        if not files:
+            print(f"no test files for area {a.files_of} shard {a.shard}", file=sys.stderr)
+            return 1
+        print(" ".join(files))
+        return 0
     files = a.files if a.files is not None else (None if a.all else changed_files(a.base, a.head))
     if files is None:
         picked = select(["pyproject.toml"], areas)
@@ -142,7 +176,7 @@ def main(argv=None):
             print(f"  {f}: {' '.join(sorted(classify(f, areas, a.base, a.head))) or 'T0 only'}")
     print("T1 areas:", " ".join(picked) or "none (T0 only)")
     if a.github_output:
-        include = [{"area": x, "extra": EXTRA.get(x, "")} for x in picked]
+        include = jobs(picked)
         with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
             fh.write(f"matrix={json.dumps({'include': include})}\nany={'true' if picked else 'false'}\n")
     return 0
