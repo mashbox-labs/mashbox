@@ -4,6 +4,14 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 
 ## 0.1.4
 
+### Chip status in `models.json`: a chip a model ran on is never "not supported"
+
+1. **`tools/hf_github_sync_check.py` status values:** `chips.<chip>.status` is one of `passing` (`mashbox run` runs the model on this chip; a date), `measured` (new: a dated measured run of the model on this chip while this version's `mashbox run` does not start there; a date, a dated results row on its chip, a `note` and a `run_note`), `pending` (nobody ran it there; a `not_run_reason`), `failing` (a date and the measured reason) and `not supported` (a dated measured finding that the model does not run there). The pages print a `measured` row's note, never "Not supported"; the package's chip lists (`mashbox models`, the app, `tpu up`) read `passing` only, so they never offer it.
+2. **Rules in `check`, every mode:** a chips row with a measured run on its chip (a dated results row on it, or its `measured` block) is never `not supported` or `pending`; a chip nobody ran is `pending` with its `not_run_reason`, never `not supported`. `tests/cpu/test_catalog.py` reads both copies of `models.json` directly. A sentence that says a model runs on a chip whose row is `pending` is reported, as for `not supported` and `failing`.
+3. **`run_note`:** a `passing` or `measured` row may carry its measured speed and any condition in a few words; every number with a unit in it is a value of a dated results row on that chip. It prints after the chip in the `llms.txt` "Runs on" list (the chips are then separated by semicolons) and, for a `passing` row, after "Supported" in the README chips cell.
+
+Why: a chip a model ran on is never dropped, and agents and the package read the raw `models.json`, not only the pages. Compatible: `mashbox run` and every package reader treat a `measured` row as before (not `passing`); rows without `run_note` render as before.
+
 ### Track2Rig, our own CPU model
 
 1. **`cli.py`:** `track2rig` joins `RUNNABLE` and `MODEL_CLI` (`mashbox run track2rig TRACKS.npz`, `mashbox download track2rig`), as Hy-Nomas. Compatible: other model ids parse as before.

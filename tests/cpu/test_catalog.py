@@ -2408,10 +2408,11 @@ NEVER_RUN_PARAPHRASES = ("runs on TPU v6e only (one chip or a v6e-4)", "only v6e
 
 
 def test_a_chip_row_speaks_for_its_own_chip_and_a_never_run_row_reads_not_tested_yet():
-    """A never-run row may be stored as 'not supported' + note 'Not tested yet': a chips row's reason and note never
-    name another chip type (the old 'runs on TPU v6e only' on v5e, and every paraphrase of it, as reason
-    or note); a reason never says the chip was not tested; a row nobody ran (not passing or failing, no date, no result
-    on its chip) reads 'Not tested yet' and carries no reason. Today's rows pass, in both modes."""
+    """A chips row's reason and note never name another chip type (the old 'runs on TPU v6e only' on v5e, and every
+    paraphrase of it, as reason or note); a reason never says the chip was not tested; a row nobody ran (not passing or
+    failing, no date, no result on its chip) reads 'Not tested yet' and carries no reason, and it is stored as
+    "pending" with its not_run_reason: 'not supported' + note 'Not tested yet' prints the same words but is
+    reported by the status rule only. Today's rows pass, in both modes."""
     tag = lambda x: "another chip" in x or "never run" in x or "not tested" in x
     for release in (False, True):
         for m in REG["models"]:
@@ -2419,7 +2420,9 @@ def test_a_chip_row_speaks_for_its_own_chip_and_a_never_run_row_reads_not_tested
             assert [x for x in reg_p if tag(x)] == [], (m["id"], release)
     nty = {"status": "not supported", "note": "Not tested yet"}
     for ok in (nty, {"status": "pending", "not_run_reason": "CPU model: runs on the CPU, no TPU needed"}):
-        assert [x for x in _row_problems("hy-nomas", "v5e", ok) if tag(x)] == [], ok
+        got = [x for x in _row_problems("hy-nomas", "v5e", ok) if tag(x)]
+        assert [x for x in got if NOT_SUPPORTED_STATUS not in x] == [], ok
+        assert bool(got) == (ok is nty), (ok, got)   # a chip nobody ran is pending, never "not supported"
         m = copy.deepcopy(next(r for r in REG["models"] if r["id"] == "hy-nomas"))
         m["chips"]["v5e"] = ok
         assert SC.chip_text(m, "v5e") == "Not tested yet"
@@ -2520,6 +2523,187 @@ def test_a_chip_row_accelerator_is_its_own_chip_type_and_chip_names_are_read_in_
     got = SC.only_chip_claims(m, "Hy-Nomas runs only on a TPU v6e-4.")
     assert got and "its v5e chips row was never run" in got[0][1], got
 
+
+
+def _measured_run(m, chip):
+    """Why a measured run of m exists on chips.<chip>, "" when none: a dated results row on that chip, or the row's own
+    measured block"""
+    if chip in SC.chip_rows_measured(m):
+        return "a dated results row on it"
+    if (m["chips"].get(chip) or {}).get("measured"):
+        return "its measured block"
+    return ""
+
+
+def _chips_named(text):
+    """The chips rows a results row's chip names: exactly (v6e-4, v5p-8) or by type (v6e-1 -> v6e)."""
+    return {t if t in SC.CHIPS else t.split("-")[0] for t in SC.CHIP_TOKEN_RE.findall(str(text or "").lower())}
+
+
+NOT_SUPPORTED_STATUS = 'status "not supported"'   # the validator's words for both rules below
+MEASURED_PENDING = 'never reads "Not tested yet"'   # the validator's words for a pending row on a chip with a measured run
+
+
+def test_no_chip_a_model_ran_on_says_not_supported_and_a_chip_nobody_ran_is_pending_with_its_reason():
+    """The rule: a chip a model ran on is never marked "not supported", and a chip nobody ran reads "Not tested yet".
+    The pages followed it, but the raw models.json (linked from llms.txt and shipped in the package) still
+    had "status": "not supported" on a chips row with a measured run on its chip and on rows nobody ran, and no check
+    read the raw field. In both copies of models.json: a chips row with a measured run on its chip (a dated results row
+    on it, or its measured block) never has status "not supported" or "pending"; a chips row nobody ran is "pending"
+    with a non-empty not_run_reason; a GGUF row's chip (each one has its record) is never "not supported"."""
+    bad = []
+    for path in (ROOT / "models.json", ROOT / "src" / "mashbox" / "models.json"):
+        reg = json.loads(path.read_text())
+        where = path.relative_to(ROOT).as_posix()
+        for m in reg["models"]:
+            for chip, c in (m.get("chips") or {}).items():
+                st = (c or {}).get("status")
+                if st in ("not supported", "pending") and _measured_run(m, chip):
+                    bad.append(f"{where} {m['id']} chips.{chip}: {_measured_run(m, chip)}, but status {st!r}")
+                if SC.never_run(m, chip) and not (st == "pending" and str(c.get("not_run_reason") or "").strip()):
+                    bad.append(f"{where} {m['id']} chips.{chip}: never run, but status {st!r} and not pending with "
+                               "its not_run_reason")
+        for g in reg.get("gguf") or []:
+            for chip, c in (g.get("chips") or {}).items():
+                if (c or {}).get("status") == "not supported":
+                    bad.append(f"{where} gguf {g.get('id')} chips.{chip}: {NOT_SUPPORTED_STATUS}")
+    assert bad == [], bad
+
+
+def test_validate_reports_not_supported_on_a_chip_with_a_measured_run_or_on_a_chip_nobody_ran():
+    """The release gate reads models.json through validate(), so it reports both rules of the test above in every mode,
+    for every model and chip: a chips row nobody ran that says "not supported" (with or without the note 'Not tested
+    yet'), and a chips row with a measured run on its chip that says "not supported" (dated, with a reason, or not) or
+    "pending" (its pages would print 'Not tested yet'). A pending row with its not_run_reason on a chip nobody ran, and a
+    row with a measured finding on a chip with no measured run on it, pass."""
+    nty = {"status": "not supported", "note": "Not tested yet"}
+    pend = {"status": "pending", "not_run_reason": "Outside the chip types this release was tested on"}
+    finding = {"status": "not supported", "date": "2026-10-28", "reason": "too little memory: 16 GB of HBM per chip"}
+    checked = 0
+    for release in (False, True):
+        for m in REG["models"]:
+            if m["kind"] == "llm-gguf" or m.get("launch"):
+                continue
+            for chip in SC.CHIPS:
+                dated = {**(m["results"] or [{}])[0], "chip": f"TPU {chip}", "date": "2026-10-28"}
+                for results in (None, copy.deepcopy(m["results"]) + [dated]):
+                    probe = copy.deepcopy(m)
+                    if results is not None:
+                        probe["results"] = results
+                    for entry in (nty, {"status": "not supported"}, finding):
+                        probe["chips"][chip] = entry
+                        want = bool(_measured_run(probe, chip)) or SC.never_run(probe, chip)
+                        got = _row_problems(m["id"], chip, entry, release=release, results=results,
+                                            tag=NOT_SUPPORTED_STATUS)
+                        assert bool(got) == want, (m["id"], chip, entry, results is not None, release, got)
+                        checked += 1
+                    probe["chips"][chip] = pend
+                    got = _row_problems(m["id"], chip, pend, release=release, results=results, tag=MEASURED_PENDING)
+                    assert bool(got) == bool(_measured_run(probe, chip)), (m["id"], chip, release, got)
+                    if SC.never_run(probe, chip):
+                        assert _row_problems(m["id"], chip, pend, release=release, results=results,
+                                             tag=NOT_SUPPORTED_STATUS) == [], (m["id"], chip, release)
+    assert checked >= 2 * 3 * len(SC.CHIPS) * 2 * 3
+    finding_words = "states what a run found there"
+    for m in (m for m in REG["models"] if m["kind"] != "llm-gguf" and not m.get("launch")):
+        for chip in SC.CHIPS:
+            for entry in ({"status": "not supported", "date": "2026-10-28"},
+                          {"status": "not supported", "date": "2026-10-28", "note": "Not tested yet"},
+                          {"status": "not supported", "reason": "too little memory: 16 GB of HBM per chip"}):
+                assert _row_problems(m["id"], chip, entry, release=True, tag=finding_words), (m["id"], chip, entry)
+            assert _row_problems(m["id"], chip, finding, release=True, tag=finding_words) == [], (m["id"], chip)
+
+
+def test_every_chip_a_model_ran_on_is_in_its_runs_on_line_with_its_run_note():
+    """llms.txt listed Hy-Nomas as 'Runs on: TPU v6e slice (v6e-4)' while it has a dated result on one TPU v6e chip, and
+    agents read llms.txt to pick a chip. Every passing chip, and every chip a live model has a measured run on that is
+    not failing, is named in its llms.txt 'Runs on'. A run_note (the measured speed and its condition, in a few words)
+    prints after its chip there; a passing row's run_note also follows "Supported" in the README chips cell. A
+    run_note's measured numbers (a number with its unit) are values of a dated results row on its chip; run_note sits
+    only on a passing or measured row and speaks for its own chip."""
+    llms = (ROOT / "llms.txt").read_text().splitlines()
+    readme = (ROOT / "README.md").read_text()
+    for m in SC.live(REG):
+        line = next(x for x in llms if x.startswith(f"- [{m['name']}]("))
+        runs = line.split(" Runs on: ", 1)[1] if " Runs on: " in line else ""
+        for chip in SC.CHIPS:
+            c = m["chips"].get(chip) or {}
+            if c.get("status") == "passing" or (_measured_run(m, chip) and c.get("status") != "failing"):
+                assert SC.chip_label(m, chip) in runs, (m["id"], chip, line)
+            if c.get("run_note"):
+                assert f"{SC.chip_label(m, chip)}: {c['run_note']}" in runs, (m["id"], chip, line)
+            if c.get("run_note") and c.get("status") == "passing":
+                assert f"{SC.chip_label(m, chip)}: Supported, {c['run_note']}" in readme, (m["id"], chip)
+    m0 = next(m for m in REG["models"] if m["kind"] != "llm-gguf" and not m.get("launch") and m["results"])
+    chip = next(c for c in SC.CHIPS if c in SC.chip_rows_measured(m0))
+    value = next(r["value"] for r in m0["results"] if chip in {t if t in SC.CHIPS else t.split("-")[0]
+                                                               for t in SC.CHIP_TOKEN_RE.findall(r["chip"].lower())})
+    num = re.search(r"\d+(?:\.\d+)?", value).group(0)
+    ok = {"status": "passing", "date": "2026-10-28", "run_note": f"{num} s for one stream"}
+    assert _row_problems(m0["id"], chip, ok, tag="run_note") == []
+    for bad in ({**ok, "run_note": "123456.789 s for one stream"}, {**ok, "run_note": "  "},
+                {**ok, "run_note": "999 seconds for one stream"}, {**ok, "run_note": "61 fps"},
+                {**ok, "run_note": "10 hours"}, {**ok, "run_note": "5× faster"},
+                {"status": "pending", "not_run_reason": "x y", "run_note": ok["run_note"]},
+                {**ok, "run_note": f"{num} s, faster on a v5p-8"}):
+        assert _row_problems(m0["id"], chip, bad, tag="run_note"), bad
+    m = copy.deepcopy(m0)
+    m["chips"][chip] = ok
+    assert f"{SC.chip_label(m, chip)}: {ok['run_note']}" in SC.runs_on(m)
+    assert f"{SC.chip_label(m, chip)}: Supported, {ok['run_note']}" in SC.models_table({**REG, "models": [m]}, False)
+
+
+MEASURED_ROW_PAGES = ("README", "chips table", "chip text", "chips block", "llms.txt")
+
+
+def test_a_measured_chip_never_reads_not_supported_and_the_package_never_offers_it():
+    """'measured' says what is true for a chip a model has a dated measured run on while this version's `mashbox run`
+    does not start there (a passing row would make `mashbox models`, the app and `tpu up` offer the chip). It needs a
+    real date, a dated results row on its chip, a public note and a run_note. It never renders as 'Not supported' on
+    any page, raw file or the package catalog; the pages print its note and llms.txt names the chip with its run_note;
+    the package's own chip lists (catalog, app shell, `tpu up`) never name it."""
+    from mashbox import tpu as T
+    from mashbox.ui import shell as US
+    m0 = next(m for m in REG["models"] if m["kind"] != "llm-gguf" and not m.get("launch") and m["results"])
+    chip = next(c for c in SC.CHIPS if c in SC.chip_rows_measured(m0))
+    num = re.search(r"\d+(?:\.\d+)?", next(r["value"] for r in m0["results"] if chip in _chips_named(r["chip"]))).group(0)
+    row = {"status": "measured", "date": "2026-10-28", "accelerator": f"{chip}-1" if "-" not in chip else chip,
+           "note": "One chip: the model fits. This version of `mashbox run` starts on another host",
+           "run_note": f"{num} s per unit of output (this version of `mashbox run` starts on another host)"}
+    assert _row_problems(m0["id"], chip, row, release=True) == []
+    assert _row_problems(m0["id"], chip, {**row, "run_note": "fits on one chip (this version of `mashbox run` starts "
+                                                             "on another host)"}, release=True)
+    for key in ("date", "note", "run_note"):
+        assert _row_problems(m0["id"], chip, {k: v for k, v in row.items() if k != key}, release=True), key
+    no_result = [r for r in m0["results"] if chip not in _chips_named(r["chip"])]
+    assert any("measured" in x for x in _row_problems(m0["id"], chip, row, results=no_result)), "needs a dated result"
+    m = copy.deepcopy(m0)
+    for other in SC.CHIPS:   # every other chip passing, so any "not supported" or "not tested" left comes from this row
+        m["chips"][other] = {"status": "passing", "date": "2026-10-28"}
+    m["chips"][chip] = row
+    reg = {**REG, "models": [m]}
+    seen = {"README": SC.models_table(reg, False), "chips table": SC.chips_table(m), "chip text": SC.chip_text(m, chip),
+            "chips block": SC.chips_block(reg), "llms.txt": SC.llms_block(reg)}
+    assert set(seen) == set(MEASURED_ROW_PAGES)
+    for page, text in seen.items():
+        assert row["note"].split(": ", 1)[-1] in text or row["run_note"] in text, page   # chips table: "One chip | rest"
+        assert "not supported" not in text.lower() and "not tested" not in text.lower(), (page, text)
+    assert SC.chip_text(m, chip) == row["note"]
+    name, acc = m["name"], row["accelerator"]
+    for said, flagged in ((f"{name} runs on a TPU {acc}.", True), (f"{name} works on one {chip} chip.", True),
+                          (f"{name} runs on a single TPU {chip} with mashbox run.", True),
+                          (f"The full pipeline of {name} fits on a single TPU {chip} chip.", False)):
+        assert bool(SC.bad_chip_claims(m, said)) == flagged, said   # it fits there; `mashbox run` starts elsewhere
+    assert f"{SC.chip_label(m, chip)}: {row['run_note']}" in SC.runs_on(m)
+    assert f"TPU {row['accelerator']}" not in catalog.chips_run(m)
+    assert f"TPU {chip}" not in US.chips(m["id"], reg)
+    assert row["accelerator"] not in [k for k, _ in T.offered({**m, "cloud": m.get("cloud") or {"accelerator": "x"}})]
+    for path in (ROOT / "models.json", ROOT / "src" / "mashbox" / "models.json"):
+        for mm in json.loads(path.read_text())["models"]:
+            for ch, c in (mm.get("chips") or {}).items():
+                if c.get("status") == "measured":
+                    assert _measured_run(mm, ch) and c.get("run_note") and c.get("note"), (path, mm["id"], ch)
+                    assert f"TPU {c.get('accelerator') or ch}" not in catalog.chips_run(mm), (mm["id"], ch)
 
 OUR_OTHER_CHIP_SPELLINGS = ("runs on Trillium only", "use a TPUv6e", "needs a TPU-v6e-4", "fits on TPU v6 lite x1",
                             "v​6e only", "needs a v6e⁠-4", "ｖ６ｅ only", "needs a v5p-16 slice")

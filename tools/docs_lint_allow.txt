@@ -25,4 +25,3 @@ docs/models/hy-nomas.md | Not tested yet | 4 | a chip status: the model has not 
 docs/models/qwen3-8-27b.md | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
 hf/hy-nomas/README.md | Not tested yet | 2 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
 hf/qwen3-8-27b/README.md | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
-models.json | Not tested yet | 3 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported

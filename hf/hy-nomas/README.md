@@ -27,7 +27,7 @@ Tencent's open video world model, playable in the browser from a TPU v6e-4. The 
 - **10 min 40.1 s**: first start on a new chip without a matching compile cache, command to first frame on screen (weights downloaded and in the VM's memory; compiling included), on TPU v6e-4
 - **1 min 14.8 s (median of 5 starts; 1 min 7.2 s to 1 min 43.6 s)**: later starts, command to first frame on screen (weights in the VM's memory), on TPU v6e-4
 - **1 min 20.7 s**: first start on a new chip with the compiled programs from this repo, command to first frame on screen (weights downloaded and in the VM's memory), on TPU v6e-4
-- **2.46 s (60 s run)**: compute per second of video, full pipeline on a single TPU v6e chip (v6e-1, 32 GB), 720p, main model in our 4-bit format; this version of `mashbox run` starts on a v6e-4
+- **2.46 s (60 s run)**: compute per second of video, full pipeline on a single TPU v6e chip (v6e-1, 32 GB), 720p, main model quantized; this version of `mashbox run` starts on a v6e-4
 
 <img alt="Hy-Nomas running on Google Cloud TPU" width="720" src="https://huggingface.co/mashbox-labs/Hy-Nomas-TPU/resolve/main/assets/hero.gif">
 
@@ -53,7 +53,7 @@ The app serves on the VM's 127.0.0.1:8790 only. Connect with `gcloud compute tpu
 | TPU v6e-4 | First start on a new chip without a matching compile cache, command to first frame on screen (weights downloaded and in the VM's memory; compiling included) | 10 min 40.1 s | n/a |
 | TPU v6e-4 | Later starts, command to first frame on screen (weights in the VM's memory) | 1 min 14.8 s (median of 5 starts; 1 min 7.2 s to 1 min 43.6 s) | n/a |
 | TPU v6e-4 | First start on a new chip with the compiled programs from this repo, command to first frame on screen (weights downloaded and in the VM's memory) | 1 min 20.7 s | 10 min 40.1 s without them (about 9 minutes of it compiling), same chip |
-| TPU v6e-1 (one chip, 32 GB) | Compute per second of video, full pipeline on one chip, 720p, main model in our 4-bit format | 2.46 s (60 s run) | 1.00 s = real time |
+| TPU v6e-1 (one chip, 32 GB) | Compute per second of video, full pipeline on one chip, 720p, main model quantized | 2.46 s (60 s run) | 1.00 s = real time |
 
 Each chart names the hardware on both sides.
 

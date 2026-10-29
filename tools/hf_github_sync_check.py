@@ -81,7 +81,10 @@ KINDS = {
 }
 CHIPS = ("v5e", "v6e", "v5p-8", "v6e-4")      # the chip types people rent: v5e, v6e, a v5p slice and a v6e slice
 CHIP_LABEL = {"v5e": "TPU v5e", "v6e": "TPU v6e", "v5p-8": "TPU v5p slice (v5p-8)", "v6e-4": "TPU v6e slice (v6e-4)"}
-CHIP_STATUS = ("pending", "passing", "failing", "not supported")
+CHIP_STATUS = ("pending", "passing", "measured", "failing", "not supported")
+# measured: a dated measured run of the model on this chip (a dated results row on it) while this version's `mashbox run`
+# does not start there; the pages print its note, llms.txt names the chip with its run_note, and the package's chip
+# lists (catalog, app, tpu up), which read "passing" only, never offer it
 UNCONFIRMED = {"", "unconfirmed", "todo", "tbd", "unknown"}
 MARK_START, MARK_END = "<!-- models:start -->", "<!-- models:end -->"
 ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -178,13 +181,30 @@ def validate(reg, repo_root, problems, release=False):
                 if m["kind"] != "llm-gguf":
                     problems.add(where, f"chips.{chip}.status must be one of {CHIP_STATUS}")
                 continue
-            if c["status"] in ("passing", "failing") and not real_date(c.get("date", "")):
+            if c["status"] in ("passing", "failing", "measured") and not real_date(c.get("date", "")):
                 problems.add(where, f"chips.{chip} {c['status']} needs a date YYYY-MM-DD")
             if c["status"] == "failing" and not c.get("reason"):
                 problems.add(where, f"chips.{chip} 'failing' needs the measured reason")
             if "not_run_reason" in c and (c["status"] != "pending" or not str(c["not_run_reason"]).strip()):
                 problems.add(where, f"chips.{chip}.not_run_reason says why a pending chip has not been run: only on a "
                                     "pending chip, never empty")
+            if "run_note" in c and (c["status"] not in ("passing", "measured") or not str(c["run_note"]).strip()):
+                problems.add(where, f"chips.{chip}.run_note says how the model runs on the chip (its measured speed and "
+                                    "any condition): only on a passing or measured chip, never empty")
+            if c["status"] == "not supported" and not (real_date(c.get("date", "")) and str(c.get("reason") or "").strip()):
+                problems.add(where, f"chips.{chip}: a 'not supported' row states what a run found there, so it carries "
+                                    "the day of the run and its reason; a chip nobody ran is pending with its "
+                                    "not_run_reason")
+            if c["status"] == "measured":
+                if not RUN_NOTE_NUMBER_RE.search(row_words(c.get("run_note"))):
+                    problems.add(where, f"chips.{chip} 'measured' run_note states the measured number with its unit")
+                if chip not in chip_rows_measured(m):
+                    problems.add(where, f"chips.{chip} 'measured' needs a dated results row on its chip (the run it "
+                                        "states)")
+                if not str(c.get("note") or "").strip() or not str(c.get("run_note") or "").strip():
+                    problems.add(where, f"chips.{chip} 'measured' needs its note (the pages print it) and its run_note "
+                                        "(llms.txt prints it): what was measured and that this version's `mashbox run` "
+                                        "starts elsewhere")
             for bad in chip_row_problems(m, chip):
                 problems.add(where, bad)
         for j, r in enumerate(m["results"]):
@@ -267,12 +287,12 @@ def validate(reg, repo_root, problems, release=False):
                 sts = [(m["chips"].get(c) or {}).get("status") for c in CHIPS]
                 if "passing" not in sts and (m["chips"].get("cpu") or {}).get("status") != "passing":
                     problems.add(where, "release: no chip passing (TPU, or the CPU for a CPU-only model)")
-                # a released chip row is passing, not supported, or pending with its not_run_reason; a chip nobody ran
-                # reads "Not tested yet" on every page (pending, or "not supported" + note "Not tested yet" and no
-                # reason): chip_row_problems, every mode
+                # a released chip row is passing, measured, not supported, or pending with its not_run_reason; a chip
+                # nobody ran is pending with its not_run_reason and reads "Not tested yet" on every page, and a chip
+                # with a measured run on it is never "not supported" or pending: chip_row_problems, every mode
                 if any(x in ("failing", None) or (x == "pending" and not not_run_reason(m, c)) for c, x in zip(CHIPS, sts)):
-                    problems.add(where, "release: every chip must be passing, not supported, or pending with its "
-                                        "not_run_reason (a chip nobody ran reads 'Not tested yet')")
+                    problems.add(where, "release: every chip must be passing, measured, not supported, or pending with "
+                                        "its not_run_reason (a chip nobody ran reads 'Not tested yet')")
             for j, f in enumerate(m["files"]):
                 if f.get("variant") and not (f.get("quality") and f.get("speed") and f.get("date")):
                     problems.add(where, f"release: variant files[{j}] needs measured quality, speed and date")
@@ -543,16 +563,35 @@ def chip_rows_measured(m):
     for r in m.get("results") or []:
         if not real_date(r.get("date", "")):   # a result without a real date proves no run
             continue
-        for t in CHIP_TOKEN_RE.findall(str(r.get("chip") or "").lower()):
-            out.add(t if t in CHIPS else t.split("-")[0])
+        out |= chips_named(r.get("chip"))
     return out
+
+
+def chips_named(text):
+    """The chips rows a results row's chip names: exactly (v6e-4, v5p-8) or by type (v6e-1 -> v6e, v5e-4 -> v5e)."""
+    return {t if t in CHIPS else t.split("-")[0] for t in CHIP_TOKEN_RE.findall(str(text or "").lower())}
+
+
+# a measured number with its unit in a run_note ("2.46 s", "38.6 tok/s"); a chip name's digits (v6e-4) are not one
+RUN_NOTE_NUMBER_RE = re.compile(r"(?<![\w.-])(\d+(?:\.\d+)?)\s*(?:ms|s|secs?|seconds?|mins?|minutes?|h|hrs?|hours?|"
+                                r"fps|tok/s|tokens/s|tokens per second|tokens|gib|gb|mb|%|x|\u00d7)(?![\w])")
+
+
+def measured_run(m, chip):
+    """Why a measured run of m exists on chips.<chip>, "" when none: a dated results row on that chip, or the row's
+    measured block. Such a row is never "not supported": a chip a model ran on is never dropped."""
+    if chip in chip_rows_measured(m):
+        return "a dated results row on it"
+    if ((m.get("chips") or {}).get(chip) or {}).get("measured"):
+        return "its measured block"
+    return ""
 
 
 def never_run(m, chip):
     """True when nobody has run m on chips.<chip>: not passing or failing, no real date (a date of 'never' or
     '9999-99-99' is not a run), and no results row on that chip"""
     c = m["chips"].get(chip) or {}
-    return (c.get("status") not in ("passing", "failing") and not real_date(c.get("date", ""))
+    return (c.get("status") not in ("passing", "failing", "measured") and not real_date(c.get("date", ""))
             and chip not in chip_rows_measured(m))
 
 
@@ -590,16 +629,34 @@ def chip_row_problems(m, chip):
     nowhere (status, note, reason, not_run_reason)."""
     c = m["chips"].get(chip) or {}
     out, kind = [], chip.split("-")[0]
-    if "date" in c and c.get("status") not in ("passing", "failing") and not real_date(c["date"]):
+    if "date" in c and c.get("status") not in ("passing", "failing", "measured") and not real_date(c["date"]):
         out.append(f"chips.{chip}.date {c['date']!r} is not a real YYYY-MM-DD date (not after tomorrow, UTC): a row "
                    "nobody ran has no date")
-    for key in ("reason", "note", "accelerator"):
+    for key in ("reason", "note", "accelerator", "run_note"):
         other = sorted({t for t in CHIP_TOKEN_RE.findall(row_words(c.get(key))) if t.split("-")[0] != kind})
         if other:
             out.append(f"chips.{chip}.{key} names another chip ({', '.join(other)}): a row speaks for its own chip only")
     if NOT_TESTED_RE.search(row_words(c.get("reason"))):
         out.append(f"chips.{chip}.reason says the chip was not tested: a reason states what a run found; a chip "
                    "nobody ran says 'Not tested yet' (note, or pending with its not_run_reason)")
+    if c.get("status") == "not supported" and never_run(m, chip):
+        out.append(f"chips.{chip} was never run, so it is \"pending\" with its not_run_reason, never status \"not "
+                   "supported\": a chip nobody ran reads 'Not tested yet'")
+    if c.get("status") == "pending" and measured_run(m, chip):
+        out.append(f"chips.{chip} has a measured run on its chip ({measured_run(m, chip)}), so it never reads \"Not "
+                   "tested yet\" and is never pending: passing, or measured when this version's `mashbox run` starts "
+                   "elsewhere")
+    if c.get("status") == "not supported" and measured_run(m, chip):
+        out.append(f"chips.{chip} has a measured run on its chip ({measured_run(m, chip)}), so it never has status "
+                   "\"not supported\": a chip the model ran on is passing, or measured when this version's `mashbox "
+                   "run` starts elsewhere, with its measured number")
+    if str(c.get("run_note") or "").strip():
+        said = set(RUN_NOTE_NUMBER_RE.findall(row_words(c["run_note"])))
+        have = {n for r in m.get("results") or [] if real_date(r.get("date", "")) and chip in chips_named(r.get("chip"))
+                for n in re.findall(r"\d+(?:\.\d+)?", str(r.get("value") or ""))}
+        if said - have:
+            out.append(f"chips.{chip}.run_note states {', '.join(sorted(said - have))}, not a value of a dated results "
+                       "row on this chip: a run_note copies its numbers from the measured result")
     if never_run(m, chip):
         if chip_text(m, chip) != "Not tested yet":
             out.append(f"chips.{chip} was never run (no date, no result on it) but reads {chip_text(m, chip)!r}: "
@@ -620,20 +677,24 @@ def chip_row_problems(m, chip):
 def chip_cell(m, chip):
     """A chip's status for the released version: Supported or Not supported. The test date stays in models.json
     (validate() needs it); public views never print it. A pending row reads "Not tested yet": it never claims a result,
-    and the release gate (validate --release) stops a release that has one without its not_run_reason."""
+    and the release gate (validate --release) stops a release that has one without its not_run_reason. A measured row
+    reads "Measured" and the views print its note (chip_note) in its place, never "Not supported"."""
     st = (m["chips"].get(chip) or {}).get("status", "")
     if st == "passing":
         return "Supported"
+    if st == "measured":   # the pages print its note (chip_note): what was measured and where `mashbox run` starts
+        return "Measured"
     if st == "pending":
         return "Not tested yet"
     return "Not supported" if st in ("failing", "not supported") else "n/a"
 
 
 def chip_note(m, chip):
-    """The public note of a chips row that is not supported (e.g. "One chip: the full pipeline fits ..."): views print it
-    in place of "Not supported: <reason>". The status stays as it is, so mashbox run behaves the same. "" when none."""
+    """The public note of a chips row that is not supported or measured (e.g. "One chip: the full pipeline fits ..."):
+    views print it in place of "Not supported: <reason>" or "Measured". The status stays as it is, so mashbox run
+    behaves the same. "" when none."""
     c = m["chips"].get(chip) or {}
-    return c.get("note", "") if c.get("note") and chip_cell(m, chip) == "Not supported" else ""
+    return c.get("note", "") if c.get("note") and chip_cell(m, chip) in ("Not supported", "Measured") else ""
 
 
 def weights_cell(m):
@@ -660,7 +721,9 @@ def models_table(reg, absolute):
         link = code_url(reg, m) if absolute or ver_newer(m.get("card_release"), reg["version"]) else m["path"]
         rows.append([f"**[{m['name']}]({link})**<br>by {m['upstream']['maker']}" + experimental_note(m, "<br>"),
                      f"{KINDS[m['kind']]['label']}: {m['in']} in, {m['out']} out",
-                     "<br>".join(f"{chip_label(m, c)}: {chip_note(m, c) or chip_cell(m, c)}" for c in CHIPS), readme_measured(m),
+                     "<br>".join(f"{chip_label(m, c)}: {chip_note(m, c) or chip_cell(m, c)}"
+                                 + (f", {run_note(m, c)}" if chip_cell(m, c) == "Supported" and run_note(m, c) else "")
+                                 for c in CHIPS), readme_measured(m),
                      weights_cell(m)])
     return table(["Model", "What it does", "Chips", "Measured", "Weights"], rows)
 
@@ -705,10 +768,20 @@ def profile_table(reg):
     return table(["Model", "What it does", "Measured", "Chips"], rows)
 
 
+def run_note(m, chip):
+    """A passing or measured chips row's run_note (its measured speed and any condition, in a few words), "" otherwise."""
+    c = m["chips"].get(chip) or {}
+    return str(c.get("run_note") or "").strip() if c.get("status") in ("passing", "measured") else ""
+
+
 def runs_on(m):
-    """" Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1)." from the passing chips rows (agents read llms.txt to pick a chip)."""
-    ok = [chip_label(m, c) for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
-    return f" Runs on: {', '.join(ok)}." if ok else ""
+    """" Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1)." from the passing and measured chips rows (agents read llms.txt to
+    pick a chip); a row's run_note follows its chip ("TPU v6e (v6e-1): 2.46 s of compute per second of video (...)"),
+    and the chips are then separated by semicolons."""
+    ok = [chip_label(m, c) + (f": {run_note(m, c)}" if run_note(m, c) else "") for c in CHIPS
+          if (m["chips"].get(c) or {}).get("status") in ("passing", "measured")]
+    sep = "; " if any(run_note(m, c) for c in CHIPS) else ", "
+    return f" Runs on: {sep.join(ok)}." if ok else ""
 
 
 def experimental(m):
@@ -1791,11 +1864,16 @@ def _run_arg_values(reg, repo):
 
 def bad_chip_claims(m, piece):
     """The chips a sentence says model m runs on ("runs on a TPU v5e-8") while its models.json chips row says not
-    supported or failing."""
+    supported, failing, or pending (nobody ran it there, so no run backs the sentence), or measured: a measured run
+    exists there but this version's `mashbox run` does not start on it, so "fits on" holds and "runs on" does not."""
     out = []
-    for chip in RUNS_ON_RE.findall(piece):
+    for hit in RUNS_ON_RE.finditer(piece):
+        chip = hit.group(1)
         chip = chip if chip in CHIPS else chip.split("-")[0]   # v6e-4 is its own row; v6e-1, v5e-8: the chip's
-        if (m["chips"].get(chip) or {}).get("status") in ("not supported", "failing"):
+        st = (m["chips"].get(chip) or {}).get("status")
+        if st == "measured" and not hit.group(0).lower().startswith("fit"):
+            out.append(chip)
+        elif st in ("not supported", "failing", "pending"):
             out.append(chip)
     return out
 
@@ -1816,8 +1894,8 @@ def only_chip_claims(m, piece):
             acc = c.get("accelerator") or key   # a host of the row's own chip type (chip_row_problems)
             if key == row or (inside(acc) and acc.split("-")[0] == key.split("-")[0]):
                 continue
-            if c.get("status") == "passing":
-                why.append(f"its {key} chips row is passing")
+            if c.get("status") in ("passing", "measured"):
+                why.append(f"its {key} chips row is {c['status']}")
             elif c.get("status") == "pending":
                 why.append(f"its {key} chips row is Not tested yet")
             elif key in CHIPS and never_run(m, key):

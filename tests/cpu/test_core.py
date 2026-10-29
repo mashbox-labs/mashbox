@@ -653,10 +653,10 @@ def test_version_has_one_source():
 
 
 def test_chip_note_replaces_not_supported():
-    """A chips row that is not supported can carry a public note (Hy-Nomas on one v6e chip: it fits, at 2.46 s of
-    compute per second of video, while this version of mashbox run starts on a v6e-4). Every view prints the note in
-    place of "Not supported: <reason>"; the status stays, so mashbox run is unchanged. A result can carry its own
-    highlight line for the card."""
+    """A chips row that is not supported can carry a public note, and every view prints the note in place of "Not
+    supported: <reason>". Hy-Nomas on one v6e chip (it fits, at 2.46 s of compute per second of video, while this
+    version of mashbox run starts on a v6e-4) was such a row; a chip a model ran on is never "not supported", so it is
+    "measured" and its views print the same note. A result can carry its own highlight line for the card."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
     sc = importlib.util.module_from_spec(spec)
@@ -671,7 +671,7 @@ def test_chip_note_replaces_not_supported():
     assert sc.highlights(m) == "- **2 s**: own words"
     reg = json.loads((ROOT / "models.json").read_text())
     hy = next(x for x in reg["models"] if x["id"] == "hy-nomas")
-    assert hy["chips"]["v6e"]["status"] == "not supported"
+    assert hy["chips"]["v6e"]["status"] == "measured"
     assert sc.chip_text(hy, "v6e").startswith(
         "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video.")
 
@@ -706,8 +706,8 @@ def test_runs_only_on_claim_follows_measured_rows(tmp_path):
     only = [p for p in problems if "only on" in p]
     for i, s in enumerate(bad):
         assert any(f"docs/p{i}.md" in p for p in only), (s, only)
-    # v5e and v5p-8 were never run ("not supported" + note "Not tested yet"), so even the type-wide claim fails
-    assert any(f"docs/p{len(bad) + 1}.md" in p and "never run" in p for p in only), only
+    # v5e and v5p-8 were never run (pending: "Not tested yet"), so even the type-wide claim fails
+    assert any(f"docs/p{len(bad) + 1}.md" in p and "Not tested yet" in p for p in only), only
     # with v5e and v5p-8 measured (dated rows), a chip covers its slices: "only on a TPU v6e" holds with v6e-1 and v6e-4
     reg_ok = copy.deepcopy(reg)
     for c in ("v5e", "v5p-8"):
