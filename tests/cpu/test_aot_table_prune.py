@@ -26,7 +26,12 @@ from test_aot_table import cli_start, engine  # noqa: E402
 DAY = 86400
 A, B, C, D, E = ("a" * 64, "b" * 64, "c" * 64, "d" * 64, "e" * 64)
 EXE = "0" * 40 + ".exe"
-HOLD = ("import fcntl, os, sys, time\n"
+# The holders end on the SIGINT the tests send, so each puts SIGINT back to Python's default first: a pytest
+# started in the background by a non-interactive shell (nohup ... &) hands its children SIGINT ignored, and the
+# holder then slept through it and h.wait(30) raised TimeoutExpired (cert_lib.py and front_recovery_check.py do
+# the same for their servers).
+HOLD = ("import fcntl, os, signal, sys, time\n"
+        "signal.signal(signal.SIGINT, signal.default_int_handler)\n"
         "fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)\n"
         "fcntl.flock(fd, fcntl.LOCK_SH)\n"
         "print('held', flush=True)\n"
@@ -160,7 +165,8 @@ def test_refusal_evidence_stays_newest_two_from_the_last_14_days(tmp_path):
     assert r["removed"] == [new.name] and inplace.is_dir(), r
 
 
-HOLD_DIR = ("import fcntl, os, sys, time\n"
+HOLD_DIR = ("import fcntl, os, signal, sys, time\n"
+            "signal.signal(signal.SIGINT, signal.default_int_handler)\n"
             "fd = os.open(sys.argv[1], os.O_RDONLY)\n"
             "fcntl.flock(fd, fcntl.LOCK_EX)\n"
             "print('held', flush=True)\n"
