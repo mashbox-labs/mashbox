@@ -41,7 +41,7 @@ CTX, TC = 64, 32
 STATIC = ("Tc", "contig", "all_logits", "verify", "hidden")          # what the engine branches jit with
 
 
-@pytest.fixture(scope="module", params=["scan", "unrolled"])
+@pytest.fixture(scope="module", params=["scan", "unrolled", "mixed-scan"])
 def model(request, tmp_path_factory):
     d = tmp_path_factory.mktemp(request.param)
     if request.param == "scan":
@@ -50,8 +50,14 @@ def model(request, tmp_path_factory):
         p = FXT.write_qwen35(str(d / "mixed.gguf"), seed=4, layers=8, quant=["Q8_0", "Q4_0"])
     f = File(p)
     c = A.Config(f, act=f32)
-    W, info = A.load(f, c, use_kernels=False)
-    assert info["layers_stacked"] is (request.param == "scan")
+    keep = A.MIXED_SCAN
+    A.MIXED_SCAN = request.param != "unrolled"      # block types differ by group: unrolled, or one scan (ops.Mixed)
+    try:
+        W, info = A.load(f, c, use_kernels=False)
+    finally:
+        A.MIXED_SCAN = keep
+    assert info["layers_stacked"] is (request.param != "unrolled")
+    assert bool(info["mixed_roles"]) is (request.param == "mixed-scan"), info["mixed_roles"]
     fwd = jax.jit(A.make_forward(c), static_argnames=STATIC)
     return c, W, fwd
 

@@ -373,10 +373,13 @@ def test_kq_preflight_runs_once_per_type_and_shape(tmp_path, monkeypatch):
     assert ops._KQ_RAN == {}, "load_kernels starts the preflight over"
 
 
-def test_mixed_layer_groups_unroll_and_match_the_scan(tmp_path):
-    """8 layers (2 groups) with a Q8_0 / Q4_0 cycle that gives the two groups different block types -> the unrolled path.
-    Its logits vs the scan path on an all-F32 copy holding exactly gguf-py's dequantized weights: NMSE <= 1e-4 (the
-    graph bar, fixed before the first run), prefill and decode."""
+@pytest.mark.parametrize("mixed_scan", [False, True], ids=["unrolled", "mixed-scan"])
+def test_mixed_layer_groups_unroll_and_match_the_scan(mixed_scan, tmp_path, monkeypatch):
+    """8 layers (2 groups) with a Q8_0 / Q4_0 cycle that gives the two groups different block types -> the unrolled path
+    (MIXED_SCAN False), or one lax.scan with ops.Mixed roles (MIXED_SCAN True). Its logits vs the scan path on an all-F32
+    copy holding exactly gguf-py's dequantized weights: NMSE <= 1e-4 (the graph bar, fixed before the first run),
+    prefill and decode."""
+    monkeypatch.setattr(A, "MIXED_SCAN", mixed_scan)
     q = FXT.write_qwen35(str(tmp_path / "mixed.gguf"), seed=4, layers=8, quant=["Q8_0", "Q4_0"])
     FXT.FIXTURES["_mixed8"] = dict(arch="qwen35", seed=4, layers=8, make="gguf-py", quant=["Q8_0", "Q4_0"])
     try:
@@ -385,7 +388,10 @@ def test_mixed_layer_groups_unroll_and_match_the_scan(tmp_path):
         del FXT.FIXTURES["_mixed8"]
     f = File(q)
     W, info = A.load(f, A.Config(f, act=jnp.float32), use_kernels=False)
-    assert info["layers_stacked"] is False and isinstance(W["g"], list) and len(W["g"]) == 2
+    if mixed_scan:
+        assert info["layers_stacked"] is True and not isinstance(W["g"], list) and info["mixed_roles"], info
+    else:
+        assert info["layers_stacked"] is False and isinstance(W["g"], list) and len(W["g"]) == 2
     f2 = File(fq)
     W2, info2 = A.load(f2, A.Config(f2, act=jnp.float32), use_kernels=False)
     assert info2["layers_stacked"] is True
@@ -398,10 +404,12 @@ def test_mixed_layer_groups_unroll_and_match_the_scan(tmp_path):
         assert e <= NMSE_MAX, e
 
 
-def test_unrolled_forward_memory_does_not_grow_with_layers(tmp_path):
-    """Files that mix block types per layer run the unrolled path. Its compiled scratch must hold the float32 weights of
-    about one matmul at a time, not of every layer: going from 8 to 16 layers may add at most 10% of the extra layers'
-    float32 weight bytes (all of them live at once would add 100%). Decode (T=1) and a 16-token prefill."""
+def test_unrolled_forward_memory_does_not_grow_with_layers(tmp_path, monkeypatch):
+    """Files that mix block types per layer run the unrolled path when MIXED_SCAN is False. Its compiled scratch must hold
+    the float32 weights of about one matmul at a time, not of every layer: going from 8 to 16 layers may add at most 10%
+    of the extra layers' float32 weight bytes (all of them live at once would add 100%). Decode (T=1) and a 16-token
+    prefill."""
+    monkeypatch.setattr(A, "MIXED_SCAN", False)
     temp, f32b = {}, {}
     for L in (8, 16):
         p = FXT.write_qwen35(str(tmp_path / f"m{L}.gguf"), seed=4, layers=L, quant=["Q8_0", "Q4_0"])

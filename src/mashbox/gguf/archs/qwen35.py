@@ -36,6 +36,10 @@ f32, bf16 = jnp.float32, jnp.bfloat16
 MODELS = {"qwen35": "Qwen3.5, Qwen3.6, Qwen3.8 (dense)", "qwen35moe": "Qwen3.5, Qwen3.6 (mixture of experts)"}
 SPEC_VERIFY = True       # forward(verify=True) with gated_delta_commit / conv_commit (runtime/spec_step.py)
 NEG = -1e30
+# layer groups whose block types differ (Q4_K_M, Unsloth's dynamic quants) run in one lax.scan with one weight rebuild per
+# type of each role (ops.Mixed; see dense.MIXED_SCAN), unless a routed-expert role differs (the expert op takes whole
+# stacks). False keeps such files unrolled (the tests run both).
+MIXED_SCAN = True
 ARCH = "qwen35"
 HI = lax.Precision.HIGHEST
 
@@ -194,14 +198,40 @@ def load(f, c, use_kernels=True, log=None):
         return ops.reference.dequant(jnp.asarray(raw.reshape((len(ts), len(ts[0].names)) + raw.shape[1:])), t.type,
                                      t.shape[-1])
 
+    def mixed(*ts):
+        """one role of every layer group whose block types differ by group: one stack per type (ops.Mixed); norms are
+        float32 here, so differing small tensors are stacked as their values"""
+        names = [n for t in ts for n in t.names]
+        if len({f.tensors[n].type for n in names}) == 1:
+            return stack(*ts)
+        if ts[0].kind != "big":
+            return jnp.stack([make(t) for t in ts])
+        types = [f.tensors[t.names[0]].type for t in ts]
+        order = sorted(set(types), key=types.index)
+        which = [order.index(t) for t in types]
+        sub = [which[:g].count(which[g]) for g in range(len(which))]
+        stacks = [big(*[t.names[0] for t, u_ in zip(ts, types) if u_ == u], stacked=True) for u in order]
+        mixed_roles[ts[0].names[0].split(".", 2)[2]] = [f.tensors[t.names[0]].type_name for t in ts]
+        return ops.Mixed(stacks, jnp.asarray(which, jnp.int32), jnp.asarray(sub, jnp.int32), order,
+                         f.tensors[ts[0].names[0]].shape)
+
+    def expert_role_differs(plans):     # routed experts take whole stacks (moe/ffn.py), never a Mixed
+        roles = [jax.tree_util.tree_leaves(p, is_leaf=is_t) for p in plans]
+        return any(len(f.tensors[r[0].names[0]].shape) > 2 and len({f.tensors[x.names[0]].type for x in r}) > 1
+                   for r in zip(*roles) if r[0].kind == "big")
+
     is_t = lambda x: isinstance(x, _T)
     plans = [plan(g) for g in range(c.NG)]
-    sig = lambda p: (jax.tree_util.tree_structure(p, is_leaf=is_t),
-                     [(t.kind, [(f.tensors[n].type, tuple(f.tensors[n].shape)) for n in t.names])
-                      for t in jax.tree_util.tree_leaves(p, is_leaf=is_t)])
+    sig = lambda p, types=True: (jax.tree_util.tree_structure(p, is_leaf=is_t),
+                                 [(t.kind, [((f.tensors[n].type,) if types else ()) + (tuple(f.tensors[n].shape),)
+                                            for n in t.names]) for t in jax.tree_util.tree_leaves(p, is_leaf=is_t)])
     stacked = all(sig(p) == sig(plans[0]) for p in plans)
+    mixed_roles = {}
     if stacked:
         G = jax.tree_util.tree_map(stack, *plans, is_leaf=is_t)
+    elif MIXED_SCAN and all(sig(p, False) == sig(plans[0], False) for p in plans) and not expert_role_differs(plans):
+        G = jax.tree_util.tree_map(mixed, *plans, is_leaf=is_t)
+        stacked = True
     else:
         G = [jax.tree_util.tree_map(make, p, is_leaf=is_t) for p in plans]
     W = dict(g=G)                                   # a list of groups = unrolled, a dict = stacked for lax.scan
@@ -215,7 +245,7 @@ def load(f, c, use_kernels=True, log=None):
     info = dict(load_s=round(time.time() - t0, 2), device_bytes=int(stats["bytes"]), n_weights=int(stats["values"]),
                 bpw=round(stats["bytes"] * 8 / max(1, stats["values"]), 3), file=f.path.rsplit("/", 1)[-1],
                 layers_stacked=stacked, kernel_bytes=stats["kernel_bytes"], reference_bytes=stats["ref_bytes"],
-                reference_types=stats["ref_types"], mtp_layers=c.nextn)
+                reference_types=stats["ref_types"], mtp_layers=c.nextn, mixed_roles=sorted(mixed_roles))
     if log:
         log(info)
     return W, info

@@ -42,6 +42,11 @@ SPEC_VERIFY = True       # forward(verify=True) and the identity commit (runtime
 SPEC_DRAFT = True        # every layer is full attention: a file of this module can be a draft model (--draft-model)
 NEG = -1e30
 NEOX = ("qwen2", "qwen3", "exaone")      # rope on halves; llama, granite: adjacent pairs
+# a file whose block types differ by layer (Q4_K_M, Unsloth's dynamic quants) runs its layers in one lax.scan with one
+# weight rebuild per type of each role (ops.Mixed), not unrolled: unrolled, every program held one rebuild per layer and
+# was ~30x larger (Qwen3-0.6B Q4_K_M on CPU: 28-30k HLO ops per program vs ~1k stacked), which filled host RAM and the
+# compile cache during the serve warm-up. False keeps such files unrolled (the tests run both).
+MIXED_SCAN = True
 
 
 class Config:
@@ -111,7 +116,10 @@ MULTIPLIED = tuple(BIG.values())
 
 def load(f, c, use_kernels=True, log=None):
     """-> (W, info). Big linears: ops handles from the file's blocks, stacked over layers when every layer has the same
-    types and shapes (one lax.scan runs them), else a list of layers (unrolled). Small tensors: exact float32."""
+    types and shapes (one lax.scan runs them). When only the block types differ by layer (MIXED_SCAN), a role whose types
+    differ becomes an ops.Mixed (one stack per type; the scan body picks the layer's through lax.switch) and one lax.scan
+    still runs the layers; info["mixed_roles"] names those roles. Otherwise a list of layers (unrolled). Small tensors:
+    exact float32."""
     import time
     t0, stats = time.time(), dict(bytes=0, values=0, kernel_bytes=0, ref_bytes=0, ref_types={})
 
@@ -158,14 +166,33 @@ def load(f, c, use_kernels=True, log=None):
         names = [t.names[0] for t in ts]
         return big(*names, stacked=True) if ts[0].kind == "big" else small(*names, stacked=True)
 
+    def mixed(*ts):         # one role whose block types differ by layer: one stack per type (ops.Mixed)
+        names = [t.names[0] for t in ts]
+        types = [f.tensors[n].type for n in names]
+        if len(set(types)) == 1:
+            return stack(*ts)
+        if ts[0].kind == "small":                   # small tensors are float32 here: stack the per-layer values
+            return jnp.stack([small(n) for n in names])
+        order = sorted(set(types), key=types.index)
+        which = [order.index(t) for t in types]
+        sub = [which[:l].count(which[l]) for l in range(len(which))]
+        stacks = [big(*[n for n, t in zip(names, types) if t == u], stacked=True) for u in order]
+        mixed_roles[names[0].split(".", 2)[2]] = [f.tensors[n].type_name for n in names]
+        return ops.Mixed(stacks, jnp.asarray(which, jnp.int32), jnp.asarray(sub, jnp.int32), order,
+                         f.tensors[names[0]].shape)
+
     is_t = lambda x: isinstance(x, _T)
     plans = [plan(l) for l in range(c.L)]
-    sig = lambda p: (jax.tree_util.tree_structure(p, is_leaf=is_t),
-                     [(t.kind, [(f.tensors[n].type, tuple(f.tensors[n].shape)) for n in t.names])
-                      for t in jax.tree_util.tree_leaves(p, is_leaf=is_t)])
+    sig = lambda p, types=True: (jax.tree_util.tree_structure(p, is_leaf=is_t),
+                                 [(t.kind, [((f.tensors[n].type,) if types else ()) + (tuple(f.tensors[n].shape),)
+                                            for n in t.names]) for t in jax.tree_util.tree_leaves(p, is_leaf=is_t)])
     stacked = all(sig(p) == sig(plans[0]) for p in plans)
+    mixed_roles = {}
     if stacked:
         G = jax.tree_util.tree_map(stack, *plans, is_leaf=is_t)
+    elif MIXED_SCAN and all(sig(p, False) == sig(plans[0], False) for p in plans):
+        G = jax.tree_util.tree_map(mixed, *plans, is_leaf=is_t)
+        stacked = True
     else:
         G = [jax.tree_util.tree_map(make, p, is_leaf=is_t) for p in plans]
     W = dict(g=G)                                   # a list of layers = unrolled, a dict = stacked for lax.scan
@@ -181,7 +208,7 @@ def load(f, c, use_kernels=True, log=None):
     info = dict(load_s=round(time.time() - t0, 2), device_bytes=int(stats["bytes"]), n_weights=int(stats["values"]),
                 bpw=round(stats["bytes"] * 8 / max(1, stats["values"]), 3), file=f.path.rsplit("/", 1)[-1],
                 layers_stacked=stacked, kernel_bytes=stats["kernel_bytes"], reference_bytes=stats["ref_bytes"],
-                reference_types=stats["ref_types"], mtp_layers=0)
+                reference_types=stats["ref_types"], mtp_layers=0, mixed_roles=sorted(mixed_roles))
     if log:
         log(info)
     return W, info

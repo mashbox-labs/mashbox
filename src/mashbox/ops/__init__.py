@@ -146,6 +146,64 @@ class At:
         return f"At({type_name(self.t)}, {self.shape})"
 
 
+@jax.tree_util.register_pytree_node_class
+class Mixed:
+    """One weight role stacked over layers whose block types differ by layer (a Q4_K_M file keeps some layers' attn_v and
+    ffn_down in Q6_K): one stacked handle per type, holding that type's layers in order, and per layer `which` stack and
+    the layer's index `sub` in it ((layers,) int32 each). A lax.scan holds the stacks whole and scans which / sub
+    (scan_split / scan_join); its body multiplies through a Pick, one lax.switch branch per type, so a program holds one
+    weight rebuild per type of the role instead of one per layer (unrolled layers made each program ~30x larger)."""
+
+    def __init__(self, stacks, which, sub, types, shape):
+        self.stacks, self.which, self.sub = tuple(stacks), which, sub
+        self.types, self.shape = tuple(int(t) for t in types), tuple(int(s) for s in shape)
+
+    def tree_flatten(self):
+        return (self.stacks, self.which, self.sub), (self.types, self.shape)
+
+    @classmethod
+    def tree_unflatten(cls, aux, ch):
+        return cls(ch[0], ch[1], ch[2], *aux)
+
+    def __repr__(self):
+        return f"Mixed({', '.join(type_name(t) for t in self.types)}, {self.shape})"
+
+
+@jax.tree_util.register_pytree_node_class
+class Pick:
+    """One layer of a Mixed handle inside the scan body: the whole stacks, and the layer's stack (which) and index in it
+    (sub) as traced scalars"""
+
+    def __init__(self, stacks, which, sub, types, shape):
+        self.stacks, self.which, self.sub = tuple(stacks), which, sub
+        self.types, self.shape = tuple(int(t) for t in types), tuple(int(s) for s in shape)
+
+    def tree_flatten(self):
+        return (self.stacks, self.which, self.sub), (self.types, self.shape)
+
+    @classmethod
+    def tree_unflatten(cls, aux, ch):
+        return cls(ch[0], ch[1], ch[2], *aux)
+
+    def __repr__(self):
+        return f"Pick({', '.join(type_name(t) for t in self.types)}, {self.shape})"
+
+
+def _pick_one(s, sub):
+    """layer `sub` of one type stack of a Pick: At(stack, sub) when the kernel reads the layer in place (the layer=
+    preflight passed for this type and shape), else the stack's leaves indexed at sub (what a lax.scan slice gives)"""
+    if _held(s) and kernel_picks_layer():
+        return At(s.packed, sub, s.t, s.shape)
+    return jax.tree_util.tree_map(lambda a: lax.dynamic_index_in_dim(a, sub, 0, keepdims=False), s)
+
+
+def _switch(h, fn, *args):
+    """fn(handle of the picked layer, *args) through one lax.switch branch per type stack of Pick h"""
+    if len(h.stacks) == 1:
+        return fn(_pick_one(h.stacks[0], h.sub), *args)
+    return lax.switch(h.which, [lambda *a, s=s: fn(_pick_one(s, h.sub), *a) for s in h.stacks], *args)
+
+
 def load_kernels(log=None, module=None):
     """Import the TPU kernel package if it is installed (env MASHBOX_GGUF_KERNELS names another module, `off` disables).
     -> the ggml type ids it runs. Without it every type uses the exact reference."""
@@ -341,6 +399,8 @@ def _kq_layer_preflight(h, key):
 
 def dequant(h):
     """handle -> float32 weights (..., rows, cols), exact"""
+    if isinstance(h, Pick):
+        return _switch(h, dequant)
     if isinstance(h, NB):
         return _KERNELS["module"].nb_dequant(h.planes)
     if isinstance(h, Packed):
@@ -407,6 +467,8 @@ def qmatmul(x, h):
     Native planes: one matrix's planes. A stack is multiplied by the routed expert op, never here; a lax.scan or vmap
     slice of a stack (one expert, one layer group) has no stacked dims left in its planes and multiplies as a dense
     weight (the handle's static shape still names the stack it came from)."""
+    if isinstance(h, Pick):
+        return _switch(h, lambda one, x_: qmatmul(x_, one), x)
     if isinstance(h, NB):
         lead = tuple(getattr(h.planes, "lead", ()))
         if lead:
@@ -439,7 +501,7 @@ def kernel_picks_layer():
 
 
 def _is_handle(v):
-    return isinstance(v, (Raw, Packed, NB, At, dense16.Dense16))
+    return isinstance(v, (Raw, Packed, NB, At, Mixed, Pick, dense16.Dense16))
 
 
 def _held(v):
@@ -451,19 +513,35 @@ def scan_split(ws):
     """ws: a tree of weights stacked over layer groups, about to be the xs of a lax.scan -> (held, xs). When the kernel
     package picks a layer itself, each Packed handle of a (rows, cols) weight is held out of the scan (held keeps the
     handle, xs has None there) so the body multiplies by the whole stack at its layer (scan_join), and nothing slices
-    the planes. Everything else is scanned as before. Without that kernel, held is None and xs is ws."""
-    if not kernel_picks_layer():
+    the planes. A Mixed handle (block types differ by layer) is always held, and xs has its (which, sub) per layer.
+    Everything else is scanned as before. With neither, held is None and xs is ws."""
+    picks = kernel_picks_layer()
+    leaves = jax.tree_util.tree_leaves(ws, is_leaf=_is_handle)
+    if not any(isinstance(v, Mixed) or (picks and _held(v)) for v in leaves):
         return None, ws
-    held = jax.tree_util.tree_map(lambda v: v if _held(v) else None, ws, is_leaf=_is_handle)
-    return held, jax.tree_util.tree_map(lambda v: None if _held(v) else v, ws, is_leaf=_is_handle)
+
+    def hold(v):
+        return v if isinstance(v, Mixed) or (picks and _held(v)) else None
+
+    def scan(v):        # a Mixed handle scans its (which, sub) per layer; a held stack scans nothing
+        return (v.which, v.sub) if isinstance(v, Mixed) else None if hold(v) is not None else v
+    return (jax.tree_util.tree_map(hold, ws, is_leaf=_is_handle),
+            jax.tree_util.tree_map(scan, ws, is_leaf=_is_handle))
 
 
 def scan_join(held, w, layer):
-    """inside the scan body: the layer's weights = w (the scanned slice) with each held handle as At(stack, layer)"""
+    """inside the scan body: the layer's weights = w (the scanned slice) with each held handle as At(stack, layer), and
+    each held Mixed handle as Pick(stacks, which, sub) from its scanned (which, sub)"""
     if held is None:
         return w
-    return jax.tree_util.tree_map(lambda h, v: v if h is None else At(h.packed, layer, h.t, h.shape), held, w,
-                                  is_leaf=lambda v: v is None or _is_handle(v))
+
+    def join(h, v):
+        if h is None:
+            return v
+        if isinstance(h, Mixed):
+            return Pick(h.stacks, v[0], v[1], h.types, h.shape)
+        return At(h.packed, layer, h.t, h.shape)
+    return jax.tree_util.tree_map(join, held, w, is_leaf=lambda v: v is None or _is_handle(v))
 
 
 def contract_check(t, raw, shape):

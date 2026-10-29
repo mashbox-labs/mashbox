@@ -69,7 +69,11 @@ and warns when it is close. `mashbox inspect` prints the estimate; XLA's own wor
 ## Architectures
 
 <!-- archs:start -->
-No architecture has a GGUF file with a passing chip test in this version.
+| Architecture (`general.architecture`) | Models | Files in the catalog |
+|---|---|---|
+| `qwen35` | Qwen3.5, Qwen3.6, Qwen3.8 (dense) | ggml-org-qwen3-5-0-8b-q8-0, unsloth-qwen3-5-4b-q4-k-m |
+| `qwen2` | Qwen2.5 | bartowski-qwen2-5-0-5b-instruct-q4-k-m, bartowski-qwen2-5-1-5b-instruct-q4-k-m |
+| `qwen3` | Qwen3 | unsloth-qwen3-0-6b-q8-0 |
 <!-- archs:end -->
 
 ## Tokenizer note

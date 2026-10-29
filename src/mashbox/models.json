@@ -856,6 +856,229 @@
       ]
     }
   ],
-  "gguf": [],
+  "gguf": [
+    {
+      "id": "bartowski-qwen2-5-0-5b-instruct-q4-k-m",
+      "model": "qwen2-5-0-5b-instruct",
+      "publisher": "bartowski",
+      "family": "Qwen2.5",
+      "maker": "Qwen",
+      "repo": "bartowski/Qwen2.5-0.5B-Instruct-GGUF",
+      "revision": "41ba88dbac95fed2528c92514c131d73eb5a174b",
+      "file": "Qwen2.5-0.5B-Instruct-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "6eb923e7d26e9cea28811e1a8e852009b21242fb157b26149d3b188f3a8c8653",
+      "bytes": 397808192,
+      "arch": "qwen2",
+      "moe": false,
+      "params_b": {
+        "total": 0.5,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q5_0",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/main/LICENSE",
+      "base": "Qwen/Qwen2.5-0.5B-Instruct",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "ctx": 2048,
+          "slots": 8,
+          "kernel_path": "exact",
+          "measured": {
+            "decode_tok_s_1_user": 17.05,
+            "decode_tok_s_8_users": 154.5
+          }
+        }
+      }
+    },
+    {
+      "id": "bartowski-qwen2-5-1-5b-instruct-q4-k-m",
+      "model": "qwen2-5-1-5b-instruct",
+      "publisher": "bartowski",
+      "family": "Qwen2.5",
+      "maker": "Qwen",
+      "repo": "bartowski/Qwen2.5-1.5B-Instruct-GGUF",
+      "revision": "9eadc66189c7641e1ddd226b8267a9119b2ce2d4",
+      "file": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "1adf0b11065d8ad2e8123ea110d1ec956dab4ab038eab665614adba04b6c3370",
+      "bytes": 986048768,
+      "arch": "qwen2",
+      "moe": false,
+      "params_b": {
+        "total": 1.5,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/blob/main/LICENSE",
+      "base": "Qwen/Qwen2.5-1.5B-Instruct",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "ctx": 2048,
+          "slots": 8,
+          "kernel_path": "exact",
+          "measured": {
+            "decode_tok_s_1_user": 4.38,
+            "decode_tok_s_8_users": 56.6
+          }
+        }
+      }
+    },
+    {
+      "id": "ggml-org-qwen3-5-0-8b-q8-0",
+      "model": "qwen3-5-0-8b",
+      "publisher": "ggml-org",
+      "family": "Qwen3.5, Qwen3.6, Qwen3.8 (dense)",
+      "maker": "Qwen",
+      "repo": "ggml-org/Qwen3.5-0.8B-GGUF",
+      "revision": "807dfd9a6fadbf703207aac3bfb0b2b3040d077c",
+      "file": "Qwen3.5-0.8B-Q8_0.gguf",
+      "tag": "Q8_0",
+      "sha256": "37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f",
+      "bytes": 833592096,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 0.8,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/blob/807dfd9a6fadbf703207aac3bfb0b2b3040d077c/README.md",
+      "base": "Qwen/Qwen3.5-0.8B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run ggml-org/Qwen3.5-0.8B-GGUF:Q8_0",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "ctx": 2048,
+          "slots": 8,
+          "kernel_path": "exact",
+          "measured": {
+            "decode_tok_s_1_user": 14.58,
+            "decode_tok_s_8_users": 112.0
+          }
+        }
+      }
+    },
+    {
+      "id": "unsloth-qwen3-0-6b-q8-0",
+      "model": "qwen3-0-6b",
+      "publisher": "unsloth",
+      "family": "Qwen3",
+      "maker": "Qwen",
+      "repo": "unsloth/Qwen3-0.6B-GGUF",
+      "revision": "50968a4468ef4233ed78cd7c3de230dd1d61a56b",
+      "file": "Qwen3-0.6B-Q8_0.gguf",
+      "tag": "Q8_0",
+      "sha256": "e150ed544dfe6016930c026a93913a5e3184181ebfe6ab2223ae01dd0491784c",
+      "bytes": 639447744,
+      "arch": "qwen3",
+      "moe": false,
+      "params_b": {
+        "total": 0.6,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen3-0.6B/blob/main/LICENSE",
+      "base": "Qwen/Qwen3-0.6B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run unsloth/Qwen3-0.6B-GGUF:Q8_0",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "ctx": 2048,
+          "slots": 8,
+          "kernel_path": "exact",
+          "measured": {
+            "decode_tok_s_1_user": 19.06,
+            "decode_tok_s_8_users": 142.1
+          }
+        }
+      }
+    },
+    {
+      "id": "unsloth-qwen3-5-4b-q4-k-m",
+      "model": "qwen3-5-4b",
+      "publisher": "unsloth",
+      "family": "Qwen3.5, Qwen3.6, Qwen3.8 (dense)",
+      "maker": "Qwen",
+      "repo": "unsloth/Qwen3.5-4B-GGUF",
+      "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "file": "Qwen3.5-4B-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "bytes": 2740937888,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 4.2,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen3.5-4B/blob/main/LICENSE",
+      "base": "Qwen/Qwen3.5-4B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run unsloth/Qwen3.5-4B-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "ctx": 2048,
+          "slots": 8,
+          "kernel_path": "exact",
+          "measured": {
+            "decode_tok_s_1_user": 1.64,
+            "decode_tok_s_8_users": 22.8
+          }
+        }
+      }
+    }
+  ],
   "engine_kernels": []
 }

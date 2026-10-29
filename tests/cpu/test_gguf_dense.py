@@ -92,9 +92,11 @@ def test_float_logits_match_llama_cpp(name, split, tmp_path):
     assert e <= NMSE_MAX, e
 
 
+@pytest.mark.parametrize("mixed_scan", [True, False], ids=["mixed-scan", "unrolled"])
 @pytest.mark.parametrize("name", ["llama-pyquant", "qwen3-kquant"])
 @pytest.mark.parametrize("split", [None, 8], ids=["prefill", "decode"])
-def test_block_type_logits_match_llama_cpp(name, split, tmp_path):
+def test_block_type_logits_match_llama_cpp(name, split, mixed_scan, tmp_path, monkeypatch):
+    monkeypatch.setattr(A, "MIXED_SCAN", mixed_scan)
     p, meta, ref = fixture(name, tmp_path)
     ours, c, info = run(p, meta["tokens"], split=split)
     kl, top1 = kl_top1(ref, ours)
@@ -102,9 +104,11 @@ def test_block_type_logits_match_llama_cpp(name, split, tmp_path):
     assert kl <= KL_MAX and top1 >= TOP1_MIN, (kl, top1)
 
 
+@pytest.mark.parametrize("mixed_scan", [True, False], ids=["mixed-scan", "unrolled"])
 @pytest.mark.parametrize("name", ["llama-pyquant", "qwen3-kquant"])
 @pytest.mark.parametrize("split", [None, 8], ids=["prefill", "decode"])
-def test_block_types_match_llama_cpp_on_identical_weights(name, split, tmp_path):
+def test_block_types_match_llama_cpp_on_identical_weights(name, split, mixed_scan, tmp_path, monkeypatch):
+    monkeypatch.setattr(A, "MIXED_SCAN", mixed_scan)
     p, meta, _ = fixture(name, tmp_path)
     ref = np.fromfile(os.path.join(FX, f"{name}.f32ref.logits.f32"), np.float32).reshape(len(meta["tokens"]), meta["n_vocab"])
     ours, c, info = run(p, meta["tokens"], split=split)
@@ -113,14 +117,17 @@ def test_block_types_match_llama_cpp_on_identical_weights(name, split, tmp_path)
     assert e <= NMSE_MAX, e
 
 
-def test_fixture_paths_cover_scan_and_unrolled(tmp_path):
-    """the block-type fixtures exercise both layer paths: llama-pyquant cycles types over layers (unrolled list),
-    qwen3-kquant has one type per role (stacked)"""
-    for name, want in (("llama-pyquant", False), ("qwen3-kquant", True)):
+def test_fixture_paths_cover_scan_and_unrolled(tmp_path, monkeypatch):
+    """the block-type fixtures exercise every layer path: llama-pyquant cycles types over layers (one lax.scan with
+    ops.Mixed roles; with MIXED_SCAN False an unrolled list), qwen3-kquant has one type per role (stacked)"""
+    for name, mixed_scan, want, mixed in (("llama-pyquant", True, True, True), ("llama-pyquant", False, False, False),
+                                          ("qwen3-kquant", True, True, False)):
+        monkeypatch.setattr(A, "MIXED_SCAN", mixed_scan)
         p, meta, _ = fixture(name, tmp_path)
         f, M, c = open_model(p, act=jnp.float32)
         W, info = A.load(f, c, use_kernels=False)
-        assert info["layers_stacked"] is want, (name, info["layers_stacked"])
+        assert info["layers_stacked"] is want and isinstance(W["g"], list) is (not want), (name, info["layers_stacked"])
+        assert bool(info["mixed_roles"]) is mixed, (name, mixed_scan, info["mixed_roles"])
     p, _, _ = fixture("qwen3-kquant", tmp_path)
     names = {File(p).tensors[f"blk.0.{r}.weight"].type_name for r in ("ffn_down", "ffn_up", "ffn_gate", "attn_v",
                                                                       "attn_output", "attn_q")}
