@@ -172,9 +172,14 @@ def test_next_waiting_rules():
         srv.next_waiting(deque())
 
 
+# The server ends on the SIGINT test_b3 sends, so it puts SIGINT back to Python's default first: a pytest started in
+# the background by a non-interactive shell (nohup ... &) hands its children SIGINT ignored, and the server then slept
+# through it and p.wait(30) raised TimeoutExpired (test_aot_table_prune.py, cert_lib.py and front_recovery_check.py do
+# the same).
 def _front_script(tmp_path, step_s):
     return f"""
-import os, sys
+import os, signal, sys
+signal.signal(signal.SIGINT, signal.default_int_handler)
 sys.path[:0] = {[HERE] + [p for p in sys.path if p.endswith('src')]!r}
 from mashbox.runtime import front as F, server as SV
 import api_stub_engine as STUB
