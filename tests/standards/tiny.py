@@ -23,7 +23,6 @@ Two weight sets per family (both f32 on the host, jax_default_matmul_precision=h
 GGUF files load through the CLI's own GGUF path (cli.load_gguf: resolver, plan, fit check, loader, tokenizer, Engine),
 so a test runs exactly what `mashbox run <file>.gguf` runs, with --no-kernels on CPU. Nothing here is a trained model.
 """
-import argparse
 import hashlib
 import importlib.util
 import json
@@ -189,8 +188,9 @@ def _spec_builder():
     return _load("std_spec_in_step", os.path.join("tests", "cpu", "test_spec_in_step.py"))
 
 
-def _bshj_config(wd):
-    S = _spec_builder()
+def _bshj_config(wd, S=None):
+    """config.json of the BSHJ fixture whose dimensions are module S's (the spec tests' builder by default)"""
+    S = S or _spec_builder()
     json.dump(dict(model_type="qwen3_5_text", vocab_size=S.V, hidden_size=S.D, intermediate_size=S.F, num_hidden_layers=S.L,
                    num_attention_heads=S.H, num_key_value_heads=S.KV, head_dim=S.HD, linear_num_key_heads=S.HK,
                    linear_num_value_heads=S.HV, linear_key_head_dim=S.DK, linear_value_head_dim=S.DV,
@@ -213,9 +213,10 @@ def _quiet(*a, **k):
     pass
 
 
-def engine(family, kind="bigram", S=4, K=4, CTX=256, prefix_cache=False, cache_ram_mib=64):
+def engine(family, kind="bigram", S=4, K=4, CTX=256, prefix_cache=False, cache_ram_mib=64, extra_argv=()):
     """-> (Engine, chat, info) for family's `kind` weights. GGUF: cli.load_gguf with the arguments `mashbox run <file>
-    --no-kernels --ctx CTX --slots S --steps K` parses to; BSHJ: the Qwen3.8 port's Engine as the spec tests build it.
+    --no-kernels --ctx CTX --slots S --steps K` (+ extra_argv) parses to; BSHJ: the Qwen3.8 port's Engine as the spec
+    tests build it.
     The persistent compile cache is off in this process, so a run builds its own programs and never reads programs an
     earlier run left on disk. (The compile counter would see a cache hit too: jax's backend-compile event wraps
     compile_or_get_cached.)"""
@@ -240,6 +241,7 @@ def engine(family, kind="bigram", S=4, K=4, CTX=256, prefix_cache=False, cache_r
                 "--cache-dir", os.path.join(_outdir(), "xla"), "--cache-ram", str(cache_ram_mib)]
         if not prefix_cache:
             argv.append("--no-prefix-cache")
+        argv += list(extra_argv)
         a = cli.build_parser().parse_args(argv)
         a.gguf = GR.resolve(a.model, log=_quiet, download=False)
         log, cli.log = cli.log, _quiet
@@ -467,6 +469,45 @@ def serve(eng, chat, plan, stop_ids=(), cancel_at=None, secs=300):
                  cached=jb["result"]["cached"]) for jb in jobs]
 
 
+def serve_http(eng, chat, monkeypatch=None, keys=None, **caps):
+    """the real server (runtime/server.py Server + serve) on a free local port, in a daemon thread -> (Server, port);
+    caps: server module constants set through monkeypatch for this test only"""
+    import socket
+    import threading
+    import time
+    from mashbox.runtime import server as SV
+    for k, v in caps.items():
+        monkeypatch.setattr(SV, k, v)
+    srv = SV.Server(eng, chat, "tiny", dict(weights="tiny"), log=lambda m: None)
+    with socket.socket() as s_:
+        s_.bind(("127.0.0.1", 0))
+        port = s_.getsockname()[1]
+    threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", port, lambda m: None), kwargs=dict(keys=keys),
+                     daemon=True).start()
+    for _ in range(500):
+        try:
+            socket.create_connection(("127.0.0.1", port)).close()
+            break
+        except OSError:
+            time.sleep(0.02)
+    return srv, port
+
+
+def post(port, path, body, timeout=120, key=None):
+    """one HTTP POST of a JSON body -> (status, body bytes, headers); an HTTP error status is returned, not raised"""
+    import urllib.error
+    import urllib.request
+    h = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
+    if key is not None:
+        h["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", json.dumps(body).encode(), h)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read(), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read(), dict(e.headers)
+
+
 def catalog_engine(S=1, CTX=256):
     """-> (Engine, chat, info): the BSHJ fixture loaded through cli.load, the models.json path (`mashbox run TINY_ROW
     --weights <fixture> --no-kernels`); it raises until the catalog has that row"""
@@ -480,3 +521,135 @@ def catalog_engine(S=1, CTX=256):
     finally:
         cli.log = log
     return eng, chat, info
+
+
+# ---- ST-A fixtures: scripted logits ----------------------------------------------------------------------------------
+# The coding-agent rows test the plumbing (the API routes, tool-call parsing, streaming, the pinned clients' contract),
+# never model quality. Their engine is the BSHJ fixture's real Engine (admit / step / cancel, slots, K/V cache, the
+# sampler, the real server loop) whose forward keeps running but whose next-token logits are replaced by a scripted
+# logits table (ScriptedLogits: this counts as the real tiny engine for these rows). The table is keyed on the row's
+# last input token, and the scripted answer is cut into
+# pieces that are distinct tokens of a local tokenizer, so the chain spells an exact tool call. Nothing in these rows
+# is model behaviour; every row and docstring that uses them says "scripted logits".
+SCRIPT_PIECES = ("Checking", " the folder.", "\n\n<to", "ol_call>\n<fun", "ction=Ba", "sh>\n<param", "eter=comm", "and>\npw",
+                 "d\n</para", "meter>\n</func", "tion>\n</tool_", "call>")     # cut inside every tag: streamed chunks split them
+SCRIPT_TEXT = "".join(SCRIPT_PIECES)
+SCRIPT_CALL = ("Bash", {"command": "pwd"})
+SCRIPT_SAYS = "Checking the folder."
+AGENT_SPECIALS = ("<|endoftext|>", "<|im_start|>", "<|im_end|>", "<tool_call>", "</tool_call>", "<tool_response>",
+                  "</tool_response>", "<think>", "</think>")
+AGENT_TEMPLATE = (
+    '{%- set NL = "\\n" -%}'
+    "{%- if messages and messages[0].role == 'system' -%}{%- set sys = messages[0].content -%}{%- set rest = messages[1:] -%}"
+    "{%- else -%}{%- set sys = '' -%}{%- set rest = messages -%}{%- endif -%}"
+    "{%- if tools or sys -%}<|im_start|>system{{ NL }}{{ sys }}{%- if tools -%}{{ NL }}# Tools{{ NL }}"
+    "{%- for t in tools -%}{{ t | tojson }}{{ NL }}{%- endfor -%}{%- endif -%}<|im_end|>{{ NL }}{%- endif -%}"
+    "{%- for m in rest -%}"
+    "{%- if m.role == 'user' -%}<|im_start|>user{{ NL }}{{ m.content }}<|im_end|>{{ NL }}"
+    "{%- elif m.role == 'assistant' -%}<|im_start|>assistant{{ NL }}{{ m.content }}"
+    "{%- for c in m.tool_calls or [] -%}<tool_call>{{ NL }}<function={{ c.function.name }}>{{ NL }}"
+    "{%- for k, v in c.function.arguments.items() -%}<parameter={{ k }}>{{ NL }}{{ v if v is string else v | tojson }}"
+    "{{ NL }}</parameter>{{ NL }}{%- endfor -%}</function>{{ NL }}</tool_call>{%- endfor -%}<|im_end|>{{ NL }}"
+    "{%- elif m.role == 'tool' -%}<|im_start|>user{{ NL }}<tool_response>{{ NL }}{{ m.content }}{{ NL }}</tool_response>"
+    "<|im_end|>{{ NL }}{%- endif -%}"
+    "{%- endfor -%}"
+    "{%- if add_generation_prompt -%}<|im_start|>assistant{{ NL }}{%- endif -%}")
+
+
+def _byte_chars():
+    """GPT-2's byte-level alphabet (byte value -> printable character), as tokenizers' ByteLevel uses it"""
+    return fixtures().byte_chars()
+
+
+def agent_tokenizer(folder):
+    """A local byte-level tokenizer folder for Chat (runtime/chat.py): tokenizer.json (ids 0-255 the bytes, then the
+    script pieces as tokens of their own, then the special tokens), chat_template.jinja (AGENT_TEMPLATE: system,
+    tools as JSON lines, tool calls in the <tool_call><function=..><parameter=..> format, tool results as
+    <tool_response>) and generation_config.json (stop on <|im_end|> and <|endoftext|>). -> {piece or special: id}"""
+    os.makedirs(folder, exist_ok=True)
+    bc = _byte_chars()
+    vocab = {bc[b]: b for b in range(256)}
+    ids = {}
+    for p in SCRIPT_PIECES:
+        s = "".join(bc[b] for b in p.encode())
+        assert s not in vocab, ("script pieces must be distinct tokens", p)
+        ids[p] = vocab[s] = len(vocab)
+    added = []
+    for s in AGENT_SPECIALS:
+        ids[s] = len(vocab) + len(added)
+        added.append(dict(id=ids[s], content=s, single_word=False, lstrip=False, rstrip=False, normalized=False, special=True))
+    bl = dict(type="ByteLevel", add_prefix_space=False, trim_offsets=True, use_regex=True)
+    spec = dict(version="1.0", truncation=None, padding=None, added_tokens=added, normalizer=None, pre_tokenizer=bl,
+                post_processor=None, decoder=bl,
+                model=dict(type="BPE", dropout=None, unk_token=None, continuing_subword_prefix=None, end_of_word_suffix=None,
+                           fuse_unk=False, byte_fallback=False, ignore_merges=False, vocab=vocab, merges=[]))
+    json.dump(spec, open(os.path.join(folder, "tokenizer.json"), "w"))
+    open(os.path.join(folder, "chat_template.jinja"), "w").write(AGENT_TEMPLATE)
+    json.dump(dict(eos_token_id=[ids["<|im_end|>"], ids["<|endoftext|>"]]), open(os.path.join(folder, "generation_config.json"), "w"))
+    return ids
+
+
+class ScriptedLogits:
+    """Scripted logits: the model module `model` (its forward, state, everything) with the forward's next-token logits
+    replaced by table[the row's last input token] (and nxt = their argmax). The forward itself still runs, so the
+    engine's K/V cache, slot state and programs are the real ones; only the logits are scripted. Speculation's verify
+    and all-position logits are not scripted (the agent rows run without speculation)."""
+
+    def __init__(self, model, table):
+        self._m, self.table = model, np.asarray(table, np.float32)
+
+    def __getattr__(self, k):
+        return getattr(self._m, k)
+
+    def make_forward(self, c, decode_kernels=None, **kw):
+        import jax.numpy as jnp
+        f, T = self._m.make_forward(c, decode_kernels, **kw), self.table
+
+        def forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, verify=False, hidden=False,
+                    keep=None, ed=None):
+            if all_logits or verify:
+                raise NotImplementedError("scripted logits: next-token logits only")
+            k = dict(contig=contig, hidden=hidden)
+            if keep is not None:
+                k["keep"] = keep
+            if ed is not None:
+                k["ed"] = ed
+            r = f(W, ck, cv, toks, p0, lens, slots, Tc, **k)
+            last = toks[jnp.arange(toks.shape[0]), jnp.maximum(lens - 1, 0)]
+            lg = jnp.asarray(T)[last]
+            return dict(r, lg=lg, nxt=jnp.argmax(lg, -1).astype(jnp.int32))
+        return forward
+
+
+def script_table(V, ids, after="\n"):
+    """(V, V) scripted logits: the token `after` (the template's last generation-prompt token, the newline after
+    "assistant") -> the first piece, each piece -> the next, the last piece -> <|im_end|>; every other token ->
+    <|im_end|>. The chosen token's logit is 0 and every other is -1e4, so greedy and sampled rows take it alike."""
+    nxt = np.full(V, ids["<|im_end|>"], np.int64)
+    nxt[ord(after)] = ids[SCRIPT_PIECES[0]]                  # ids 0-255 are the bytes (agent_tokenizer)
+    for a, b in zip(SCRIPT_PIECES, SCRIPT_PIECES[1:]):
+        nxt[ids[a]] = ids[b]
+    t = np.full((V, V), -1e4, np.float32)
+    t[np.arange(V), nxt] = 0.0
+    return t
+
+
+def agent_engine(S=4, K=4, CTX=1024, prefix_cache=False):
+    """-> (Engine, Chat, script ids): the BSHJ fixture's real Engine with scripted logits (ScriptedLogits over the
+    near-bigram weights, script_table) and the local tokenizer folder (agent_tokenizer). Plumbing only."""
+    import jax
+    from mashbox.models import qwen3_8_27b as Q
+    from mashbox.models.qwen3_8_27b import weights as QW
+    from mashbox.runtime.chat import Chat
+    from mashbox.runtime.engine import Engine
+    jax.config.update("jax_default_matmul_precision", "highest")
+    wd = os.path.join(_outdir(), BSHJ)
+    p = weights(BSHJ, "bigram")
+    cfg = Q.Config(wd)
+    folder = os.path.join(_outdir(), "agent-tokenizer")
+    ids = agent_tokenizer(folder)
+    W, _ = QW.load(p, cfg)
+    eng = Engine(cfg, W, ScriptedLogits(Q, script_table(cfg.V, ids)), CTX=CTX, S=S, K=K, prefix_cache=prefix_cache,
+                 cache_ram=64 << 20)
+    jax.config.update("jax_enable_compilation_cache", False)
+    return eng, Chat(folder), ids

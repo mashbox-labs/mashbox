@@ -29,6 +29,12 @@ ST-B5  0 compiles after the warm-up (cli.warm: the request path, then Engine.war
        prompts of 1, 3, 9, 27, 81 and 200 tokens, joins mid-answer, greedy + sampled + penalised rows, a stop, a cancel,
        a second turn served from the prefix cache, then a short row decoding alone (the smallest decode window) (the E14
        counter: jax's backend compile events, counted by the tier's own listener, tiny.compile_count)
+ST-B6  tensor parallel 4 == 1 on 4 forced CPU devices, where tp applies (models.json models; tests/standards/tp_split.py in
+       its own process, the BSHJ architecture with the 4-chip head layout, cli.load's tp path): the same tokens and
+       finish for every row of a schedule with joins, a stop, a cancel, a penalised greedy row and a seeded sampled row
+       (so the sharded sampler decides tokens; greedy-only rows never reach it); 0 compiles after the warm-up on both, equal;
+       the weights span 4 devices and each holds 1 of the 4 K/V heads (a run that silently stays on one chip fails). A
+       GGUF file: `mashbox run --tensor-parallel-size 4` is refused with the CLI's GGUFError naming the flag
 ST-B7  not ready: 503 (OpenAI route) / 529 overloaded_error (Anthropic route), with Retry-After. Overload, with two
        owners (two API keys) and the waiting caps scaled to the tiny model (overall 4, per owner 3): an owner over its
        own cap gets 429 (Anthropic: rate_limit_error); the overall cap and the longest-queue drop answer 429 (OpenAI) /
@@ -40,11 +46,12 @@ ST-B8  one load tail: a GGUF file served by `mashbox run`, and the BSHJ fixture 
        HEALTH_FIELDS
 """
 import json
-import socket
+import os
+import pathlib
+import subprocess
+import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 
 import pytest
 
@@ -305,35 +312,7 @@ def test_b4_prefix_cache_owner_isolation(family, warmed, engines):
     assert eng.stats["owner_checks"] > checks0, ("no resume passed the owner check", eng.stats["owner_checks"])
 
 
-def _serve(eng, chat, monkeypatch=None, keys=None, **caps):
-    from mashbox.runtime import server as SV
-    for k, v in caps.items():
-        monkeypatch.setattr(SV, k, v)
-    srv = SV.Server(eng, chat, "tiny", dict(weights="tiny"), log=lambda m: None)
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", port, lambda m: None), kwargs=dict(keys=keys),
-                     daemon=True).start()
-    for _ in range(500):
-        try:
-            socket.create_connection(("127.0.0.1", port)).close()
-            break
-        except OSError:
-            time.sleep(0.02)
-    return srv, port
-
-
-def _post(port, path, body, timeout=120, key=None):
-    h = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
-    if key is not None:
-        h["Authorization"] = f"Bearer {key}"
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", json.dumps(body).encode(), h)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, r.read(), dict(r.headers)
-    except urllib.error.HTTPError as e:
-        return e.code, e.read(), dict(e.headers)
+_serve, _post = tiny.serve_http, tiny.post        # one source: tests/standards/tiny.py
 
 
 ROUTES = [("/v1/chat/completions", lambda n, s: dict(model="tiny", messages=[dict(role="user", content=f"hi {n}")],
@@ -359,6 +338,51 @@ def _err_type(body):
 
 NO_TOKENIZER = ("open: the BSHJ fixture has no tokenizer for the chat routes (the tiny tokenizer and template come "
                 "with ST-A1)")
+
+
+@pytest.mark.slow
+def test_b6_tp4_equals_tp1(family, tmp_path):
+    """ST-B6. BSHJ: tp_split.py in its own process with 4 forced host devices (the family process keeps one). GGUF: the
+    refusal, raised by cli.load_gguf before any weight is placed; a family refused for its architecture raises that
+    refusal first (its strict xfail). Measured: 88 s on a 24-core host at load 20 (two engines' warm-up and compiles).
+
+    Red-first (measured, one line each): the greedy merge's global id (sampler_tp.py `ga + me * Vl`
+    -> `ga`) and the sampled draw's (`da + me * Vl` -> `da`) both fail "tp 4 != tp 1 on rows"; TPModel.commit without
+    jax.device_put (the per-slot sampler arrays' placement) fails "compiles after the warm-up" (tp 4: 2, tp 1: 0), as the
+    tensor-parallel check TP8 does (tests/cpu/tp_batched_checks.py, 4 forced CPU devices: 3 vs 0; the case was first
+    seen on chip). Not a test gap: the merged candidates' ids (`ci + me * Vl`) only order equal keys in a sort whose id
+    output is never read (sampler_tp.py `sid`), so no token can change with them."""
+    if family != tiny.BSHJ:
+        from mashbox.gguf.reader import GGUFError
+        try:
+            tiny.engine(family, "bigram", extra_argv=["--tensor-parallel-size", "4"])
+        except GGUFError as e:
+            if "--tensor-parallel-size" not in str(e):
+                raise
+            return
+        pytest.fail(f"{family}: `mashbox run <gguf> --tensor-parallel-size 4` was not refused")
+    flags = os.environ.get("XLA_FLAGS", "")
+    env = dict(os.environ, JAX_PLATFORMS="cpu", XLA_FLAGS=(flags + " --xla_force_host_platform_device_count=4").strip())
+    script = pathlib.Path(__file__).with_name("tp_split.py")
+    p = subprocess.run([sys.executable, str(script), str(tmp_path)], capture_output=True, text=True, timeout=1200, env=env)
+    tail = p.stdout[-2000:] + p.stderr[-3000:]
+    assert p.returncode == 0, tail
+    r = json.loads(next(ln[6:] for ln in p.stdout.splitlines() if ln.startswith("ST_B6 ")))
+    print("ST-B6 " + json.dumps({k: {f: v[f] for f in ("stop", "warm_compiles", "compiles_after_warm", "weight_devices",
+                                                       "kv_heads_per_chip")} for k, v in r.items() if k in ("tp1", f"tp{r['tp']}")}))
+    one, four = r["tp1"], r[f"tp{r['tp']}"]
+    kinds = [None if q is None else "sampled" if q.get("temperature", 0) > 0 else "penalised" for q in r["samp"]]
+    assert "sampled" in kinds and "penalised" in kinds, ("the schedule needs a sampled and a penalised row", kinds)
+    assert one["stop"] is not None, "degenerate fixture: tp 1's alone run has no fresh token at position 2 or later"
+    assert any(x["fin"] == "stop" for x in one["rows"]), ("the stop token ended no row", one["rows"])
+    assert one["weight_devices"] == 1 and four["weight_devices"] == 4, ("weights not split across 4 devices",
+                                                                        one["weight_devices"], four["weight_devices"])
+    assert four["kv_heads_per_chip"] == [r["layout"]["KV"] // 4], ("K/V heads per device", four["kv_heads_per_chip"])
+    assert four["alone0"] == one["alone0"], ("alone: tp 4 != tp 1", one["alone0"], four["alone0"])
+    diff = [i for i, (a, b) in enumerate(zip(one["rows"], four["rows"])) if a != b]
+    assert not diff, ("tp 4 != tp 1 on rows", diff, [one["rows"][i] for i in diff], [four["rows"][i] for i in diff])
+    assert one["compiles_after_warm"] == 0 and four["compiles_after_warm"] == 0, (
+        "compiles after the warm-up (tp 1, tp 4)", one["compiles_after_warm"], four["compiles_after_warm"])
 
 
 def test_b7_not_ready_answers_503_529(family, monkeypatch, request):
