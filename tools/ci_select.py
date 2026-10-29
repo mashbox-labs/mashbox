@@ -14,8 +14,9 @@ kernels, fixtures and test_gguf_*.py) plus `core`:
 - a models.json row runs its model and the core tests (the CLI and `mashbox tpu` tests read the rows)
 - a path nothing above claims runs every area, so a new kind of file is never silently untested
 tests/conftest.py uses test_area() to mark each test with its area, so the same rule picks the tests.
-An area in SHARDS runs as that many T1 jobs: its test files are dealt round robin in name order (--files-of), so every
-file runs in exactly one job and a job stays within the T1 timeout.
+An area in SHARDS runs as that many T1 jobs: its test files are split by their time on a CI runner (SECONDS), longest
+first into the shard with the least time so far (--files-of), so every file runs in exactly one job and the jobs take
+about the same time, within the T1 timeout.
 """
 import argparse
 import json
@@ -33,6 +34,60 @@ T0_ONLY_FILES = {"llms.txt", "LICENSE", "LICENSE-KERNELS", ".github/pull_request
 CORE_DIRS = ("src/mashbox/runtime/", ".github/workflows/", "tools/")
 CORE_FILES = {"pyproject.toml", "tests/conftest.py"}
 SHARDS = {"core": 4}                            # T1 jobs per area (default 1); core is 55 test files, about 870 tests
+# Approximate seconds per T1 test file on a CI runner, used only to split an area's files into shards of even time.
+# A file missing here counts as SECONDS_DEFAULT; a name here with no file is ignored. Refresh it from a CI run's
+# per-file times when a shard runs long. Only files this repository ships are listed (a name here ships with it).
+SECONDS_DEFAULT = 5
+SECONDS = {
+    "tests/cpu/test_activation_edits.py": 47,
+    "tests/cpu/test_activation_edits_contract.py": 0,
+    "tests/cpu/test_admission_fairness.py": 44,
+    "tests/cpu/test_agent_api.py": 0,
+    "tests/cpu/test_aot_table.py": 350,
+    "tests/cpu/test_aot_table_first_use.py": 98,
+    "tests/cpu/test_aot_table_prune.py": 78,
+    "tests/cpu/test_aot_table_restart.py": 36,
+    "tests/cpu/test_aot_table_startup.py": 140,
+    "tests/cpu/test_api_conformance.py": 4,
+    "tests/cpu/test_api_loaded_clients.py": 295,
+    "tests/cpu/test_app_addon_tpu.py": 0,
+    "tests/cpu/test_app_addons.py": 3,
+    "tests/cpu/test_app_catalog_sig.py": 1,
+    "tests/cpu/test_app_module.py": 5,
+    "tests/cpu/test_app_quit.py": 2,
+    "tests/cpu/test_app_security.py": 11,
+    "tests/cpu/test_app_tunnel_guard.py": 13,
+    "tests/cpu/test_catalog.py": 88,
+    "tests/cpu/test_chat_module.py": 1,
+    "tests/cpu/test_chat_relay_guard.py": 2,
+    "tests/cpu/test_ci_areas.py": 0,
+    "tests/cpu/test_compile_key.py": 0,
+    "tests/cpu/test_docs_supported_models.py": 1,
+    "tests/cpu/test_drafter_gate.py": 0,
+    "tests/cpu/test_engine_model_hooks.py": 4,
+    "tests/cpu/test_engine_warm.py": 53,
+    "tests/cpu/test_front_admission.py": 4,
+    "tests/cpu/test_front_failures.py": 105,
+    "tests/cpu/test_guard.py": 0,
+    "tests/cpu/test_hub_compile_cache.py": 0,
+    "tests/cpu/test_metrics.py": 16,
+    "tests/cpu/test_module_shell.py": 0,
+    "tests/cpu/test_moe_routed.py": 69,
+    "tests/cpu/test_openapi.py": 1,
+    "tests/cpu/test_prefix_cache_owner.py": 0,
+    "tests/cpu/test_sampler.py": 1,
+    "tests/cpu/test_serve_batching.py": 11,
+    "tests/cpu/test_serve_queue_api.py": 12,
+    "tests/cpu/test_serve_security.py": 2,
+    "tests/cpu/test_spec_in_step.py": 926,
+    "tests/cpu/test_stop_strings.py": 18,
+    "tests/cpu/test_subagents.py": 0,
+    "tests/cpu/test_tenancy.py": 4,
+    "tests/cpu/test_tp_batched.py": 521,
+    "tests/cpu/test_tpu_chip_safety.py": 53,
+    "tests/cpu/test_tpu_cli.py": 71,
+    "tests/cpu/test_worker_protocol.py": 1,
+}
 
 
 AREAS_EXTRA = ("gguf",)                         # areas that are not a models.json row: GGUF files (reader, ops, kernels)
@@ -127,12 +182,20 @@ def area_files(area, areas, root=ROOT):
                    if p.name not in T0_TESTS and test_area(p.name, areas) == area), key=lambda f: (f.rsplit("/", 1)[-1], f))
 
 
-def shard_files(files, shard):
-    """files dealt round robin into shard 'i/n' (1-based): the n shards partition the list"""
+def shard_files(files, shard, seconds=None):
+    """files split into shard 'i/n' (1-based) by time: longest first (SECONDS), each to the shard with the least time so
+    far, the lower shard on a tie; the n shards partition the list, and each keeps the list's order"""
     i, n = (int(x) for x in shard.split("/"))
     if not 1 <= i <= n:
         raise ValueError(f"shard {shard}: want i/n with 1 <= i <= n")
-    return files[i - 1::n]
+    sec = SECONDS if seconds is None else seconds
+    load, mine = [0] * n, set()
+    for k, f in sorted(enumerate(files), key=lambda kf: (-sec.get(kf[1], SECONDS_DEFAULT), kf[0])):
+        j = min(range(n), key=lambda s: (load[s], s))
+        load[j] += sec.get(f, SECONDS_DEFAULT)
+        if j == i - 1:
+            mine.add(k)
+    return [f for k, f in enumerate(files) if k in mine]
 
 
 def jobs(picked):
