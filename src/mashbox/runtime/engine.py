@@ -153,9 +153,14 @@ class HostCache:
 
 
 class Engine:
+    # speculation is off unless __init__ turns it on (an Engine made with __new__ in a test reads these too)
+    drafter = dpf = dstate = sstep = spec_why = None
+    spec_off = False
+    _dhid = False
+
     def __init__(self, cfg, W, model, CTX=2048, S=8, K=8, decode_kernels=None, chunk=512, tokens_per_call=2048,
                  prefix_cache=False, attn_bytes=2e9, cache_ram=8 << 30, ckpts=8, ckpt_step=8192, budget_busy=128,
-                 budget_idle=1024, trace=False, mtp=None, draft_k=0, spec_rounds=None, k_table=None):
+                 budget_idle=1024, trace=False, mtp=None, draft_k=0, spec_rounds=None, k_table=None, drafter=None):
         self.c, self.W, self.CTX, self.S, self.K = cfg, W, CTX, S, K
         self.chunk, self.tokens_per_call = chunk, tokens_per_call
         self.prefix_cache, self.attn_bytes = prefix_cache, attn_bytes
@@ -182,32 +187,43 @@ class Engine:
         fwd = model.make_forward(cfg, decode_kernels)
         # the model's own sampler when it has one (tensor parallel: logits split on the vocabulary axis, shard.py)
         SPm = getattr(model, "sampler", None) or SP
-        # Speculative decoding (mtp = (spec module, MTP weights); draft_k = k_max drafts per round; spec_rounds rounds per device
-        # call when nobody waits, else 1; k_table {row bucket: k} = the measured per-bucket draft length, k_max where absent).
+        # Speculative decoding (runtime/spec_step.py, runtime/drafters/): drafter = the drafter object (mtp = (head module, MTP
+        # weights) is the MTP drafter's short form); draft_k = k_max drafts per round; spec_rounds rounds per device call
+        # when nobody waits, else 1; k_table {row bucket: k} = the measured per-bucket draft length, k_max where absent.
         # It runs inside the batched step (_spec_step): every decoding row of a step is in one draft / verify / commit
         # program; requests with draft=False (such as constrained rows) run with k = 0 in that same program, sampled and
         # penalised rows verify by the coupled draw, and each row caps its own k by its remaining max_tokens.
-        self.DK = int(draft_k) if mtp is not None else 0
-        self.spec_stats = dict(rounds=0, tokens=0, hist=[0] * (self.DK + 2))
-        self.hlast = {}
+        if drafter is None and mtp is not None and draft_k:
+            from .drafters.mtp import MTP
+            drafter = MTP(mtp[0], mtp[1], cfg, draft_k)
+        self.drafter = drafter if draft_k else None
+        self.DK = int(draft_k) if self.drafter is not None else 0
         self.k_table = {int(b): max(0, min(self.DK, int(k))) for b, k in (k_table or {}).items()}
+        # a row bucket at k = 0 decodes with the plain program (_spec_call). A drafter that allows no plain call between
+        # its calls (plain_ok False: the MTP head carries every committed token) is not turned on with such a table:
+        # plain decoding, and spec_why says why
+        self.spec_why = None
+        if self.DK and not getattr(self.drafter, "plain_ok", False) and 0 in self.k_table.values():
+            self.spec_why = (f"speculation off: the {getattr(self.drafter, 'kind', None)} drafter needs every committed "
+                             f"token, so it cannot run a row bucket at k = 0 (k_table {self.k_table}): plain decoding")
+            self.drafter, self.DK, self.k_table = None, 0, {}
+        self.spec_stats = dict(rounds=0, tokens=0, hist=[0] * (self.DK + 2), plain_calls=0, backoffs=0)
+        self.hlast = {}
+        self.dpf = self.sstep = None
+        self._dhid = bool(self.DK) and self.drafter.needs_hidden
         if self.DK:
-            smod, self.Wm = mtp
-            from . import drafter as DR
-            if getattr(smod, "DRAFTER_ABI", None) != DR.DRAFTER_ABI:
-                raise ValueError(f"speculation: {smod.__name__} implements drafter ABI {getattr(smod, 'DRAFTER_ABI', None)}, "
-                                 f"this engine {DR.DRAFTER_ABI}")
-            mfn = smod.make_mtp(cfg)
+            from . import spec_step as SS
+            from . import drafters as DRS
+            if getattr(self.drafter, "kind", None) not in DRS.ORDER:
+                raise ValueError(f"speculation: unknown drafter kind {getattr(self.drafter, 'kind', None)!r}")
+            if getattr(self.drafter, "abi", None) != DRS.DRAFTER_ABI:
+                raise ValueError(f"speculation: the {self.drafter.kind} drafter implements drafter ABI "
+                                 f"{getattr(self.drafter, 'abi', None)}, this engine {DRS.DRAFTER_ABI}")
             self.NR = int(spec_rounds or max(1, K // 2))
-
-            def mtp_pf(W, ck, cv, Wm, ph, tn, hid, p0, lm, sl, hrow, hidx, Tc):
-                """The MTP head over a prefill chunk (its K/V group), and the prompt's last hidden state of each row whose
-                prompt ends in this chunk into its carried slot (hrow = slot, S for the others: dropped)."""
-                _, _, ck = mfn(W, Wm, ck, tn, hid, p0, lm, sl, Tc)
-                hl = hid[jnp.arange(hid.shape[0]), hidx].astype(ph.dtype)
-                return ph.at[hrow, 0].set(hl, mode="drop"), ck, cv
-            self.mtp_pf = jax.jit(mtp_pf, static_argnames=("Tc",), donate_argnums=(1, 2))
-            self.sstep = jax.jit(smod.make_step(cfg, fwd, mfn), static_argnames=("Tc", "K", "N", "trace"), donate_argnums=(1, 2))
+            pf = self.drafter.on_prefill()
+            self.dpf = jax.jit(pf, static_argnames=("Tc",), donate_argnums=(1, 2)) if pf is not None else None
+            self.sstep = jax.jit(SS.make_step(fwd, SS.arch_commit(model, cfg), self.drafter),
+                                 static_argnames=("Tc", "K", "N", "trace"), donate_argnums=(1, 2))
         self.kernels = sorted(decode_kernels) if decode_kernels else []
         self.shapes = None          # set to a list to record the program shapes one call runs
 
@@ -316,8 +332,8 @@ class Engine:
         # which the warm-up never ran (measured: a 5.4 s compile inside the first reply on a TPU v6e-1, ctx 2048 x 8 slots).
         devs = {d for a in jax.tree.leaves(W) if hasattr(a, "devices") for d in a.devices()}
         self.dev = jax.sharding.SingleDeviceSharding(devs.pop()) if len(devs) == 1 else None
-        # with speculation the MTP head keeps its K/V in one extra group
-        xg = dict(extra_groups=1) if self.DK else {}
+        # with speculation a drafter may keep K/V in extra groups (the MTP head: one)
+        xg = dict(extra_groups=self.drafter.extra_groups) if (self.DK and self.drafter.extra_groups) else {}
         mk = lambda: model.new_state(cfg, S - 1 if S <= 2 else S, CTX, **xg)
         self._new_state = jax.jit(mk, out_shardings=self.dev) if self.dev is not None else mk
         S_, V_ = S, cfg.V
@@ -335,8 +351,8 @@ class Engine:
                          ("take", 0), ("kv_take", 0), ("kv_put", 0), ("swap", 0), ("gather_last", 0), ("_zl", 0)):
             setattr(self, n_, PG.Dispatch(n_, getattr(self, n_), self.aot, skip))
         self.program_list = []      # signatures of the programs warm() compiled (runtime/programs.py)
-        # speculation: each slot's carried MTP hidden states (made here, before ready, so no request compiles it)
-        self.ph = self._committed(jnp.zeros((S, self.DK + 1, cfg.D), jnp.bfloat16)) if self.DK else None
+        # speculation: the drafter's device state for every slot (made here, before ready, so no request compiles it)
+        self.dstate = self.drafter.state(self) if self.DK else None
 
     def new_state(self):
         # The model adds one scratch slot for padding rows. With S <= 2 no call ever has a padding row (prefill and decode
@@ -414,18 +430,18 @@ class Engine:
                 toks[b, :len(ch)], p0[b], lens[b], sl[b] = ch, s0, len(ch), slot
             Tc = 0 if p0.max() == 0 else min(self.CTX, bucket(int(p0.max()), 128))
             r = self.fwd(self.W, ck, cv, jnp.asarray(toks), jnp.asarray(p0), jnp.asarray(lens), jnp.asarray(sl), Tc=Tc,
-                         hidden=bool(self.DK))
+                         hidden=self._dhid)
             ck, cv = r["ck"], r["cv"]
             self._note("prefill", B, T, Tc)
             done = [b for b, w in enumerate(grp) if w[2] + int(lens[b]) >= len(w[1])]
-            if self.DK:     # the MTP head over this chunk: position j reads the token at j + 1 and the hidden state at j
+            if self.dpf is not None:    # the drafter over this chunk (MTP: position j reads the token at j + 1 and the hidden state at j)
                 tn, lm, hrow, hidx = np.zeros((B, T), i32), np.zeros(B, i32), np.full(B, self.S, i32), np.zeros(B, i32)
                 for b, (slot, ids, s0, e) in enumerate(grp):
                     m_ = max(0, min(int(lens[b]), len(ids) - 1 - s0))
                     tn[b, :m_], lm[b] = ids[s0 + 1:s0 + 1 + m_], m_
                 for b in done:
                     hrow[b], hidx[b] = grp[b][0], int(lens[b]) - 1
-                self.ph, ck, cv = self.mtp_pf(self.W, ck, cv, self.Wm, self.ph, jnp.asarray(tn), r["hid"], jnp.asarray(p0),
+                self.dstate, ck, cv = self.dpf(self.W, ck, cv, self.drafter.W, self.dstate, jnp.asarray(tn), r["hid"], jnp.asarray(p0),
                                               jnp.asarray(lm), jnp.asarray(sl), jnp.asarray(hrow), jnp.asarray(hidx), Tc=Tc)
             if done:
                 nx, lg = np.asarray(r["nxt"]), r["lg"]
@@ -594,7 +610,7 @@ class Engine:
         calls = []
         for B, T, Tc in self.prefill_shapes():
             calls.append(("prefill", self.fwd, (a(np.zeros((B, T), i32)), a(np.zeros(B, i32)), a(np.ones(B, i32)),
-                                                  a(np.arange(B, dtype=i32))), dict(Tc=Tc, hidden=bool(self.DK))))
+                                                  a(np.arange(B, dtype=i32))), dict(Tc=Tc, hidden=self._dhid)))
         n_pre = len(calls)
         sp = SP.to_device(SP.pack([dict(temperature=0.7, top_p=0.9, top_k=20, presence_penalty=1.0, seed=1)] * S, S))
         cnt, seen = self._committed(jnp.zeros((S, V), jnp.float32)), self._committed(jnp.zeros((S, V), bool))
@@ -666,6 +682,9 @@ class Engine:
             cv = h("put", self.put, cv, 0, r_, c_)
             cv = h("put", self.put, cv, 0, np.asarray(r_), np.asarray(c_))
             ck, cv = h("swap", self.swap, ck, cv, np.int32(0), np.int32(0))
+            if self.DK:         # the drafter's own host-called programs (n-gram: its row put)
+                for name, f, args, kw in self.drafter.programs(self):
+                    self.dstate = h(name, f, self.dstate, *args, **kw)
             if self.host is not None:
                 blk = jax.tree.map(np.asarray, h("kv_take", self.kv_take, ck, 0, 0, n=self.kv_block))
                 ck = h("kv_put", self.kv_put, ck, 0, 0, blk)
@@ -926,9 +945,13 @@ class Engine:
         ck, cv = self.state
         self.state = None
         dec_out = None
-        if live and self.DK:        # speculative decoding: all decoding rows in one draft / verify / commit program (ENGINE-SPEC)
-            dec_out, ck, cv, K = self._spec_step(ck, cv, live, K)
-        elif live:
+        if live and self.DK and not self.spec_off and self._spec_call(live, K):     # speculation: every row in one program
+            try:
+                dec_out, ck, cv, K = self._spec_step(ck, cv, live, K)
+            except Exception as e:      # the call replays with plain decoding while its state is unchanged, else A13
+                if not self._spec_fault(e, ck, cv):
+                    raise
+        if live and dec_out is None:
             Tc = min(CTX, bucket(int(self.pos[act].max()) + K + 1, 128))
             sampled = any(self.rows[s_]["sampled"] for s_ in live)
             B = S if (sampled and not self.sampled_buckets) else self._rows(max(live) + 1, S)
@@ -953,6 +976,10 @@ class Engine:
             for s_, (r_, c_) in held:
                 cv = self.put(cv, s_, r_, c_)
             dec_out = (out, t2, p2, tr)
+            if self.DK:         # a plain call while speculation is on: each row's drafter state is rebuilt before its next one
+                self.spec_stats["plain_calls"] += 1
+                for s_ in live:
+                    self.rows[s_]["hist_ok"] = False
         work = self._plan(pre, bool(live))
         nxt, last = {}, {}
         if work:
@@ -1105,32 +1132,79 @@ class Engine:
             res["lh"] = [r["lh"] for r in rows]
         return res
 
+    # per-row backoff (POLICY, the row's own history only): after BO_MISS rounds in a row with 0 accepted drafts the row
+    # drafts nothing for BO_WAIT rounds, then tries again; each further failure doubles the wait up to BO_MAX; any
+    # accepted draft resets it. Only for drafters that ask for it (n-gram).
+    BO_MISS, BO_WAIT, BO_MAX = 4, 16, 256
+
     def _k_row(self, r):
-        """This row's own draft cap: 0 for rows that do not speculate (draft=False, e.g. constrained rows), else k_max.
-        Sampled and penalised rows speculate: they verify by the coupled draw (spec.coupled), with penalty counts at
-        each position of the verify pass."""
-        return 0 if not r.get("draft", True) else self.DK
+        """This row's own draft cap: 0 for rows that do not speculate (draft=False, e.g. constrained rows) and rows in
+        backoff, else k_max. Sampled and penalised rows speculate: they verify by the coupled draw (spec_step.coupled),
+        with penalty counts at each position of the verify pass."""
+        if not r.get("draft", True):
+            return 0
+        bo = r.get("bo")
+        return 0 if (bo and bo["wait"] > 0) else self.DK
+
+    def _backoff(self, r, n_, kr):
+        """one round of row r: n_ committed tokens with draft cap kr"""
+        if not self.drafter.backoff:
+            return
+        bo = r.setdefault("bo", dict(miss=0, wait=0, span=self.BO_WAIT))
+        if bo["wait"] > 0:
+            bo["wait"] -= 1
+            return
+        if kr <= 0:
+            return
+        if n_ > 1:
+            bo["miss"], bo["span"] = 0, self.BO_WAIT
+        elif n_ == 1:
+            bo["miss"] += 1
+            if bo["miss"] >= self.BO_MISS:
+                bo["miss"], bo["wait"], bo["span"] = 0, bo["span"], min(self.BO_MAX, bo["span"] * 2)
+                self.spec_stats["backoffs"] += 1
+
+    def _spec_rows(self, live):
+        """the row bucket of a decode call over these live rows (the speculation and the plain program use the same)"""
+        sampled = any(self.rows[s_]["sampled"] for s_ in live)
+        return self.S if (sampled and not self.sampled_buckets) else self._rows(max(live) + 1, self.S)
+
+    def _spec_call(self, live, K):
+        """Whether this step's decode runs the speculation program. Drafters that allow plain calls between theirs
+        (n-gram) take the plain decode program when the call's row bucket has k = 0 in the k_table (measured slower than
+        plain there), and when no live row would draft anything (each row's own state decides: its cap and the host
+        reference of its drafts), so a call with nothing to verify costs no verify width."""
+        if not self.drafter.plain_ok:
+            return True
+        if self.k_table.get(self._spec_rows(live), self.DK) > 0:
+            for s_ in live:
+                r = self.rows[s_]
+                if self._k_row(r) > 0 and r["max_new"] - len(r["ids"]) > 1 and self.drafter.found(self, r, self.DK) > 0:
+                    return True
+        for s_ in live:         # a row in backoff counts its plain rounds too
+            bo = self.rows[s_].get("bo")
+            if bo and bo["wait"] > 0:
+                bo["wait"] = max(0, bo["wait"] - (self.K if K > 1 else 1))
+        return False
 
     def _spec_step(self, ck, cv, live, K):
         """The decode part of one step with speculation on: one draft / verify / commit program for every decoding row
-        (self.NR rounds when the plain path would run K steps, else 1). Each row drafts from its carried MTP input, the
+        (self.NR rounds when the plain path would run K steps, else 1). Each row drafts from its drafter's state, the
         target verifies [token, drafts], each row commits only its own accepted tokens (n = a + 1, its k capped by
-        _k_row and its remaining max_tokens), and its linear-attention state replays exactly those steps; rejected drafts
-        leave nothing (their K/V sit past the row's position, masked and written over later).
+        _k_row, its remaining max_tokens and the drafts found), and the architecture's commit keeps exactly those steps;
+        rejected drafts leave nothing (their K/V sit past the row's position, masked and written over later).
         -> ((out (N * (k + 1), S) committed tokens per row in order, -1 after them; next token; next position; trace), ck,
         cv, N * (k + 1)) in the form _step reads for the plain decode call."""
-        S, CTX, P = self.S, self.CTX, self.DK + 1
+        S, CTX = self.S, self.CTX
         N = self.NR if K > 1 else 1
         sampled = any(self.rows[s_]["sampled"] for s_ in live)
-        B = S if (sampled and not self.sampled_buckets) else self._rows(max(live) + 1, S)
+        B = self._spec_rows(live)
         k = self.k_table.get(B, self.DK)
-        pt, pp, pn = np.zeros((B, P), i32), np.full(B, CTX, i32), np.zeros(B, i32)
+        self._spec_ran = False
+        X = self.drafter.host_args(self, B, live, k)
         tok, pos, kr, rem, st = np.zeros(B, i32), np.full(B, CTX, i32), np.zeros(B, i32), np.zeros(B, i32), np.zeros(B, i32)
         for s_ in live:
             r = self.rows[s_]
-            # a row's first decode step: the MTP head reads its first token with the prompt's last hidden state (ph[s_, 0])
-            pd = r.get("pend") or ([int(self.tok[s_])], int(self.pos[s_]) - 1)
-            pt[s_, :len(pd[0])], pp[s_], pn[s_] = pd[0], pd[1], len(pd[0])
             tok[s_], pos[s_], kr[s_] = self.tok[s_], self.pos[s_], min(k, self._k_row(r))
             rem[s_], st[s_] = r["max_new"] - len(r["ids"]), len(r["ids"])
         Tc = min(CTX, bucket(int(pos[live].max()) + N * (k + 1) + k + 1, 128))
@@ -1140,9 +1214,10 @@ class Engine:
             sp, cnt, seen = jax.tree.map(cut, self.sp), cut(self.cnt), cut(self.seen)
         else:
             sp = cnt = seen = None
-        out, ck, cv, self.ph, cn, t2, p2, cnt, seen, tr = self.sstep(
-            self.W, ck, cv, self.Wm, self.ph, a(pt), a(pp), a(pn), a(tok), a(pos), a(kr), a(rem), sp,
+        out, ck, cv, self.dstate, cn, t2, p2, cnt, seen, tr = self.sstep(
+            self.W, ck, cv, self.drafter.W, self.dstate, tuple(a(x) for x in X), a(tok), a(pos), a(kr), a(rem), sp,
             None if sp is None else a(st), cnt, seen, Tc=Tc, K=k, N=N, trace=self.trace)
+        self._spec_ran = True       # dispatched: the donated slot state now belongs to this call
         if sampled:
             if B == S:
                 self.cnt, self.seen = cnt, seen
@@ -1156,6 +1231,7 @@ class Engine:
         trn = (np.asarray(tr[0]), np.asarray(tr[1])) if self.trace else None
         for s_ in live:
             seq, last = [], None
+            r = self.rows[s_]
             for i in range(N):
                 n_ = int(cn[i, s_])
                 if n_ == 0:
@@ -1167,53 +1243,83 @@ class Engine:
                 self.spec_stats["rounds"] += 1
                 self.spec_stats["tokens"] += n_
                 self.spec_stats["hist"][n_] += 1
+                self._backoff(r, n_, int(kr[s_]))
             toks[:len(seq), s_] = seq
             t2s[s_], p2s[s_] = t2[s_], p2[s_]
-            r = self.rows[s_]
-            if last:
-                r["pend"] = (seq[len(seq) - last:], int(p2[s_]) - last)
+            self.drafter.host_after(self, r, seq, last, p2[s_])
             r["drafted"] = r.get("drafted", 0) + len(seq)
         return (toks, t2s, p2s, (th, tg)), ck, cv, L
 
+    def _spec_fault(self, e, ck, cv):
+        """A speculation call raised (fallback F-spec-row). When it failed before the device took the slot state (its
+        donated K/V and linear state are all still there: tracing, compiling, the drafter's host side), the state is
+        unchanged: this call replays with the plain decode program (warmed), and speculation stays off for this engine's
+        life (spec_off, spec_why; spec_stats faults). -> True. Else False: the state is gone, so the A13 failure rules
+        apply (the call's streams end with the error and the worker restarts), never a silent re-run."""
+        if getattr(self, "_spec_ran", False) or any(getattr(x, "is_deleted", lambda: False)() for x in jax.tree.leaves((ck, cv))):
+            return False
+        self.spec_off = True
+        self.spec_why = f"speculation off after a failed speculation call (plain decoding): {type(e).__name__}: {e}"[:400]
+        self.spec_stats["faults"] = self.spec_stats.get("faults", 0) + 1
+        return True
+
     def spec_programs(self, ck, cv):
         """Every speculation program a request can reach, as warm() lists its calls (kind, jitted function, arguments after
-        (W, ck, cv), static arguments): the MTP head over each prefill shape, and the step program at every attention
-        window, greedy at each row bucket (with its k) and sampled at S rows, for 1 round and NR rounds. [] when off."""
+        (W, ck, cv), static arguments): the drafter's prefill program over each prefill shape (MTP), and the step program
+        at every attention window, greedy at each row bucket (with its k) and sampled at S rows, for 1 round and NR
+        rounds. [] when off. The drafter's host-called programs (n-gram: its row put) are warm()'s helpers."""
         if not self.DK:
             return []
-        S, CTX, P, D, a = self.S, self.CTX, self.DK + 1, self.c.D, jnp.asarray
+        S, CTX, D, a = self.S, self.CTX, self.c.D, jnp.asarray
+        dr = self.drafter
         calls = []
-        for B, T, Tc in self.prefill_shapes():
-            hid = self._committed(jnp.zeros((B, T, D), jnp.bfloat16))
-            calls.append(("spec", self.mtp_pf, (self.Wm, self.ph, a(np.zeros((B, T), i32)), hid, a(np.zeros(B, i32)),
-                                                a(np.zeros(B, i32)), a(np.arange(B, dtype=i32)), a(np.full(B, S, i32)),
-                                                a(np.zeros(B, i32))), dict(Tc=Tc)))
+        if self.dpf is not None:
+            for B, T, Tc in self.prefill_shapes():
+                hid = self._committed(jnp.zeros((B, T, D), jnp.bfloat16))
+                calls.append(("spec", self.dpf, (dr.W, self.dstate, a(np.zeros((B, T), i32)), hid, a(np.zeros(B, i32)),
+                                                 a(np.zeros(B, i32)), a(np.arange(B, dtype=i32)), a(np.full(B, S, i32)),
+                                                 a(np.zeros(B, i32))), dict(Tc=Tc)))
         sp = SP.to_device(SP.pack([dict(temperature=0.7, top_p=0.9, top_k=20, presence_penalty=1.0, seed=1)] * S, S))
         cnt, seen = self._committed(jnp.zeros((S, self.c.V), jnp.float32)), self._committed(jnp.zeros((S, self.c.V), bool))
 
         def args(B, smp):
             z = lambda: a(np.zeros(B, i32))
-            return (self.Wm, self.ph, a(np.zeros((B, P), i32)), a(np.full(B, CTX, i32)), z(), z(), a(np.full(B, CTX, i32)), z(),
+            return (dr.W, self.dstate, tuple(a(x) for x in dr.host_zero(self, B)), z(), a(np.full(B, CTX, i32)), z(),
                     z(), sp if smp else None, z() if smp else None, cnt if smp else None, seen if smp else None)
         for Tc in self.windows(128):
             for N in sorted({1, self.NR}):
                 for B in sorted({self._rows(n, S) for n in range(1, S + 1)}):
-                    calls.append(("spec", self.sstep, args(B, False), dict(Tc=Tc, K=self.k_table.get(B, self.DK), N=N,
-                                                                            trace=self.trace)))
-                calls.append(("spec", self.sstep, args(S, True), dict(Tc=Tc, K=self.k_table.get(S, self.DK), N=N, trace=self.trace)))
+                    if self.k_table.get(B, self.DK) > 0:        # a bucket at k = 0 runs the plain decode program
+                        calls.append(("spec", self.sstep, args(B, False), dict(Tc=Tc, K=self.k_table.get(B, self.DK), N=N,
+                                                                                trace=self.trace)))
+                if self.k_table.get(S, self.DK) > 0:
+                    calls.append(("spec", self.sstep, args(S, True), dict(Tc=Tc, K=self.k_table.get(S, self.DK), N=N,
+                                                                          trace=self.trace)))
         return calls
 
-    def drop_speculation(self):
+    def drop_speculation(self, failed=False):
         """Turn speculation off before the first request and the warm-up (cli.load does this when the drafter's gate passed
         for another component set than this deployment's). The engine is then the plain engine: no speculation program,
-        the plain slot state (no MTP K/V group), the MTP weights released. RuntimeError once a speculation program ran."""
+        the plain slot state (no extra K/V group), the drafter's weights released. RuntimeError once a speculation program
+        ran, except failed=True (cli.warm: a speculation program failed to compile or run before ready), which is allowed
+        while no row is live: the slot states, their snapshots and the host cache, which may hold the drafter's K/V, are
+        made again without it."""
         if not self.DK:
             return
-        if self.state is not None or any(self.rows) or self.mtp_pf._cache_size() or self.sstep._cache_size():
+        if failed and any(self.rows):       # the failed call's rows end (their streams get the error)
+            self._drop_live()
+        if any(self.rows) or (not failed and (self.state is not None or (self.dpf is not None and self.dpf._cache_size())
+                                              or self.sstep._cache_size())):
             raise RuntimeError("drop_speculation: only before the first request and the warm-up")
+        if failed:
+            self.reset_cache()
+            if self.host is not None:
+                h, h.ns = HostCache(self.host.cap), self.host.ns
+                self.host = h
         cfg, S, CTX, model = self.c, self.S, self.CTX, self.model
-        self.DK, self.NR, self.k_table, self.Wm, self.ph, self.mtp_pf, self.sstep = 0, 1, {}, None, None, None, None
-        self.spec_stats, self.hlast = dict(rounds=0, tokens=0, hist=[0, 0]), {}
+        self.DK, self.NR, self.k_table, self.drafter, self.dstate, self.dpf, self.sstep = 0, 1, {}, None, None, None, None
+        self._dhid = False
+        self.spec_stats, self.hlast = dict(rounds=0, tokens=0, hist=[0, 0], plain_calls=0, backoffs=0), {}
         mk = lambda: model.new_state(cfg, S - 1 if S <= 2 else S, CTX)        # as __init__ makes it without speculation
         self._new_state = jax.jit(mk, out_shardings=self.dev) if self.dev is not None else mk
 

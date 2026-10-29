@@ -426,7 +426,9 @@ def test_the_drafter_in_the_key_is_the_file_speculation_loaded(tmp_path, monkeyp
     import argparse
     import hashlib
     from mashbox import cli
+    from mashbox.models import qwen3_8_27b as Q
     from mashbox.models.qwen3_8_27b import spec as QSP
+    from mashbox.runtime.spec_step import SPEC_STEP_VERSION
     from mashbox.runtime import drafter as DR
     monkeypatch.setattr(DR, "chip_key", lambda: None)
     monkeypatch.setattr(QSP, "load_mtp", lambda path, cfg, log=None: ({}, {}))
@@ -439,7 +441,7 @@ def test_the_drafter_in_the_key_is_the_file_speculation_loaded(tmp_path, monkeyp
                                                  "k_default": 2, "k_max": 3}}
 
     def run(mm):
-        return cli.speculation(argparse.Namespace(mtp=2, mtp_file=str(f)), mm, None, 1)["drafter"]
+        return cli.speculation(argparse.Namespace(mtp=2, mtp_file=str(f)), mm, None, 1, model=Q)["drafter_key"]
     assert run(m) == DR.key(DR.declared(m))                                # checked against the pin: the declared one
     pinned = dict(m, files=[dict(row, sha256="a" * 64)])
     monkeypatch.setenv("MASHBOX_VERIFY", "0")
@@ -448,8 +450,8 @@ def test_the_drafter_in_the_key_is_the_file_speculation_loaded(tmp_path, monkeyp
     assert _dep(tmp_path, monkeypatch, dk=2, drafter=got) != _dep(tmp_path, monkeypatch, dk=2, drafter=DR.key(DR.declared(pinned)))
     monkeypatch.delenv("MASHBOX_VERIFY")
     bare = {"id": "t", "files": [dict(row, sha256=None)]}                  # no declaration, no pin
-    assert run(bare) == {"kind": "mtp", "id": "Local-MTP.bshj@0", "weights_sha256": own,
-                         "k": {"k_default": 2, "k_max": 3, "k_table": {}}}
+    assert run(bare) == {"kind": "mtp", "id": "Local-MTP.bshj@0", "weights_sha256": own,  # the step version, as every key
+                         "k": {"k_default": 2, "k_max": 3, "k_table": {}}, "spec_step_version": SPEC_STEP_VERSION}
 
 
 def test_no_table_with_speculative_decoding(tmp_path):

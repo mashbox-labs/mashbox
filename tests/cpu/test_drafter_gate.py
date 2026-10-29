@@ -11,6 +11,7 @@ import pytest
 
 from mashbox import cli, hub
 from mashbox.runtime import drafter as DR
+from mashbox.models import qwen3_8_27b as QM
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -86,9 +87,9 @@ def run(monkeypatch):
         return path or "/draft.bshj"
     monkeypatch.setattr(hub, "draft_file", fetch)
 
-    def call(m, mtp=None, tp=1, css=None, mtp_file=None):
+    def call(m, mtp=None, tp=1, css=None, mtp_file=None, model=QM):
         a = argparse.Namespace(mtp=mtp, mtp_file=mtp_file)
-        return cli.speculation(a, m, None, tp, component_set_sha=css)
+        return cli.speculation(a, m, None, tp, component_set_sha=css, model=model)
     return call, fetched, logs
 
 
@@ -144,15 +145,24 @@ def test_k_table_is_this_chips_measured_table():
 
 
 def test_measured_k_table_reaches_the_engine(run):
-    """Draft length per row bucket comes from the drafter's measured table for this chip (models.json), forced or gated."""
+    """Draft length per row bucket comes from the drafter's measured table for this chip (models.json), forced or gated.
+    The MTP drafter needs every committed token, so a table with k = 0 at a row bucket never reaches its engine: gated,
+    it decodes plain and fetches no draft file; forced (--mtp K), it runs K at every bucket; each says why."""
     call, fetched, logs = run
     m = qwen_row()
-    m["drafter"]["k_table"] = {"v6e-1": {"1": 2, "8": 0}, "v5e-4": {"1": 1}}
-    assert call(m, mtp=2)["k_table"] == {1: 2, 8: 0}
+    m["drafter"]["k_table"] = {"v6e-1": {"1": 2, "8": 1}, "v5e-4": {"1": 1}}
+    assert call(m, mtp=2)["k_table"] == {1: 2, 8: 1}
+    m["drafter"]["k_table"] = {"v6e-1": {"1": 2, "8": 0}}
+    assert call(m, mtp=2)["k_table"] == {} and "runs no row bucket at k = 0" in logs[-2]
+    m["drafter"]["k_table"] = {"v6e-1": {"1": 2, "8": 1}, "v5e-4": {"1": 1}}
     dr = DR.declared(m)
     css = lambda key: "c" * 64 if key == DR.key(dr) else "x" * 64
     m["drafter"] = {k: v for k, v in gated(dr).items() if k in m["drafter"]}
-    assert call(m, css=css)["k_table"] == {1: 2, 8: 0}
+    assert call(m, css=css)["k_table"] == {1: 2, 8: 1}
+    n = len(fetched)
+    m["drafter"]["k_table"] = {"v6e-1": {"1": 2, "8": 0}}
+    dr = DR.declared(m)
+    assert call(m, css=lambda key: "c" * 64) == {} and len(fetched) == n and "runs no row bucket at k = 0" in logs[-1]
     m["drafter"]["k_table"] = {"v5e-4": {"1": 1}}                            # no table for this chip: k everywhere
     assert call(m, mtp=2)["k_table"] == {}
     m["drafter"]["k_table"] = {"v6e-1": {"8": 4}}                            # above k_max
@@ -173,12 +183,70 @@ def test_download_fetches_the_draft_only_when_gated(monkeypatch, capsys):
     assert fetched == [1] and json.loads(capsys.readouterr().out)["draft"] == "/draft.bshj"
 
 
-def test_engine_refuses_another_drafter_abi():
+def test_engine_refuses_another_mtp_head_abi():
     from types import SimpleNamespace
     from mashbox.runtime.engine import Engine
-    with pytest.raises(ValueError, match="drafter ABI"):
+    with pytest.raises(ValueError, match="MTP head ABI None, this engine 1"):
         Engine(SimpleNamespace(), {}, SimpleNamespace(make_forward=lambda *a: None), mtp=(SimpleNamespace(__name__="x"), {}),
                draft_k=2)
+
+
+def test_engine_refuses_another_drafter_abi(tmp_path):
+    """a drafter written for another drafter interface (runtime/drafters DRAFTER_ABI) is refused when the engine is
+    built, before any program exists. A real tiny model (tools/gguf_fixtures llama-f32), on which the same drafter at
+    this ABI builds, so only the ABI check can refuse it"""
+    import importlib.util
+    import jax.numpy as jnp
+    from mashbox.gguf import open_model
+    from mashbox.runtime.engine import Engine
+    from mashbox.runtime import drafters as DRS
+    from mashbox.runtime.drafters.ngram import NGram
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    sp = importlib.util.spec_from_file_location("gguf_fixtures", os.path.join(root, "tools", "gguf_fixtures", "fixtures.py"))
+    fx = importlib.util.module_from_spec(sp)
+    sp.loader.exec_module(fx)
+    f, A, c = open_model(fx.build("llama-f32", str(tmp_path)), act=jnp.float32)
+    W, _ = A.load(f, c, use_kernels=False)
+    kw = dict(CTX=128, S=2, K=4, draft_k=3)
+
+    class Old(NGram):
+        abi = DRS.DRAFTER_ABI - 1
+    assert NGram(3).abi == DRS.DRAFTER_ABI == 2
+    assert Engine(c, W, A, drafter=NGram(3), **kw).drafter.abi == DRS.DRAFTER_ABI
+    with pytest.raises(ValueError, match=f"drafter ABI {DRS.DRAFTER_ABI - 1}, this engine {DRS.DRAFTER_ABI}"):
+        Engine(c, W, A, drafter=Old(3), **kw)
+
+
+def test_gate_needs_k_above_zero_at_a_row_bucket(run):
+    """a passed gate whose k_table for this chip has k = 0 at every row bucket (measured slower than plain there) is
+    not eligible: no flag decodes plain and fetches no draft file; k > 0 at one bucket turns it on with that table"""
+    call, fetched, logs = run
+    m = qwen_row()
+    m["drafter"] = {k: v for k, v in gated(DR.declared(m)).items() if k in m["drafter"]}
+    css = lambda key: "c" * 64      # noqa: E731
+    m["drafter"]["k_table"] = {"v6e-1": {"1": 0, "8": 0}}
+    ok, why = DR.gate(DR.declared(m), "v6e-1", "c" * 64)
+    assert not ok and "k = 0 at every row bucket" in why
+    assert call(m, css=css) == {} and fetched == [] and "k = 0 at every row bucket" in logs[-1]
+    m["drafter"]["k_table"] = {"v6e-1": {"1": 2, "8": 0}}
+    assert DR.gate(DR.declared(m), "v6e-1", "c" * 64)[0]          # eligible, but the MTP drafter runs no bucket at k = 0
+    assert call(m, css=css) == {} and fetched == [] and "runs no row bucket at k = 0" in logs[-1]
+    m["drafter"]["k_table"] = {"v6e-1": {"1": 2, "8": 1}}
+    assert call(m, css=css)["k_table"] == {1: 2, 8: 1} and fetched == [None]
+
+
+def test_mtp_head_is_the_module_the_model_declares(run):
+    """the MTP head comes from the module the model's architecture declares (SPEC_MTP_HEAD), never a fixed import: a
+    model that declares none decodes plain without a flag, and --mtp K says why"""
+    from types import SimpleNamespace
+    call, fetched, logs = run
+    m = qwen_row()
+    m["drafter"] = {k: v for k, v in gated(DR.declared(m)).items() if k in m["drafter"]}
+    css = lambda key: "c" * 64      # noqa: E731
+    assert call(m, css=css, model=SimpleNamespace()) == {} and fetched == [] and "SPEC_MTP_HEAD" in logs[-1]
+    with pytest.raises(SystemExit, match="SPEC_MTP_HEAD"):
+        call(m, mtp=2, css=css, model=SimpleNamespace())
+    assert fetched == [] and call(m, css=css)["draft_k"] == 2         # Qwen3.8-27B declares its head
 
 
 def test_gated_css_is_the_component_set_the_gate_passed_for():
@@ -212,7 +280,7 @@ def test_load_keeps_speculation_from_the_gate_only_for_its_own_component_set(run
     on = CK.for_engine(StandIn(2), m["id"], "cfg", "lay", tp=1, drafter=DR.key(dr))[2]
     plain = CK.for_engine(StandIn(0), m["id"], "cfg", "lay", tp=1, drafter=None)[2]
     assert on != plain
-    spec = lambda mm, mtp=None: cli.speculation(argparse.Namespace(mtp=mtp, mtp_file=None), mm, None, 1, later=True)
+    spec = lambda mm, mtp=None: cli.speculation(argparse.Namespace(mtp=mtp, mtp_file=None), mm, None, 1, later=True, model=QM)
     for css, keep in ((on, True), ("d" * 64, False)):
         mm = copy.deepcopy(m)
         mm["drafter"] = {k: v for k, v in gated(dr, css=css).items() if k in mm["drafter"]}
@@ -231,3 +299,18 @@ def test_load_keeps_speculation_from_the_gate_only_for_its_own_component_set(run
     cli.deployment_keys(eng, m, "cfg", "lay", tp=1, gate_css=None)
     assert eng.dropped == 0 and eng.component_set_sha == on                 # the drafter is in the key while it runs
     assert spec(m, mtp=0) == {}
+
+
+def test_mtp_draft_k_takes_1_to_k_max(run):
+    """--speculation mtp --draft-k K takes 1 to the head's k_max (docs/speculation.md): 0 and k_max + 1 stop with that
+    range (0 is never read as off); 1 and k_max turn the head on with that K"""
+    from mashbox import cli
+    from mashbox.models import qwen3_8_27b as Q
+    m = qwen_row()
+    kmax = DR.declared(m)["k_max"]
+    ns = lambda k: argparse.Namespace(speculation="mtp", draft_k=k, mtp=None, mtp_file=None)      # noqa: E731
+    for k in (0, kmax + 1):
+        with pytest.raises(SystemExit, match=f"--draft-k {k}: use 1 to {kmax}"):
+            cli.speculation(ns(k), m, None, 1, model=Q)
+    for k in (1, kmax):
+        assert cli.speculation(ns(k), m, None, 1, model=Q)["draft_k"] == k

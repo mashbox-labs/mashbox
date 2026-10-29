@@ -11,6 +11,7 @@ Docs for `mashbox`, the MASHBOX Labs package that runs open models faster and ch
 - [GGUF files](gguf.md): run a llama.cpp GGUF file on a TPU; [Unsloth fine-tunes](unsloth.md): run the GGUF you trained
 - [Use with coding agents](agents-on-tpu.md): Claude Code, Codex and Pi on a model you serve
 - [Command line](cli.md): every `mashbox` command and option
+- [Speculative decoding](speculation.md): faster generation from the same model, and the `--speculation` options
 - [Server API](server-api.md): every route, request field and response
 - [TPU v6e and v5e](chips.md): which chip to pick
 - [FAQ](faq.md): problems you can meet, why, and what to do

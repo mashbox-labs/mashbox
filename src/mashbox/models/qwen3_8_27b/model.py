@@ -22,6 +22,8 @@ from ...runtime import activation_edits as AE
 from ...runtime.activation_edits import ActivationEdits  # noqa: F401  (the engine interface; re-exported for model users)
 
 f32, bf16 = jnp.float32, jnp.bfloat16
+SPEC_VERIFY = True       # forward(verify=True) with gated_delta_commit / conv_commit (runtime/spec_step.py)
+SPEC_MTP_HEAD = "mashbox.models.qwen3_8_27b.spec"    # its MTP head (make_mtp, load_mtp) for BSHJ files
 HI = lax.Precision.HIGHEST
 CHUNK = 64
 NEG = -1e30

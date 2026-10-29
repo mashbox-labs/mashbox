@@ -76,10 +76,10 @@ def test_default_off_and_mtp_2_on(tiny, monkeypatch):
         raise AssertionError("the default run must not fetch the draft file")
     monkeypatch.setattr(hub, "draft_file", no_fetch)
     m = {"id": "t", "files": [row]}
-    assert cli.speculation(args(), m, cfg, 1) == {}
-    assert cli.speculation(args(mtp=0), m, cfg, 1) == {}
+    assert cli.speculation(args(), m, cfg, 1, model=Q) == {}
+    assert cli.speculation(args(mtp=0), m, cfg, 1, model=Q) == {}
     monkeypatch.undo()
-    s = cli.speculation(args(mtp=2, mtp_file=path), m, cfg, 1)
+    s = cli.speculation(args(mtp=2, mtp_file=path), m, cfg, 1, model=Q)
     assert s["draft_k"] == 2 and s["mtp"][0].__name__.endswith("spec")
 
 
@@ -87,32 +87,32 @@ def test_mtp_file_needs_mtp_k(tiny):
     cfg, path, row = tiny
     m = {"id": "t", "files": [row]}
     with pytest.raises(SystemExit):
-        cli.speculation(args(mtp_file=path), m, cfg, 1)
+        cli.speculation(args(mtp_file=path), m, cfg, 1, model=Q)
 
 
 def test_mtp_k_and_off(tiny):
     cfg, path, row = tiny
     m = {"id": "t", "files": [row]}
-    assert cli.speculation(args(mtp=1, mtp_file=path), m, cfg, 1)["draft_k"] == 1
-    assert cli.speculation(args(mtp=0, mtp_file=path), m, cfg, 1) == {}
+    assert cli.speculation(args(mtp=1, mtp_file=path), m, cfg, 1, model=Q)["draft_k"] == 1
+    assert cli.speculation(args(mtp=0, mtp_file=path), m, cfg, 1, model=Q) == {}
 
 
 def test_no_draft_file(tiny):
     cfg, path, row = tiny
     m = {"id": "t", "files": []}
-    assert cli.speculation(args(), m, cfg, 1) == {}
+    assert cli.speculation(args(), m, cfg, 1, model=Q) == {}
     with pytest.raises(SystemExit):
-        cli.speculation(args(mtp=2), m, cfg, 1)
+        cli.speculation(args(mtp=2), m, cfg, 1, model=Q)
 
 
 def test_tensor_parallel_and_range(tiny):
     cfg, path, row = tiny
     m = {"id": "t", "files": [row]}
-    assert cli.speculation(args(), m, cfg, 2) == {}
+    assert cli.speculation(args(), m, cfg, 2, model=Q) == {}
     with pytest.raises(SystemExit):
-        cli.speculation(args(mtp=2, mtp_file=path), m, cfg, 2)
+        cli.speculation(args(mtp=2, mtp_file=path), m, cfg, 2, model=Q)
     with pytest.raises(SystemExit):
-        cli.speculation(args(mtp=4, mtp_file=path), m, cfg, 1)
+        cli.speculation(args(mtp=4, mtp_file=path), m, cfg, 1, model=Q)
 
 
 def test_draft_not_fetchable(tiny, monkeypatch):
@@ -125,9 +125,9 @@ def test_draft_not_fetchable(tiny, monkeypatch):
         raise FileNotFoundError("not in the repo at this revision")
     monkeypatch.setattr(hub, "fetch", gone)
     m = {"id": "t", "files": [row], "hf_repo": "x/y", "hf_revision": "0" * 40}
-    assert cli.speculation(args(), m, cfg, 1) == {} and calls == []
+    assert cli.speculation(args(), m, cfg, 1, model=Q) == {} and calls == []
     with pytest.raises(SystemExit):
-        cli.speculation(args(mtp=2), m, cfg, 1)
+        cli.speculation(args(mtp=2), m, cfg, 1, model=Q)
     assert calls
 
 
