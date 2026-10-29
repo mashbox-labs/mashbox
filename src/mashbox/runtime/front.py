@@ -94,7 +94,8 @@ class Front(Server):
         self.start_fails, self.first_ready_s, self.gave_up = 0, None, None
         self.start_floor_s = float(self.env.get("MASHBOX_START_FLOOR_S") or P.START_FLOOR_S)
         super().__init__(RemoteEngine(), chat, model_id, info, log)
-        threading.Thread(target=self.supervise, daemon=True).start()
+        self.supervisor = threading.Thread(target=self.supervise, daemon=True)   # close() waits for it to end
+        self.supervisor.start()
 
     # ------------------------------------------------------------------------------------------- worker lifecycle
     def _spawn(self):
@@ -228,10 +229,16 @@ class Front(Server):
     def close(self, timeout=10):
         """Stop serving: requests still here end (503 / 529 when they have no output, the stream's error event when
         they have), the worker process exits (killed after `timeout`) and no new one starts. Requests after close get
-        503 / 529 at once."""
+        503 / 529 at once. close() then waits, at most `timeout` more, for the supervisor thread to end, so its last
+        line (worker_down) comes before front_closed and the supervisor writes nothing after close() returns: mashbox run
+        exits right after it, and a daemon thread still writing to stdout at interpreter exit aborts the process
+        (CPython's 'could not acquire lock for <stdout> at interpreter shutdown', SIGABRT). Not covered: a supervisor
+        still starting a worker after that wait (_spawn waits up to the worker's start time) can still write its
+        start-failure lines later, and a worker closed while it started ends with no worker_down. A second close(), also
+        the one after give_up(), waits the same way."""
         with self.lock:
             if self.closed.is_set():
-                return
+                return self._join_supervisor(timeout)
             self.closed.set()
             link, self.link, self.ready = self.link, None, False
             jobs = list(self.pending) + (list(link.inflight.values()) if link is not None else [])
@@ -246,7 +253,16 @@ class Front(Server):
         if link is not None:
             link.conn.close()
             self._reap(link, timeout)
+        self._join_supervisor(timeout)
         self.log(json.dumps(dict(event="front_closed", ended=len(jobs))))
+
+    def _join_supervisor(self, timeout):
+        """Wait, at most `timeout` s, for the supervisor thread to end (it reaps the worker, writes worker_down and
+        returns once closed is set; its worker's reader thread has ended before that: supervise waits for link.dead,
+        the reader's last step). Not from the supervisor itself (give_up() closes from there)."""
+        th = getattr(self, "supervisor", None)
+        if th is not None and th is not threading.current_thread():
+            th.join(timeout)
 
     def read_loop(self, link):
         try:

@@ -63,7 +63,8 @@ def _close_fronts():
         FRONTS.pop().close()
 
 
-def start(tmp_path, fault="", S=1, step_s=0.03, warm=False, outs=None, lives=None, extra_env=None, chat=None, kw=None):
+def start(tmp_path, fault="", S=1, step_s=0.03, warm=False, outs=None, lives=None, extra_env=None, chat=None, kw=None,
+          log_fn=None):
     log = str(tmp_path / "engine.jsonl")
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([HERE] + [p for p in sys.path if p.endswith("src")]
                                                       + [os.environ.get("PYTHONPATH", "")]),
@@ -72,7 +73,8 @@ def start(tmp_path, fault="", S=1, step_s=0.03, warm=False, outs=None, lives=Non
     env.update(extra_env or {})
     logs = []
     fr = F.Front(chat or IdChat(), "stub-model", {}, "api_stub_engine:make",
-                 dict(S=S, step_s=step_s, outs=outs or [OUT], log=log, **(kw or {})), warm=warm, env=env, log=logs.append)
+                 dict(S=S, step_s=step_s, outs=outs or [OUT], log=log, **(kw or {})), warm=warm, env=env,
+                 log=log_fn or logs.append)
     FRONTS.append(fr)
     port = STUB.serve_on_free_port(fr)
     return fr, port, log, logs
@@ -421,6 +423,30 @@ def test_close_ends_the_worker_and_its_requests(tmp_path):
     assert fr.workers_started == n0 and fr.link is None and not fr.ready
     code, raw, h = post(port, CHAT[0], dict(CHAT[1], stream=False), timeout=10)
     assert code == 503, raw
+
+
+def test_close_returns_after_the_fronts_threads_wrote_their_last_line(tmp_path):
+    """Front.close() returns only after the front's supervisor thread has reaped the worker, written worker_down and
+    ended, so worker_down comes before front_closed and no line of the front comes after close() returns. mashbox run
+    exits right after close(); a daemon thread still writing to stdout at interpreter exit aborts the process (CPython:
+    'could not acquire lock for <stdout> at interpreter shutdown', SIGABRT: test_b3_sigint_mid_step_leaves_no_process_of
+    _the_server once got rc -6). Here worker_down takes 1 s to write, as a thread the scheduler runs late on a loaded
+    host would."""
+    lines, after, returned = [], [], threading.Event()
+
+    def log(m):
+        if '"worker_down"' in m:
+            time.sleep(1.0)
+        (after if returned.is_set() else lines).append(m)
+    fr, port, _, _ = start(tmp_path, log_fn=log)
+    wait_ready(fr)
+    fr.close()
+    returned.set()
+    time.sleep(2.0)                          # a line the front's threads still write would come now
+    assert after == [], after
+    ev = [json.loads(m).get("event") for m in lines]
+    assert "worker_down" in ev and ev.index("worker_down") < ev.index("front_closed"), ev
+    assert not fr.supervisor.is_alive()
 
 
 # ---- P6 consumer_stalled (INTERFACES §3.3): a client that stops reading a stream ---------------------------------------

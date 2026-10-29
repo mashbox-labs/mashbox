@@ -232,6 +232,15 @@ def test_b3_sigint_mid_step_leaves_no_process_of_the_server(tmp_path):
         assert not th.is_alive() and got.get("status") == 200 and got.get("eof"), got
         assert data[-1] == "data: [DONE]" and "the server stopped mid-answer" in data[-2], data[-3:]
         assert '"stopped"' in log and '"answering": 0' in log, log[-800:]
+        # nothing of the server writes after "stopped": the front's supervisor wrote worker_down before front_closed
+        # (Front.close waits for it), so no daemon thread is mid-write to stdout when the interpreter exits (rc -6)
+        ev = []
+        for ln in log.splitlines():
+            try:
+                ev.append(json.loads(ln)["event"])
+            except (ValueError, TypeError, KeyError):
+                pass
+        assert ev[-1] == "stopped" and "worker_down" in ev and ev.index("worker_down") < ev.index("front_closed"), ev
     finally:
         if p.poll() is None:
             p.send_signal(signal.SIGINT)
