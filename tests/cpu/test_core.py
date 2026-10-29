@@ -326,13 +326,13 @@ def test_public_text_is_clean():
     assert {"iso-date", "our-run"} <= kinds_of("docs/assets/x.svg", "<svg><text>Measured 2026-10-28 in our run</text></svg>")
     # an internal id on its own, with no date or status word near it (Markdown, a CLI string, app text)
     assert kinds_of("docs/x.md", "Internal run SYNC-77.\n") == {"internal-id"}
-    assert kinds_of("docs/x.md", "Finding R5-F01 is closed.\n") == {"internal-id"}
+    assert kinds_of("docs/x.md", "Finding Q7-X03 is closed.\n") == {"internal-id"}
     assert dl.lint_text("docs/x.md", "Qwen2.5-VL-7B, SHA-256, UTF-8, ISO-8601, BSD-3-Clause and CC-BY-4.0.\n", {}, set()) == []
     py = 'HELP = "Verified in internal run SYNC-77; partly ready."\nFAST = "Faster decoding; not supported yet on v5e."\n'
     assert {"verified", "internal-id", "staging", "yet"} <= kinds_of("src/mashbox/x.py", py), kinds_of("src/mashbox/x.py", py)
     assert dl.lint_text("src/mashbox/x.py", 'STATE = "pending"\nSTAMP = "verified"\n', {}, set()) == []   # names in code
     assert {"our-run", "internal-id"} <= kinds_of("src/mashbox/ui/x.js", "el.textContent = 'Seen in our run SYNC-77';\n")
-    # Review D04: visible text added to the app page fails the lint; the page as shipped passes
+    # visible text added to the app page fails the lint; the page as shipped passes
     app = ROOT / "src" / "mashbox" / "ui" / "app" / "index.html"
     lines = app.read_text().splitlines(keepends=True)
     d04 = "".join(lines[:17] + ["<p>Verified on October 28, 2026 in our run SYNC-77; partly ready.</p>\n"] + lines[17:])

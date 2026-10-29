@@ -1,10 +1,10 @@
-"""A program loaded from the saved executable table that the warm-up did not run (review R11, 2026-10-28).
+"""A program loaded from the saved executable table that the warm-up did not run.
 
 Engine.warm runs one representative per prefill row bucket and one per decoder function (dec, decs) of a loaded table;
 every other loaded program (other attention windows, step widths, row buckets) first runs in a request. If it fails
 there, that is a table failure (programs.TableFailed): the table folder is quarantined (renamed beside it, never loaded
 again), the table is dropped, and the call never runs through jit in its place (that would be a compile after ready).
-The request gets an error and the engine's process ends: it never warms again where it said ready (review R12-F02);
+The request gets an error and the engine's process ends: it never warms again where it said ready;
 behind the HTTP front a new worker starts without the table and the front sends a request that got no output once more
 (test_aot_table_restart.py). A failure that a representative reports only at the warm-up's final barrier (a device
 error raised asynchronously) drops the table as a synchronous one does."""
@@ -165,7 +165,7 @@ def one_process(tmp_path, only_decode=False):
 
 
 def test_a_table_failure_ends_the_one_process_server_without_warming_again(tmp_path):
-    """review R12-F02: the server used to warm every program again in its ready process (each compile a compile after
+    """The server used to warm every program again in its ready process (each compile a compile after
     ready) and serve on. Now the jobs of that call get the error and the process ends (exit code 70) with no warm-up;
     behind the HTTP front the worker ends instead and the front restarts it (test_aot_table_restart.py)."""
     srv, e, logs, codes, ended, warms, hits, d = one_process(tmp_path)
@@ -222,7 +222,7 @@ def test_a_representative_failure_reported_after_it_returned_is_a_table_failure_
 
 
 def test_a_skipped_program_whose_fault_is_reported_after_it_returned_quarantines_and_drops_the_table(tmp_path, monkeypatch):
-    """review R12-F01: JAX runs asynchronously, so a loaded program can return and its device fault be reported at the
+    """JAX runs asynchronously, so a loaded program can return and its device fault be reported at the
     first synchronization after it (here a stand-in: the real executable runs, then the next jax.block_until_ready
     raises). Its first use in this process waits for it inside the table boundary, so the fault is a table failure
     (quarantine, drop, no jit in its place), not a request error that leaves the table in use."""
@@ -257,7 +257,7 @@ def _no_rename(a, b):
 
 
 def test_a_table_that_cannot_be_renamed_is_refused_in_place(tmp_path, monkeypatch):
-    """review R12-F04: a failed rename used to leave the folder loadable by the next start."""
+    """A failed rename used to leave the folder loadable by the next start."""
     e, skipped, d = skipped_after_warm(tmp_path)
     hits = []
     for k in skipped:

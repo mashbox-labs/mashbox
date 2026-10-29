@@ -1,4 +1,4 @@
-"""A table failure after ready never compiles in a ready process (review R12-F02, 2026-10-28).
+"""A table failure after ready never compiles in a ready process.
 
 A program loaded from the saved executable table that fails in a request (programs.TableFailed) ends the process that
 holds the engine; it never warms again in that process, where every compile would be a compile after ready, and A13
@@ -174,7 +174,7 @@ print(json.dumps(dict(codes=codes, warms=len(warms), hits=len(hits), ready=srv.r
 
 
 def test_one_process_server_ends_on_a_table_failure_with_no_compile_after_ready(tmp_path):
-    """Review R12-F02's counter: the real programs.counts()["compiles_after_ready"] after mark_ready. Old code warmed every
+    """The counter is the real programs.counts()["compiles_after_ready"] after mark_ready. Old code warmed every
     program again in the ready process (each compile counted after ready) and served on."""
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([HERE] + [p for p in sys.path if p.endswith("src")]
                                                       + [os.environ.get("PYTHONPATH", "")]), JAX_PLATFORMS="cpu")

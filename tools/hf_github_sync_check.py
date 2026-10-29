@@ -239,7 +239,7 @@ def validate(reg, repo_root, problems, release=False):
         pj = m.get("plain_jax", {"status": "tested"})
         if pj.get("status") not in ("tested", "not supported") or (pj.get("status") == "not supported" and not pj.get("reason")):
             problems.add(where, "plain_jax.status must be tested, or not supported with a reason")
-        if release:  # applies to EVERY model in a release (review F08)
+        if release:  # applies to EVERY model in a release
             lic = str(reg["license"]).lower()
             if "proposed" in lic or "not chosen" in lic or not lic.strip():
                 problems.add(where, "release: our licence is not chosen")
@@ -2288,7 +2288,7 @@ def check_online(reg, views, fetch, problems, repo=None):
         if not rev:
             problems.add(where, "hf_revision not pinned in models.json")
             continue
-        if info.get("sha") != rev:  # the visible head must be the pinned, rendered revision (review F09)
+        if info.get("sha") != rev:  # the visible head must be the pinned, rendered revision
             problems.add(where, f"HF head {str(info.get('sha'))[:12]} is not the pinned revision {rev[:12]}")
         st, listing = fetch.get(f"https://huggingface.co/api/models/{m['hf_repo']}/revision/{rev}")
         if st != 200:

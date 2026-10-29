@@ -1,5 +1,5 @@
 """Worker factory for test_aot_table_restart.py (not a test file): api_stub_engine's scripted engine with a stand-in for a
-saved executable table, so the front + worker recovery from a table failure runs with real processes (review R12-F02).
+saved executable table, so the front + worker recovery from a table failure runs with real processes.
 
 A worker life "loads" the table when MASHBOX_AOT is not "0" and the table folder is present and holds no REFUSED file
 (as programs.Table.load refuses a folder holding a file its manifest does not list): its warm-up compiles nothing (the

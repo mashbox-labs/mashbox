@@ -330,7 +330,7 @@ KEY_FILE_BAD = {"group_read": 0o640, "world_read": 0o604, "group_write": 0o620, 
 @pytest.mark.parametrize("case", sorted(KEY_FILE_BAD) + ["other_owner", "symlink", "fifo"])
 @pytest.mark.parametrize("which", ["api_key_file", "default"])
 def test_r10_a_key_file_others_can_read_or_write_is_refused(tmp_path, monkeypatch, which, case):
-    """Review R10 #4: an API key file (--api-key-file, or the default ~/.config/mashbox/api-key when it already exists)
+    """An API key file (--api-key-file, or the default ~/.config/mashbox/api-key when it already exists)
     is used only when it is a regular file of the server's user that no one else can read or write; otherwise the start
     ends with one plain error naming the file, never a key. A key others can read lets them act as its tenant."""
     from mashbox import cli
@@ -362,7 +362,7 @@ def test_r10_a_key_file_others_can_read_or_write_is_refused(tmp_path, monkeypatc
 
 
 def test_r10_public_text_says_keys_of_one_tenant_share_its_cache_and_queue():
-    """Review R10 #5: keys the key file names with one tenant are one owner, with one prefix cache and one waiting queue
+    """Keys the key file names with one tenant are one owner, with one prefix cache and one waiting queue
     (runtime/tenancy.py; test_tenancy pins it), so the public text says per tenant, never per key: the --api-key-file
     help, both 429 descriptions, and the pages generated from them."""
     import argparse

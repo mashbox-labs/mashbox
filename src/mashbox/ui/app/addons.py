@@ -75,7 +75,7 @@ def _from(root: str) -> list:
         raise FileNotFoundError("not found")
     dists = list(metadata.distributions(path=[root]))
     if len(dists) > 1:
-        # One distribution per listed path (review S14): a second metadata folder would bring its own entry points.
+        # One distribution per listed path: a second metadata folder would bring its own entry points.
         raise LookupError(f"{len(dists)} distributions in it; an add-on path holds exactly one")
     eps = {(e.name, e.value): e for d in dists for e in d.entry_points if e.group == GROUP}
     if not eps:
@@ -88,7 +88,7 @@ def _from(root: str) -> list:
         spec = importlib.util.find_spec(top)                  # finds, does not run: nothing from elsewhere is executed
         locs = list(spec.submodule_search_locations or ()) if spec else []
         if spec and spec.submodule_search_locations is not None and (spec.origin in (None, "namespace") or len(locs) != 1):
-            # A namespace package joins folders from every sys.path entry, so ns.x could come from anywhere (review S11).
+            # A namespace package joins folders from every sys.path entry, so ns.x could come from anywhere.
             raise ImportError(f"{top} is a namespace package ({len(locs)} locations); an add-on must be a regular package"
                               " (with __init__.py) or a module inside its listed path")
         where = spec and spec.origin
@@ -98,7 +98,7 @@ def _from(root: str) -> list:
         if os.path.isdir(root) and _links(root, top):
             raise ImportError(f"{top} holds a link ({_links(root, top)}); an add-on folder may hold none")
         mod = e.value.split(":", 1)[0].strip()
-        # A module of that name already imported from elsewhere would be handed back by e.load() as it is (review S17):
+        # A module of that name already imported from elsewhere would be handed back by e.load() as it is:
         # the entry point's module and each of its parents must be unloaded or loaded from this path.
         parts = mod.split(".")
         for n in (".".join(parts[:i]) for i in range(1, len(parts) + 1)):

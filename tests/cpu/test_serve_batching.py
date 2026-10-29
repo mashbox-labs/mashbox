@@ -338,7 +338,7 @@ PREFIX = dict(completions="cmpl-", chat="chatcmpl-", anthropic="msg_", responses
 @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
 @pytest.mark.parametrize("route", list(ROUTES))
 def test_admit_trace_line_names_the_clients_response_id_and_slot_in_admission_order(route, stream, monkeypatch):
-    """CERT B1 order arm (review R7-F03 b): under MASHBOX_TRACE=1 the server logs one line per admitted request when the
+    """CERT B1 order arm: under MASHBOX_TRACE=1 the server logs one line per admitted request when the
     loop admits it, {"event": "admit", "rid": <the id this request's client receives>, "slot": <its slot>, "seq": n,
     "tenant": <short tenant id or null>}. Checked against the engine's own admit calls: 5 requests arrive one by one
     at a 2-slot engine whose steps are held, so 4 wait; one more client hangs up while waiting and is never admitted;

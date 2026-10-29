@@ -110,7 +110,7 @@ def fresh(monkeypatch, tmp_path):
 
 
 def test_only_the_listed_addons_load_never_an_installed_package(fresh, monkeypatch):
-    """Review S03: an add-on gets a same-origin page with the launch token, so a package installed in the app's Python
+    """An add-on gets a same-origin page with the launch token, so a package installed in the app's Python
     (or anywhere on sys.path) is never one; only the paths the desktop app lists are read."""
     monkeypatch.syspath_prepend(str(folder(fresh, "outsider", "evil")))
     assert addons.load() == [] and addons.problems() == []
@@ -134,7 +134,7 @@ def test_addon_code_that_would_come_from_elsewhere_is_refused_unrun(fresh, monke
 
 
 def test_every_listed_add_on_that_does_not_load_stops_the_start(fresh, monkeypatch, capsys):
-    """Review S05: fail closed. A listed path that is missing, holds no add-on, breaks on import, or has a bad or taken
+    """Fail closed. A listed path that is missing, holds no add-on, breaks on import, or has a bad or taken
     ID is a problem, and the app refuses to start (exit 3, never a run without it)."""
     empty = fresh / "empty"
     empty.mkdir()
@@ -151,7 +151,7 @@ def test_every_listed_add_on_that_does_not_load_stops_the_start(fresh, monkeypat
 
 
 def test_taken_holds_every_route_word_of_the_app(monkeypatch):
-    """Review S04: an add-on ID can never shadow a page, file folder or /api call of the app itself."""
+    """An add-on ID can never shadow a page, file folder or /api call of the app itself."""
     src = (pathlib.Path(addons.__file__).parent / "__init__.py").read_text()
     words = set(re.findall(r'"/api/([a-z_]+)', src)) | set(re.findall(r'"/([a-z0-9_]+)/', src))
     words |= set(re.findall(r'"/m/([a-z]+)', src)) | {"shell", "chat", "app"}
@@ -162,7 +162,7 @@ def test_taken_holds_every_route_word_of_the_app(monkeypatch):
 
 
 def test_a_link_out_of_the_listed_folder_is_refused_unrun(fresh, monkeypatch):
-    """Review round 2 S07: the package of a listed folder linked to a place outside it is never imported."""
+    """The package of a listed folder linked to a place outside it is never imported."""
     outside = fresh / "outside"
     (outside / "linked").mkdir(parents=True)
     (outside / "linked" / "__init__.py").write_text(MOD.format(ID="linked", extra=""))
@@ -184,7 +184,7 @@ def test_a_link_out_of_the_listed_folder_is_refused_unrun(fresh, monkeypatch):
 
 
 def test_a_namespace_package_is_refused_unrun(fresh, monkeypatch):
-    """Review round 3 S11: a listed folder whose top-level name is a namespace package (no __init__.py) joins every
+    """A listed folder whose top-level name is a namespace package (no __init__.py) joins every
     folder of that name on sys.path, so ns.plugin could load from outside the listed path; it is refused, unrun."""
     listed, outside = fresh / "listed", fresh / "outside"
     (listed / "ns").mkdir(parents=True)
@@ -224,7 +224,7 @@ def _dist(root, name, ep):
 
 
 def test_a_second_distribution_in_a_listed_path_is_refused_unrun(fresh, monkeypatch):
-    """Review round 4 S14: a listed path with a hidden second metadata folder (its own entry point) is refused."""
+    """A listed path with a hidden second metadata folder (its own entry point) is refused."""
     root = folder(fresh, "good", "good", extra="")
     (root / "evilmod.py").write_text(MOD.format(ID="evil", extra=""))
     _dist(root, "hidden", "evil = evilmod")
@@ -234,7 +234,7 @@ def test_a_second_distribution_in_a_listed_path_is_refused_unrun(fresh, monkeypa
 
 
 def test_a_cached_module_from_elsewhere_is_refused(fresh, monkeypatch):
-    """Review round 4 S17: safe is inside the listed path, but safe.plugin is already loaded from outside it; e.load()
+    """Package safe is inside the listed path, but safe.plugin is already loaded from outside it; e.load()
     would hand that copy back, so the add-on is refused (and nothing of it is used)."""
     import importlib.util
     import sys

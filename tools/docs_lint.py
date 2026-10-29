@@ -81,7 +81,7 @@ RULES = [
     ("marker", re.compile(r"<!--\s*/?r(?::|\s*-->)|\btest:tpu\b|\bTODO\b|\bFIXME\b|\bXXX\b"),
      "no record markers or notes in the public source"),
     ("record-id", re.compile(r"\b(?:RUN|REC|LEDGER)-\d+\b|\brun id\b|\brecord id\b"), "no run or record ids"),
-    # an internal id on its own, whatever the words around it: "SYNC-77", "IDX-14", "R5-F01". Not a model or format name:
+    # an internal id on its own, whatever the words around it: "SYNC-77", "IDX-14", "Q7-X03". Not a model or format name:
     # nothing word-like or hyphenated on either side ("Qwen2.5-VL-7B", "BSD-3-Clause"), no version tail ("CC-BY-4.0") and
     # not a standard's name ("SHA-256", "UTF-8", "ISO-8601", "RFC-9110", "DDR-5")
     ("internal-id", re.compile(r"(?<![\w.-])(?!(?:SHA|UTF|ISO|IEC|RFC|CVE|CWE|PEP|IEEE|HTTP|TLS|GPL|LGPL|AGPL|MPL|BSD|MIT|CC|"

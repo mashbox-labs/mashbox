@@ -4,7 +4,7 @@ exactly as the start that built it (on CPU the client cannot serialize some prog
 only those, compile at each start, as the save reports); a table built for another deployment or software is refused; a bad entry is skipped and compiled;
 a call the table does not hold runs through jit and is a counted compile.
 
-Trust (review R8): nothing in a table folder is unpickled before the folder, its parent and every file pass the owner
+Trust: nothing in a table folder is unpickled before the folder, its parent and every file pass the owner
 checks (owned by this user, not writable by group or others, no symlink, no other kind of file) and every file's bytes
 match manifest.json (sha256, size, the call key it holds); an extra, missing, changed or swapped file refuses the whole
 table. Every read or write error falls back to compiling, never a crash. The deployment id binds the engine source, the
@@ -133,7 +133,7 @@ def test_each_program_keeps_the_jit_interface():
     assert e.dec._cache_size() == 0
 
 
-# ------------------------------------------------------------------------------------------- review R8: trust and fallback
+# ------------------------------------------------------------------------------------------- trust and fallback
 def built(tmp_path, name="table"):
     """A table saved by a warmed stand-in engine. -> (folder, meta, the save's result, sorted .exe names)"""
     e = engine()
@@ -369,7 +369,7 @@ def test_a_table_built_for_another_program_list_is_dropped_before_ready(tmp_path
     assert b.generate([[5, 6, 7]], max_new=5)["ids"] == a.generate([[5, 6, 7]], max_new=5)["ids"]
 
 
-# ---------------------------------------------------------------- review R8-F02: what the deployment id binds (real CLI)
+# ---------------------------------------------------------------- what the deployment id binds (real CLI)
 def test_production_software_key_carries_the_engine_source(tmp_path):
     import shutil
     from mashbox.runtime import compile_key as CK

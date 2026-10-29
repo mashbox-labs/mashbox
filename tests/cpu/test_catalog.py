@@ -748,7 +748,7 @@ def evidence_problems(reg, ev, repo, work=None):
     for k in reg.get("engine_kernels") or []:
         ke = (ev.get("engine_kernels") or {}).get(k["file"]) or {}
         man = read(ke["manifest"], f"{k['file']} manifest") if "manifest" in ke else None
-        if isinstance(man, dict):       # review R12-F01: the manifest's impls are the attested ones
+        if isinstance(man, dict):       # the manifest's impls are the attested ones
             out += attest_problems(k["file"], ke, man, read)
         for ch in k["chips"]:
             manifests[ch] = man
@@ -783,7 +783,7 @@ def evidence_problems(reg, ev, repo, work=None):
             card = have["card"]
             if card is not None and not isinstance(card, dict):
                 out.append(f"{what}: the card snapshot is not JSON")
-            elif card is not None:      # R12-F08: the row's card fields are the pinned card's, never typed
+            elif card is not None:      # the row's card fields are the pinned card's, never typed
                 cd = card.get("cardData") or {}
                 base, link = cd.get("base_model"), cd.get("license_link")
                 for field, ours, theirs in (("repo", g["repo"], card.get("id")), ("revision", g["revision"], card.get("sha")),
@@ -824,7 +824,7 @@ def evidence_problems(reg, ev, repo, work=None):
                 krow = next((k for k in reg.get("engine_kernels") or [] if chip in (k.get("chips") or [])), None)
                 out += pins_problems(rec, krow, repo, chip, what, exact=r["kernel_path"] == "exact")
             cmp = have["compare"]
-            if r["status"] == "passing" and isinstance(cmp, dict):     # R12-F05: read from the rows, not the summary
+            if r["status"] == "passing" and isinstance(cmp, dict):     # read from the rows, not the summary
                 full, near, others = compare_classes(cmp)
                 s, rows = cmp.get("summary") or {}, cmp.get("rows") or []
                 said = (s.get("full_match"), s.get("near_tie_divergences"), s.get("other_divergences"))
@@ -881,7 +881,7 @@ def bundle_version(krow):
 
 
 def pins_problems(rec, krow, repo, chip, what, exact=False):
-    """review R12, pinned versions: the record names every dist it ran (versions{}); each one this tree pins is the
+    """Pinned versions: the record names every dist it ran (versions{}); each one this tree pins is the
     pinned version; and jax and libtpu are the ones the release bundle on the chip is built for. The kernel package by
     path: an exact-path record (zero flags, no kernel package installed) leaves it out or names it None, never a
     version; a bundle record names the version of the release bundle on the chip."""
@@ -911,7 +911,7 @@ def pins_problems(rec, krow, repo, chip, what, exact=False):
 
 
 def attest_problems(name, ke, man, read):
-    """review R12-F01, kernel attestation: the evidence seals the bundle's attestation (ATTESTATION.json), the manifest
+    """Kernel attestation: the evidence seals the bundle's attestation (ATTESTATION.json), the manifest
     names it by sha256, both come from one kq commit, and each type's impl in the manifest is the attested impl"""
     if "attestation" not in ke:
         return [f"{name}: no attestation in the evidence"]
@@ -955,7 +955,7 @@ def _bundle_module(man):
 
 
 def run_problems(g, r, e, rec, header, man, listed, read, under, work, chip, what):
-    """review R12-F04, a GGUF chip row: its record is the zero-flag run, and its slots and context are this tree's fit
+    """A GGUF chip row: its record is the zero-flag run, and its slots and context are this tree's fit
     on the file. The record seals how it ran (invocation: the argv `mashbox` got and env, every MASHBOX_ variable set)
     and the fit's inputs (fit: the chip's bytes_limit, which is the run's memory.bytes_limit, and the kernel types it
     ran). The row's record ran `mashbox run <file>` with no flag and no MASHBOX_ variable. A forced-slot record of the
@@ -1017,7 +1017,7 @@ def run_problems(g, r, e, rec, header, man, listed, read, under, work, chip, wha
     if not isinstance(fit.get("kernel_types"), list) or sorted(map(str, fit["kernel_types"])) != kt:
         out.append(f"{what}: the record's kernel types {fit.get('kernel_types')} are not the release bundle's {kt}"
                    if bundle else f"{what}: kernel_path exact, and the record ran kernel types {fit.get('kernel_types')}")
-    impl, want = rec.get("impl"), {t: (man.get("impl") or {}).get(t) for t in kt}     # review R12-F01
+    impl, want = rec.get("impl"), {t: (man.get("impl") or {}).get(t) for t in kt}
     if not isinstance(impl, dict):
         out.append(f"{what}: the record has no impl (the kernel impl hash of each type it ran)")
     else:
@@ -1549,7 +1549,7 @@ BAD_FORMS = {
     "a mixture of experts whose goodput the record does not hold": (_both(_moe(), _set("reg", lambda r: r["gguf"][0][
         "chips"]["v6e"]["measured"].__setitem__("goodput_roofline_pct_1_user", 60.0))),
         "the record's goodput[users=1].pct is 25.0"),
-    # review R12, pinned versions: the record states the dists it ran; this tree's pins and the bundle's JAX and libtpu hold
+    # pinned versions: the record states the dists it ran; this tree's pins and the bundle's JAX and libtpu hold
     "a record with no versions": (_set("rec", lambda r: r.__delitem__("versions")), "the record has no versions"),
     "a record with no numpy version": (_in_place("rec", lambda r: r["versions"].pop("numpy")),
                                        "the record's versions have no numpy"),
@@ -1565,7 +1565,7 @@ BAD_FORMS = {
         jax="0.11.3")), "the record ran jax 0.11.2, the release bundle on v6e needs 0.11.3"),
     "a record whose libtpu is not the release bundle's": (_in_place("rec", lambda r: r["versions"].update(
         libtpu="0.0.47.1")), "the record ran libtpu 0.0.47.1, the release bundle on v6e needs 0.0.48.*"),
-    # review R12-F01, kernel attestation: each type the record ran is on the attested impl of the release bundle
+    # kernel attestation: each type the record ran is on the attested impl of the release bundle
     # an exact-path run names the kernel package as not installed; a run on the bundle names its version
     "an exact-path record that names a kernel package version": (_exact(package="0.1.3"),
                                                                   "kernel_path exact, and the record ran "
@@ -1588,13 +1588,13 @@ BAD_FORMS = {
                                             "the attestation hashed kq " + "2" * 40),
     "a manifest impl that is not the attested one": (_in_place("attestation", lambda a: a["impl"].update(
         {sorted(a["impl"])[0]: "e" * 64})), "the attested impl is " + "e" * 64),
-    # R12-F04: the row's record is the zero-flag run; its slots and context are the candidate's fit on the sealed header
+    # the row's record is the zero-flag run; its slots and context are the candidate's fit on the sealed header
     "a record that ran with --slots": (_in_place("rec", lambda r: r["invocation"]["argv"].extend(["--slots", "8"])),
                                        "the record ran `mashbox run /models/Tiny-Qwen3-Q4_K_M.gguf --slots 8`"),
     "a record that ran with a MASHBOX_ variable": (_in_place("rec", lambda r: r["invocation"]["env"].update(
         MASHBOX_GGUF_KERNELS="kernel")), "with MASHBOX_GGUF_KERNELS=kernel"),
     "a record with no invocation": (_in_place("rec", lambda r: r.pop("invocation")), "the record has no invocation"),
-    "review R12's scratch record: slots 1, ctx 1, --slots 1": (_in_place("rec", lambda r: (r.update(slots=1, ctx=1), r[
+    "a scratch record: slots 1, ctx 1, --slots 1": (_in_place("rec", lambda r: (r.update(slots=1, ctx=1), r[
         "invocation"]["argv"].extend(["--slots", "1"]))), "--slots 1`; the row's record is the zero-flag run"),
     "a fit the candidate does not give": (_in_place("rec", lambda r: (r["fit"].update(bytes_limit=60_000_000), r[
         "memory"].update(bytes_limit=60_000_000))), "the candidate's fit gives 1 slots of 2048 tokens"),
@@ -1624,7 +1624,7 @@ BAD_FORMS = {
                                                       "a forced-slot record ran with zero flags"),
     "a number read from a forced-slot record": (_forced(cited=True), "measured.decode_tok_s_1_user is read from a "
                                                                      "forced-slot record"),
-    # R12-F05: full / near / other are recomputed from the compare's rows; a settle covers exactly the others
+    # full / near / other are recomputed from the compare's rows; a settle covers exactly the others
     "a summary that hides an other": (_both(_others(1), _set("cmp", lambda c: c["summary"].update(
         near_tie_divergences=14, other_divergences=0))), "the compare's rows give full 2 / near 13 / other 1"),
     "a near tie at a gap of 0.5": (_set("cmp", lambda c: c["rows"][5].update(ref_gap=0.5)),
@@ -1633,7 +1633,7 @@ BAD_FORMS = {
                                                "the compare has 15 rows for 16 prompts"),
     "a settle of other steps than the compare's others": (_both(_settled(2), _set("settle", lambda v: v["prompts"][0].update(
         chip_step=3))), "are not the compare's other divergences"),
-    # R12-F07: every line of the seal is checked against the bytes under the records root
+    # every line of the seal is checked against the bytes under the records root
     "a seal line whose file has another sha256": (_set("seal", lambda s: [("0" * 64 + "  run.log") if x.endswith(
         "  run.log") else x for x in s]), "run.log sha256 differs from its seal line"),
     "a seal line for a file that is not there": (_set("seal", lambda s: s + ["1" * 64 + "  gone.log"]),
@@ -1645,7 +1645,7 @@ BAD_FORMS = {
     "a seal that lists a file twice": (_set("seal", lambda s: s + [s[0]]), "rec.json is listed twice"),
     "a settle seal line for a file that is not there": (_both(_settled(2), _set("seal_settle", lambda s: s + [
         "1" * 64 + "  gone.json"])), "gone.json is not there"),
-    # R12-F08: the row's repo, revision, licence, licence link and base are the pinned card's
+    # the row's repo, revision, licence, licence link and base are the pinned card's
     "the row's licence is not the card's": (_set("reg", lambda r: r["gguf"][0].__setitem__("license", "mit")),
                                             "license 'mit', the pinned card says 'apache-2.0'"),
     "the row's licence link is not the card's": (_set("reg", lambda r: r["gguf"][0].__setitem__(
@@ -1661,7 +1661,7 @@ BAD_FORMS = {
     "no card in the evidence": (_set("ev", lambda e: e["gguf"][ROW["id"]]["v6e"].__delitem__("card")), "no card in the evidence"),
     "a card the seal does not list": (_set("seal", lambda s: [x for x in s if not x.endswith("card-api.json")]),
                                       "card-api.json is not in SHA256SUMS"),
-    # R12-F03: the engine_kernels rows the loader reads are part of the code set
+    # the engine_kernels rows the loader reads are part of the code set
     "the engine_kernels row is not the one the record's code had": (_code("models.json", lambda b: json.dumps(
         {"engine_kernels": []}).encode()), "the engine_kernels rows for v6e differ from the code the record ran"),
 }
@@ -1680,7 +1680,7 @@ REVIEWED_CODE_SET_V1 = (
 
 @pytest.mark.parametrize("member", REVIEWED_CODE_SET_V1)
 def test_record_guard_refuses_a_row_when_any_code_set_member_differs(tmp_path, member):
-    """R12-F03: one mutation per member of the code set (the `mashbox run <gguf>` entry path by role): the guard names it"""
+    """One mutation per member of the code set (the `mashbox run <gguf>` entry path by role): the guard names it"""
     reg, ev = _fake_records(tmp_path, _code(member, lambda b: b + b"#\n"))
     found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
     assert any(f"{member} differs" in x for x in found), found
@@ -1695,7 +1695,7 @@ def test_the_code_set_is_the_reviewed_v1_and_names_only_files_of_this_tree():
 
 
 def test_record_guard_refuses_a_record_linked_from_outside_the_records_root(tmp_path):
-    """R12-F07 with the root rule: a seal line that names a link inside the row folder to bytes outside the records root"""
+    """The root rule: a seal line that names a link inside the row folder to bytes outside the records root"""
     reg, ev = _fake_records(tmp_path)
     e = ev["gguf"][ROW["id"]]["v6e"]
     out = tmp_path / "elsewhere" / "rec.json"
@@ -1711,7 +1711,7 @@ def test_record_guard_refuses_a_record_linked_from_outside_the_records_root(tmp_
 
 
 def test_the_records_command_fails_without_the_records(tmp_path):
-    """R12-F02: tools/catalog_records_check.sh, which the private merge and release gates run, requires the records, so a
+    """tools/catalog_records_check.sh requires the records, so a
     missing sidecar fails there where plain pytest skips"""
     env = dict(os.environ, PYTHON=sys.executable, MASHBOX_CATALOG_EVIDENCE=str(tmp_path / "none.json"))
     env.pop("MASHBOX_REQUIRE_RECORDS", None)
