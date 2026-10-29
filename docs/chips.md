@@ -26,7 +26,7 @@ The two TPU generations these docs use, side by side, and which one to pick. Spe
 <!-- chips:start -->
 | Model | Runs on | TPU v5e | TPU v6e | TPU v5p slice (v5p-8) | TPU v6e slice (v6e-4) |
 |---|---|---|---|---|---|
-| Hy-Nomas | TPU v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video (measured 26 October 2026). One-chip mode in `mashbox run` ships in the next release; this version starts on a v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | Supported: 4 chips |
+| Hy-Nomas | TPU v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. One-chip mode in `mashbox run` ships in the next release; this version starts on a v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | Supported: 4 chips |
 | Qwen3.8-27B | TPU v6e-1 | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: one chip (v6e-1) | Not supported | Supported: 4 chips, split across them automatically |
 <!-- chips:end -->
 
