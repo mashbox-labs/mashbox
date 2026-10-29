@@ -132,3 +132,25 @@ def test_frog_world_is_gone(capsys):
     live = server.Live(server.StubEngine(lambda *a: None), lambda *a: None, hw='STUB', stub=True)
     with pytest.raises(KeyError):
         live.api('/api/world', {'mode': 'preset', 'id': 'frog'})
+
+
+def test_crossfade_does_not_copy_the_part_and_blends_frame_by_frame():
+    """The live pacer crossfades each part between two frames 1/24 s apart. Blending 4 frames in f32 and copying the
+    whole 40-frame 720p part took 76-87 ms on a busy CPU build box (load 57), so the first frame after each part's held
+    tail went out late (8 of 365 frames in a stub run slower than real time, at g = 36, 76, 156, ...). The part is now
+    read in place: frames past the overlap are the decoder's own frames, overlap frames are blended when read, pixel for
+    pixel the same as before; np.asarray gives the whole part (the --out writer)."""
+    rng = np.random.default_rng(5)
+    frames = rng.integers(0, 256, (40, 8, 16, 3), dtype=np.uint8)
+    hold = rng.integers(0, 256, (4, 8, 16, 3), dtype=np.uint8)
+    wv = ((np.arange(4) + 1) / 5).astype(np.float32)[:, None, None, None]
+    bl = np.clip(np.round(hold.astype(np.float32) * (1 - wv) + frames[:4].astype(np.float32) * wv), 0, 255).astype(np.uint8)
+    want = np.concatenate([bl, frames[4:]])[:-4]
+    out, tail = server.crossfade(frames, hold, 4)
+    assert out.shape == want.shape and len(out) == 36
+    assert all(np.array_equal(out[f], want[f]) for f in range(36))
+    assert np.array_equal(np.asarray(out), want) and np.array_equal(np.ascontiguousarray(out), want)
+    assert all(np.shares_memory(out[f], frames) for f in range(4, 36)) and np.shares_memory(tail, frames)
+    first, tail0 = server.crossfade(frames, None, 4)               # first part: nothing to blend
+    assert np.shares_memory(first[0], frames) and np.array_equal(np.asarray(first), frames[:-4])
+    assert server.crossfade(frames, None, 0)[0] is frames

@@ -13,7 +13,6 @@ import base64
 import collections
 import hashlib
 import json
-import os
 import queue
 import re
 import socket
@@ -1260,12 +1259,33 @@ class Live:
             self.stream.close()
 
 
+class Faded:
+    """A part's frames with the crossfade applied when each frame is read. The pacer reads one frame per 1/24 s; blending
+    the overlap and copying the whole part at once took longer than one frame on a busy host (76-87 ms for a 40-frame
+    720p part), so the first frame of every part went out late. Frames past the overlap are the part's own frames."""
+
+    def __init__(self, frames, hold, ovn):
+        self.frames, self.hold, self.ovn = frames, hold, ovn
+        self.shape = (frames.shape[0] - ovn,) + frames.shape[1:]
+
+    def __len__(self):
+        return self.shape[0]
+
+    def __getitem__(self, f):
+        if f < 0 or f >= self.shape[0]:
+            raise IndexError(f)
+        if self.hold is None or f >= self.ovn:
+            return self.frames[f]
+        w = np.float32((f + 1) / (self.ovn + 1))
+        return np.clip(np.round(self.hold[f].astype(np.float32) * (1 - w) + self.frames[f].astype(np.float32) * w), 0, 255).astype(np.uint8)
+
+    def __array__(self, dtype=None, copy=None):
+        a = np.stack([self[f] for f in range(len(self))]) if len(self) else self.frames[:0].copy()
+        return a if dtype is None else a.astype(dtype)
+
+
 def crossfade(frames, hold, ovn):
     """Blend the first ovn frames of a part into the held tail of the previous part; hold back this part's own tail."""
     if not ovn:
         return frames, None
-    if hold is not None:
-        wv = ((np.arange(ovn) + 1) / (ovn + 1)).astype(np.float32)[:, None, None, None]
-        bl = np.clip(np.round(hold.astype(np.float32) * (1 - wv) + frames[:ovn].astype(np.float32) * wv), 0, 255).astype(np.uint8)
-        frames = np.concatenate([bl, frames[ovn:]])
-    return frames[:-ovn], frames[-ovn:]
+    return Faded(frames, hold, ovn), frames[-ovn:]
