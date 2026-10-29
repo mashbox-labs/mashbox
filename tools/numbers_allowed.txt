@@ -104,3 +104,27 @@ src/mashbox/models/hy_nomas/page.html | rate 25 move speed 1.00x | default camer
 src/mashbox/models/hy_nomas/page.html | the picture stays at 24 fps | the model's frame rate (design)
 src/mashbox/models/hy_nomas/page.html | the clock jumps after 0.5 s | the sync setting's threshold (a setting)
 docs/models/hy-nomas.md | A v5e chip has 16 GB, and the video decoder takes | a TPU v5e chip's memory (Google's spec)
+docs/models/track2rig.md | 2.76M-parameter network (11 MB of weights) | size of track2rig-v2.safetensors (models.json files)
+docs/models/track2rig.md | downloads `track2rig-v2.safetensors` (11 MB) from | size of track2rig-v2.safetensors (models.json files)
+docs/models/track2rig.md | 2,764,416 parameters, 11 MB, sha256 | size of track2rig-v2.safetensors (models.json files)
+docs/models/track2rig.md | the whole model is 11 MB and loads | size of track2rig-v2.safetensors (models.json files)
+docs/models/track2rig.md | Linux with one NVIDIA RTX PRO 4000 Blackwell (24 GB) or one NVIDIA L4 (24 GB), Python 3.10 | GPU model names and memory, NVIDIA's published specs
+docs/models/track2rig.md | On one NVIDIA RTX PRO 4000 Blackwell SFF Edition (24 GB) with an Intel Core i5-13500 | GPU and CPU model names and GPU memory, NVIDIA's and Intel's published specs
+docs/models/track2rig.md | tracking noise (Gaussian, 0.5% of the diagonal) | test protocol setting, not a result
+docs/models/track2rig.md | and at least 20% of track samples | test protocol setting, not a result
+templates/hf/card-rig.md | downloads `track2rig-v2.safetensors` (11 MB) from this repo | size of track2rig-v2.safetensors (models.json files)
+docs/models/track2rig.md | Synthetic creatures (16 unseen) | 32 | | number of clips in the test set
+docs/models/track2rig.md | Artist-rigged animals | 43 | | number of clips in the test set
+packages/track2rig-video/README.md | NVIDIA GPU (tested: RTX PRO 4000 Blackwell and L4, 24 GB each) with a driver that supports CUDA 12.9, the CUDA version PyTorch is built for (tested: drivers 615.71.09 and 580.178.04) | GPU model names and memory, NVIDIA's published specs; CUDA version of the PyTorch build; driver versions of the two test machines
+packages/track2rig-video/README.md | RTX PRO 4000 Blackwell SFF Edition (24 GB, NVIDIA driver 615.71.09, PyTorch 2.8.0 built for CUDA 12.9) in a machine with an Intel Core i5-13500 and 64 GB RAM | test machine spec (model names, GPU memory, software versions)
+packages/track2rig-video/README.md | `--points N` | 1024 | | option default
+packages/track2rig-video/README.md | `--max-frames T` | 176 | | option default
+packages/track2rig-video/README.md | `--frame-step K` | 1 | | option default
+packages/track2rig-video/README.md | `--vis-thr P` | 0.5 | | option default
+packages/track2rig-video/README.md | If more than 10% of them fit | align's ground-fit threshold (a setting)
+packages/track2rig-video/README.md | travels less than 5% of its body size | align's travel threshold (a setting)
+packages/track2rig-video/README.md | whole body, with 0.5% noise | training noise level (a setting)
+packages/track2rig-video/README.md | with one array over 256 MiB once decompressed, or with more than 512 MiB in all | input size limits of the raw file align reads (settings in raw.py)
+packages/track2rig-video/README.md | body size between two frames | the camera-cut rule (a setting)
+packages/track2rig-video/README.md | in `refine_endpoints` on a 24 GB GPU | NVIDIA L4 memory, NVIDIA's published spec
+packages/track2rig-video/README.md | its first 5 seconds at every 2nd frame | clip trim setting of the example (--max-frames 60 --frame-step 2), not a measurement

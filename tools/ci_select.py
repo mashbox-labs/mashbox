@@ -27,7 +27,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 T0_TESTS = {"test_core.py"}                     # the T0 suite: static and registry checks, pytest only
-EXTRA = {"hy_nomas": "imageio-ffmpeg"}          # pip packages an area's tests need beyond .[dev] (the app server test)
+EXTRA = {"hy_nomas": "imageio-ffmpeg", "track2rig": "scipy"}          # pip packages an area's tests need beyond .[dev] (the app server test)
 T0_ONLY_DIRS = ("docs/", "licenses/", "hf/", "templates/", ".github/ISSUE_TEMPLATE/")
 CORE_TESTS = "+core"                            # run the core T1 job without expanding to every model
 T0_ONLY_FILES = {"llms.txt", "LICENSE", "LICENSE-KERNELS", ".github/pull_request_template.md", "tests/cpu/test_core.py"}

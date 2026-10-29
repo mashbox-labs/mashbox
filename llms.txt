@@ -17,6 +17,7 @@ Model code is open. Each model's TPU kernels ship compiled, as one bundle that `
 <!-- models:start -->
 - [Hy-Nomas](https://mashbox.gg/docs/models/hy-nomas): text and movement keys in, video out. World model. Runs on: TPU v6e slice (v6e-4).
 - [Qwen3.8-27B](https://mashbox.gg/docs/models/qwen3-8-27b): text in, text out. LLM. Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1), TPU v6e slice (v6e-4).
+- [Track2Rig](https://mashbox.gg/docs/models/track2rig): 3D point tracks in, rig (JSON and glTF) out. Rigging. Experimental. Runs on: TPU v6e.
 <!-- models:end -->
 
 ## Optional

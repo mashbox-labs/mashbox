@@ -22,6 +22,7 @@ Issues = "https://github.com/mashbox-labs/mashbox/issues"
 tpu = ["jax[tpu]==0.11.2"]
 cpu = ["jax==0.11.2"]
 dev = ["pytest", "jax==0.11.2", "torch", "transformers", "safetensors"]
+track2rig = ["scipy"]
 hy-nomas = ["torch>=2.5", "transformers==4.57.1", "pyyaml", "scipy", "imageio-ffmpeg", "pillow"]
 
 [project.scripts]

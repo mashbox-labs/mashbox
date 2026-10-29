@@ -415,12 +415,54 @@ def test_cloud_prices_check_catches_drift(tmp_path):
     assert len(problems) == 1 and "2.80" in problems[0], problems
     page = (ROOT / "docs" / "tpu-vs-gpu.md").read_text()
     assert "| $11.06 |" in page
-    views = sc.docs_views(json.loads((ROOT / "models.json").read_text()), ROOT, sc.Problems())
+    problems = sc.Problems()
+    views = sc.docs_views(json.loads((ROOT / "models.json").read_text()), ROOT, problems)
+    assert "docs/tpu-vs-gpu.md" in views, problems
     assert views["docs/tpu-vs-gpu.md"] == page
     assert views["docs/tpu-vs-gpu.md"] != page.replace("| $11.06 |", "| $3.00 |")
     cost = sc.cloud_block("cost", data, json.loads((ROOT / "models.json").read_text()))
     ceil = [line.split("|")[-2].strip() for line in cost.splitlines() if ", ceiling |" in line]
     assert len(ceil) == 3 and ceil[0] == ceil[1], ceil  # one chip and a v6e-4 have the same GB/s per $: same ceiling cost
+
+
+def test_every_cli_block_is_filled():
+    """Every <!-- cli:start CMD --> in a docs page is a block the sync check renders, a model's own command (`run
+    track2rig`) included. The Track2Rig page's options block once named a command the block pattern did not match, so
+    it stayed empty and the check passed."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    for page in sc.doc_pages(ROOT):
+        text = page.read_text()
+        blocks = sc.CLI_RE.findall(text)
+        assert text.count("<!-- cli:start ") == len(blocks), page
+        for _, cmd, body, _ in blocks:
+            assert body.strip().startswith("| Option |") or body.strip() == "No options.", (page.name, cmd)
+
+
+def test_number_markers_in_package_pages_are_checked(tmp_path):
+    """A number marker in a package page (packages/<name>/README.md) is filled from the named figures like a docs page: a
+    stale value there fails the check (the video README once kept an old clip's numbers and passed). The figures live in
+    the number map (internal/numbers.json); a tree without the map keeps its markers, so the page is read with them."""
+    import importlib.util
+    import shutil
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    reg = json.loads((ROOT / "models.json").read_text())
+    nmap = sc.load_numbers(ROOT)
+    if nmap is not None:
+        sc.merge_figures(reg, nmap)
+    else:   # the public tree holds no number map: give one model a figure, the page must be filled from it the same way
+        reg["models"][0]["figures"] = {"t": {"text": "7 s", "what": "stand-in figure", "date": "2026-10-29"}}
+    m = next(x for x in reg["models"] if x.get("figures"))
+    key, fig = next(iter(m["figures"].items()))
+    (tmp_path / "packages" / "p").mkdir(parents=True)
+    page = tmp_path / "packages" / "p" / "README.md"
+    page.write_text(f"Took <!-- r:{m['id']}/{key} -->not the figure<!-- /r -->.\n")
+    views = sc.render_all(reg, tmp_path, None, ROOT / "templates" / "hf", sc.Problems())
+    assert views.get("packages/p/README.md") == f"Took <!-- r:{m['id']}/{key} -->{fig['text'].split(' (')[0]}<!-- /r -->.\n", views.get("packages/p/README.md")
 
 
 def test_licence_check_catches_drift(tmp_path):
@@ -457,6 +499,23 @@ def test_cli_dispatches_only_parsed_commands():
              and any(isinstance(x, ast.Name) and x.id == "argv" for x in ast.walk(n))
              for c in ast.walk(n) if isinstance(c, ast.Constant) and isinstance(c.value, str)}
     assert words <= {"tpu", "run", "download", ".", "-"}, f"main() dispatches {sorted(words - {'tpu', 'run', 'download', '.', '-'})} before argparse"
+
+
+def test_cli_model_lists_come_from_the_catalog():
+    """The CLI's runnable models and the models with their own command line come from models.json rows, never from ids
+    typed into cli.py (ARCHITECTURE-v1 section 5): a row is runnable when the package its path names ships in this version,
+    and parses its own `run` / `download` options when that package's __init__ defines main(cmd, argv)."""
+    from mashbox import cli
+    fake = {"models": [
+        {"id": "demo-own-cli", "path": "src/mashbox/models/track2rig"},       # a package with main(cmd, argv)
+        {"id": "demo-engine-run", "path": "src/mashbox/models/qwen3_8_27b"},  # a package the engine's own run serves
+        {"id": "demo-absent", "path": "src/mashbox/models/not_in_this_version"},
+        {"id": "demo-outside", "path": "src/mashbox/runtime"},
+        {"id": "demo-no-path", "path": None}]}
+    assert cli.catalog_runtimes(fake) == (("demo-own-cli", "demo-engine-run"), {"demo-own-cli": "mashbox.models.track2rig"})
+    reg = json.loads((ROOT / "models.json").read_text())
+    assert (cli.RUNNABLE, cli.MODEL_CLI) == cli.catalog_runtimes(reg)
+    assert set(cli.RUNNABLE) == {m["id"] for m in reg["models"] if m.get("launch") is None}
 
 
 def test_run_stops_cleanly_for_a_model_without_its_runtime(capsys):

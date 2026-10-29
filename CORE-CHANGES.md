@@ -183,11 +183,25 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 4. **`OWNERS.md`:** core rows for the shell and its test.
 5. **`shell.css`:** `.mbx-seg` also marks `button.sel` (and `aria-pressed="true"`) as the chosen button; from 901 to 1100px the top bar's site links take less padding so all six fit at 1024. Why: the world model page's script toggles `.sel`, and at 1024 the top bar clipped its last link. Compatible: `.on` works as before; wider and narrower layouts are unchanged.
 
+### Track2Rig, our own CPU model
+
+1. **`cli.py`:** `track2rig` joins `RUNNABLE` and `MODEL_CLI` (`mashbox run track2rig TRACKS.npz`, `mashbox download track2rig`), as Hy-Nomas. Compatible: other model ids parse as before.
+2. **`pyproject.toml`:** new extra `track2rig = ["scipy"]`. Inference needs only `jax` (the `cpu` extra) and `numpy`. Compatible: the base install is unchanged.
+3. **`tools/hf_github_sync_check.py`:** kind `rig` (HF repo named after the model, no suffix); a model with `upstream.own: true` has no `base_model` in its card; `rig` cards are tagged `jax, mashbox, rigging, animation, gltf` (no `tpu`); a release accepts `chips.cpu` passing when every TPU chip row says "not supported" with a reason; the hero image's alt text does not say TPU for a `rig` model; a `rig` model's files table is File, Format, Size, Note (no quality or speed columns, which are for weight variants); the chips table names the CPU as where a model with no `cloud` block runs; the number marker `r:MODEL/chip-cpu` shows a CPU model's `chips.cpu` row with its condition, as `chip-v5e` does for a TPU row. Compatible: existing kinds render byte-identical cards (test_views_match_models_json).
+4. **`tools/hf_github_sync_check.py` maturity label and `hf_tag`:** the README models table, the org profile and `llms.txt` print the plain label "Experimental" next to a model whose row sets `catalog.experimental: true` (Track2Rig), from that flag only; a row carrying the old `stage` text is refused. A `rig` model with a pinned `hf_revision` names it by date in `hf_tag` (YYYY-MM-DD, the Hugging Face tag of that weights version), and its card prints that version. Compatible: rows with `experimental: false` and no `hf_tag` render as before.
+5. **`tools/hf_github_sync_check.py` `_package`:** a `mashbox` already in the module cache from somewhere other than `<repo>/src` (an installed copy, or another tree checked earlier in the same process) is dropped before importing. Why: in one pytest process with a non-editable install, `check_numbers` on a temporary tree imported the installed copy, every later call refused it, and `docs_views` returned nothing. Compatible: a run with one tree behaves as before.
+6. **`tools/hf_github_sync_check.py` CLI blocks:** a `cli:start` block may name a model's own command line (`run track2rig`, `run track2rig eval`), rendered from that model's parser; a page under `packages/<name>/` may use the flags of that package's own parser. Compatible: other blocks render as before.
+7. **`tools/ci_select.py`:** the `track2rig` area installs `scipy`.
+8. **`templates/hf/card-rig.md`:** new card template for the `rig` kind.
+9. **`.github/workflows/ci.yml`:** job `track2rig-video` runs `packages/track2rig-video/tests` on Python 3.10 (the tracker's version). Compatible: a new job; T0 and T1 unchanged.
+10. **New top-level folders:** `packages/` (a separately installed package that cannot share the `mashbox` environment: `track2rig-video` needs Python 3.10 for its tracker) and `examples/` (per-model example inputs, `examples/<id>/`).
+
 ### Docs checks
 
 1. **`tools/docs_lint.py` (T0, `test_public_text_is_clean`):** public pages, cards, chart captions, `models.json` text and CLI strings describe the release in the present tense. It fails on dates outside this changelog and licence text, on status or plan notes and on hidden comments in public Markdown. A line that must keep a hit goes in `tools/docs_lint_allow.txt` with the reason.
 2. **Support tables** say "Supported" or "Not supported" with the reason; a chip row without a result says "Not tested" and stops a release (`check --release`).
-3. **`tools/docs_lint.py` allow lines:** an allow line covers each hit inside its words wherever they appear on the line, not only the first place. Why: a support table row prints a chip's cell once per chip. Compatible: a hit outside the allowed words, or on another page, still fails.
+3. **`tools/hf_github_sync_check.py` chips never run:** a chip a model has not been run on says `"status": "pending"` with `not_run_reason` (why it has not been run), and the support tables print `Not tested yet` for it, never "Not supported". `check --release` accepts a `pending` chip only with a non-empty `not_run_reason`; without one it still stops a release, as do `failing` and a missing status. `not_run_reason` sits only on a `pending` chip. Why: a chip the model never ran on is not a finding, so its row never claims "Not supported". Compatible: rows without a `pending` chip render as before.
+4. **`tools/docs_lint.py` allow lines:** an allow line covers each hit inside its words wherever they appear on the line, not only the first place. Why: a support table row prints a chip's cell once per chip. Compatible: a hit outside the allowed words, or on another page, still fails.
 
 ## 0.1.1
 

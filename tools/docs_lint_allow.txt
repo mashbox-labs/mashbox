@@ -15,9 +15,12 @@ src/mashbox/tpu/__init__.py | install.sh (and staging files) | 1 | the files cop
 src/mashbox/tpu/__init__.py | %H:%M UTC | 2 | a time format: the person's own delete deadline, printed in UTC
 src/mashbox/tpu/__init__.py | from an earlier run. Delete it | 1 | the person's own chip, left from an earlier command
 src/mashbox/ui/app/__init__.py | not yet serving | 1 | the state of a server the function returns
-README.md | Not tested yet | 3 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
-docs/chips.md | Not tested yet | 3 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
-docs/faq.md | Not tested yet | 3 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
+docs/models/track2rig.md | Track2Rig is experimental. It does not work well on many clips yet. | 1 | the release's experimental notice (Track2Rig is experimental; newer weights come as dated versions)
+hf/track2rig/README.md | It does not work well on many clips yet. | 1 | the release's experimental notice (Track2Rig is experimental; newer weights come as dated versions); the card prints the models.json summary
+models.json | It does not work well on many clips yet. | 1 | the release's experimental notice (Track2Rig is experimental; newer weights come as dated versions); the summary the card and catalog print
+README.md | Not tested yet | 6 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported (Hy-Nomas v5e and v5p-8, Qwen3.8-27B v5p-8; Track2Rig is a CPU model: v5e, v5p-8 and v6e-4 not run)
+docs/chips.md | Not tested yet | 6 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported (Hy-Nomas v5e and v5p-8, Qwen3.8-27B v5p-8; Track2Rig is a CPU model: v5e, v5p-8 and v6e-4 not run)
+docs/faq.md | Not tested yet | 6 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported (Hy-Nomas v5e and v5p-8, Qwen3.8-27B v5p-8; Track2Rig is a CPU model: v5e, v5p-8 and v6e-4 not run)
 docs/models/hy-nomas.md | Not tested yet | 4 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
 docs/models/qwen3-8-27b.md | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
 hf/hy-nomas/README.md | Not tested yet | 2 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported

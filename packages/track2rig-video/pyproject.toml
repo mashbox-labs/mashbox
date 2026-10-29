@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "track2rig-video"
+version = "0.1.0"
+description = "Video in, dense 3D point tracks of the moving subject out, as the tracks.npz that Track2Rig reads."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "MASHBOX Labs", email = "hello@mashbox.gg" }]
+keywords = ["point tracking", "rigging", "animation", "video", "3d"]
+# numpy and scipy are left loose here: the tracker's own pinned requirements (installed by
+# install_trackeverything.sh) set them. The align step needs only these.
+dependencies = ["numpy>=1.24", "scipy>=1.10", "pillow>=10", "imageio[pyav]>=2.31", "huggingface_hub>=0.20"]
+
+[project.optional-dependencies]
+mask = ["rembg[gpu]==2.0.69"]
+test = ["pytest>=8"]
+
+[project.scripts]
+track2rig-video = "track2rig_video.cli:main"
+
+[project.urls]
+Homepage = "https://mashbox.gg"
+Source = "https://github.com/mashbox-labs/mashbox/tree/main/packages/track2rig-video"
+
+[tool.setuptools.packages.find]
+where = ["src"]

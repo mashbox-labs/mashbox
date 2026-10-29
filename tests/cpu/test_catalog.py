@@ -1694,6 +1694,24 @@ def test_the_code_set_is_the_reviewed_v1_and_names_only_files_of_this_tree():
     assert all(set(gguf_code_files(ROOT, a)) >= set(GGUF_CODE) for a in arch_module_files())
 
 
+def test_code_link_of_a_model_newer_than_the_release_pins_to_the_release_that_ships_it():
+    """A model added after the last tag is not in that tag: its code link (README, tables, HF card) names its
+    card_release, and the README's pin pass keeps that newer pin; links of an older release still move to the current one."""
+    reg = copy.deepcopy(REG)
+    reg["version"] = "0.1.3"
+    new, old = SC.live(reg)[:2]
+    new["card_release"], old["card_release"] = "0.1.4", "0.1.2"
+    base = f"{SC.gh_base(reg)}/tree/"
+    assert SC.code_url(reg, new) == f"{base}v0.1.4/{new['path']}"
+    assert SC.code_url(reg, old) == f"{base}v0.1.3/{old['path']}"
+    p = SC.Problems()
+    readme = SC.pin_links(reg, ROOT, SC.models_table(reg, absolute=False), "README.md", p)
+    assert p == []
+    assert f"({base}v0.1.4/{new['path']})" in readme and f"({base}v0.1.3/{old['path']})" in readme
+    moved = SC.pin_links(reg, ROOT, f"[a]({base}v0.1.2/{old['path']}) [b]({base}v0.1.4/{new['path']})", "README.md", p)
+    assert moved == f"[a]({base}v0.1.3/{old['path']}) [b]({base}v0.1.4/{new['path']})" and p == []
+
+
 def test_record_guard_refuses_a_record_linked_from_outside_the_records_root(tmp_path):
     """The root rule: a seal line that names a link inside the row folder to bytes outside the records root"""
     reg, ev = _fake_records(tmp_path)
@@ -2030,3 +2048,45 @@ def test_every_command_a_message_names_is_a_command():
                 bad += [f"{p.relative_to(ROOT)}:{node.lineno}: mashbox {w}"
                         for w in re.findall(r"`mashbox ([a-z][a-z0-9-]*)", node.value) if w not in sub.choices]
     assert bad == []
+
+
+def test_release_accepts_pending_on_a_released_row_only_with_its_not_run_reason():
+    """A chip never run is not a finding, so it is never marked "not supported": under --release a released row may
+    say "pending" for a chip it has not run on when the chip entry carries an explicit not_run_reason; the pages print
+    "Not tested yet" for it, never "Not supported". "pending" with no not_run_reason (an empty one, or only the
+    measured-failure "reason" field) still fails, and so do "failing" and a missing status. not_run_reason sits only on
+    a pending chip."""
+    base = next(m for m in REG["models"] if m["kind"] != "llm-gguf" and not m.get("launch"))
+    chip = SC.CHIPS[0]
+
+    def row_problems(entry, release=True):
+        reg = copy.deepcopy(REG)
+        row = next(r for r in reg["models"] if r["id"] == base["id"])
+        if entry is None:
+            row["chips"].pop(chip, None)
+        else:
+            row["chips"][chip] = entry
+        p = SC.Problems()
+        SC.validate(reg, ROOT, p, release=release)
+        return [x for x in p if re.match(rf"models\[\d+\] {re.escape(base['id'])}: ", x)
+                and ("every chip must be passing" in x or "not_run_reason" in x)]
+
+    why = "CPU model: runs on the CPU, no TPU needed"
+    assert row_problems({"status": "pending", "not_run_reason": why}) == []
+    assert row_problems({"status": "pending", "not_run_reason": why}, release=False) == []
+    for bad in ({"status": "pending"}, {"status": "pending", "not_run_reason": "  "},
+                {"status": "pending", "reason": why}, {"status": "failing", "date": "2026-10-29", "reason": "x y"}, None):
+        assert any("every chip must be passing" in x for x in row_problems(bad)), bad
+    for st in ({"status": "passing", "date": "2026-10-29"}, {"status": "not supported", "reason": "x y"},
+               {"status": "failing", "date": "2026-10-29", "reason": "x y"}):
+        assert any("not_run_reason" in x for x in row_problems({**st, "not_run_reason": why}, release=False)), st
+    assert any("not_run_reason" in x for x in row_problems({"status": "pending", "not_run_reason": " "}, release=False))
+
+    m = copy.deepcopy(base)
+    m["chips"][chip] = {"status": "pending", "not_run_reason": why}
+    assert SC.chip_cell(m, chip) == "Not tested yet"
+    assert SC.chip_text(m, chip) == "Not tested yet"
+    assert [r for r in SC.chips_table(m).splitlines() if SC.CHIP_LABEL[chip] in r and "Not tested yet" in r]
+    assert "Not supported" not in SC.chip_text(m, chip) + SC.chips_table(m).split(SC.CHIP_LABEL[chip], 1)[1].split("\n", 1)[0]
+    m["chips"][chip]["note"] = "Runs on the host CPU"
+    assert SC.chip_text(m, chip) == "Not tested yet"

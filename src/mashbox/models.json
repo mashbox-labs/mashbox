@@ -682,6 +682,174 @@
           "guide": "https://mashbox.gg/docs/agents-on-tpu"
         }
       }
+    },
+    {
+      "id": "track2rig",
+      "name": "Track2Rig",
+      "kind": "rig",
+      "version": "0.1.0",
+      "summary": "Our own model: dense 3D point tracks of a moving creature in, a rig out (bones, skin weights, per-frame bone transforms and a skeleton). Runs on a CPU. It does not work well on many clips yet. Newer weights will be published as dated versions.",
+      "catalog": {
+        "source": "ours",
+        "format": "own-model",
+        "family": "Track2Rig",
+        "params_b": {
+          "total": null,
+          "active": null
+        },
+        "experimental": true,
+        "number": null
+      },
+      "in": "3D point tracks",
+      "out": "rig (JSON and glTF)",
+      "path": "src/mashbox/models/track2rig",
+      "run": "mashbox run track2rig examples/track2rig/tracks/grison_walk.npz -o grison_rig",
+      "install": "python3 -m pip install \"mashbox[cpu,track2rig]\"",
+      "upstream": {
+        "name": "Track2Rig",
+        "maker": "MASHBOX Labs",
+        "hf": "mashbox-labs/Track2Rig",
+        "github": null,
+        "own": true,
+        "license": "apache-2.0",
+        "license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "note": "Trained from scratch by MASHBOX Labs; code and weights Apache-2.0."
+      },
+      "hf_repo": "mashbox-labs/Track2Rig",
+      "hf_revision": "98288e783744b76824bb37be39cc4e086e5ce239",
+      "hf_tag": "2026-10-29",
+      "card_release": "0.1.4",
+      "pipeline_tag": null,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "date": "2026-10-28",
+          "note": "tested on a TPU v6e-1 VM: mashbox run track2rig runs on the VM's host CPU (AMD EPYC 9B14)"
+        },
+        "v5e": {
+          "status": "pending",
+          "not_run_reason": "CPU model: runs on the CPU, no TPU needed"
+        },
+        "v5p-8": {
+          "status": "pending",
+          "not_run_reason": "CPU model: runs on the CPU, no TPU needed"
+        },
+        "v6e-4": {
+          "status": "pending",
+          "not_run_reason": "CPU model: runs on the CPU, no TPU needed"
+        },
+        "cpu": {
+          "status": "passing",
+          "date": "2026-10-28",
+          "note": "tested on x86-64 Linux: Intel Core i9-12900K and AMD EPYC 7502P"
+        }
+      },
+      "kernels": [],
+      "plain_jax": {
+        "status": "tested"
+      },
+      "results": [
+        {
+          "chip": "CPU (AMD EPYC 7502P)",
+          "metric": "Held-out reconstruction error, synthetic test set (32 clips, noisy and partly hidden tracks), % of body size, lower is better",
+          "value": "0.784",
+          "date": "2026-10-24",
+          "baseline": "SSDR, our 30-iteration NumPy/SciPy implementation, same bone count: 0.915"
+        },
+        {
+          "chip": "CPU (AMD EPYC 7502P)",
+          "metric": "Joint error, synthetic test set, % of body size, lower is better",
+          "value": "6.24",
+          "date": "2026-10-24",
+          "baseline": "SSDR, same implementation and inputs: 7.73"
+        }
+      ],
+      "headline": [
+        {
+          "results": [
+            0
+          ],
+          "big": "0.784% vs 0.915%",
+          "label": "held-out error vs SSDR at the same bone count, synthetic test set with noisy, partly hidden tracks, % of body size, lower is better",
+          "readme": true
+        },
+        {
+          "results": [
+            1
+          ],
+          "big": "6.24% vs 7.73%",
+          "label": "joint error vs SSDR, % of body size, lower is better",
+          "readme": true
+        }
+      ],
+      "files": [
+        {
+          "name": "track2rig-v2.safetensors",
+          "kind": "weights",
+          "default": true,
+          "format": "safetensors",
+          "gb": 0.011,
+          "bytes": 11062200,
+          "sha256": "f8a79263dc21d2af078c123fbf76c2cba85df4694100f6a6c5e8f7608f6094b6",
+          "note": "float32, 55 tensors, 2,764,416 parameters"
+        },
+        {
+          "name": "examples/clips/glass-snake_idle.npz",
+          "kind": "example",
+          "format": "npz",
+          "gb": 0.0029,
+          "bytes": 2890071,
+          "sha256": "4a24a48ce0f27dee18d15bda7c40f9e5e5d915624109e94e50018e33002a3118"
+        },
+        {
+          "name": "examples/clips/glass-snake_walk.npz",
+          "kind": "example",
+          "format": "npz",
+          "gb": 0.0029,
+          "bytes": 2887989,
+          "sha256": "120441f89ec04afb292300e3182c48dfd5a35a3eca557deb3ab5ccf88b466042"
+        },
+        {
+          "name": "examples/clips/grison_idle.npz",
+          "kind": "example",
+          "format": "npz",
+          "gb": 0.0022,
+          "bytes": 2155793,
+          "sha256": "e96ea14faee04083d02a522582e40973bc00f3441c94450ed088c288aff23898"
+        },
+        {
+          "name": "examples/clips/grison_walk.npz",
+          "kind": "example",
+          "format": "npz",
+          "gb": 0.0021,
+          "bytes": 2050668,
+          "sha256": "a0aa9d59a209651e36766be6bd92dfde0ecc26baa3ec3716707a5c94b3773cbf"
+        },
+        {
+          "name": "examples/clips/pelican-spider_idle.npz",
+          "kind": "example",
+          "format": "npz",
+          "gb": 0.0025,
+          "bytes": 2490442,
+          "sha256": "b675ffdce03e05a0e901344328e9f2649aa87be82cdbbb672301ebd0bf03adf9"
+        },
+        {
+          "name": "examples/clips/pelican-spider_walk.npz",
+          "kind": "example",
+          "format": "npz",
+          "gb": 0.0027,
+          "bytes": 2688084,
+          "sha256": "91f655b724d7188423e042619b3f5cd66d79dc3500c89285f6c8968d23a50b55"
+        },
+        {
+          "name": "examples/clips/reference.json",
+          "kind": "example",
+          "format": "json",
+          "gb": 0.0,
+          "bytes": 4152,
+          "sha256": "6292fa8f832d7f5dc3297e4e30a1f06a33e5b57dd2be3854533b054339967c99"
+        }
+      ]
     }
   ],
   "gguf": [],

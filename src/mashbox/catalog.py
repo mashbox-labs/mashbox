@@ -17,7 +17,7 @@ import json
 import os
 
 KIND_LABEL = {"llm-gguf": "LLM, GGUF", "llm-tpu": "LLM", "world": "World model", "video": "Video", "image": "Image",
-              "voice": "Voice"}
+              "voice": "Voice", "rig": "Rigging"}
 FORMAT_LABEL = {"bshj-build": "BSHJ build", "port": "TPU port", "own-model": "MASHBOX model"}
 LEVELS = ("MASHBOX build", "Tuned", "Tested", "Architecture supported")
 MASHBOX = "MASHBOX Labs"

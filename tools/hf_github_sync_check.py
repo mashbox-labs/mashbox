@@ -74,6 +74,7 @@ KINDS = {
     "video": {"suffix": "-TPU", "label": "Video"},
     "image": {"suffix": "-TPU", "label": "Image"},
     "voice": {"suffix": "-TPU", "label": "Voice"},
+    "rig": {"suffix": "", "label": "Rigging"},   # our own CPU models (Track2Rig): HF repo = the model name
 }
 CHIPS = ("v5e", "v6e", "v5p-8", "v6e-4")      # the chip types people rent: v5e, v6e, a v5p slice and a v6e slice
 CHIP_LABEL = {"v5e": "TPU v5e", "v6e": "TPU v6e", "v5p-8": "TPU v5p slice (v5p-8)", "v6e-4": "TPU v6e slice (v6e-4)"}
@@ -84,6 +85,7 @@ ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DATE_TAG_RE = re.compile(r"^20[0-9]{2}-[01][0-9]-[0-3][0-9]$")   # a dated weights version (own models)
 BIT_LABEL_RE = re.compile(r"\d+[-_ ]?bit\b", re.I)  # our files are named by bpw, never "N-bit"
 PRIVATE_RE = re.compile(r"private", re.I)   # models.json is public: no private repository's name in it, at any depth
 DEFAULT_TEMPLATES = Path(__file__).resolve().parent.parent / "org" / "templates" / "hf"
@@ -131,6 +133,10 @@ def validate(reg, repo_root, problems, release=False):
             continue
         if m.get("launch") not in (None, "coming soon"):
             problems.add(where, "launch must be \"coming soon\" or absent")
+        if "stage" in m:
+            problems.add(where, "stage is not a field: the Experimental label comes from catalog.experimental")
+        if m["kind"] == "rig" and m["hf_revision"] is not None and not DATE_TAG_RE.match(str(m.get("hf_tag"))):
+            problems.add(where, "hf_tag must name the pinned weights revision by its date (YYYY-MM-DD)")
         if not ID_RE.match(m["id"]):
             problems.add(where, "id must be lower case words joined by hyphens")
         if m["id"] in seen:
@@ -173,6 +179,9 @@ def validate(reg, repo_root, problems, release=False):
                 problems.add(where, f"chips.{chip} {c['status']} needs a date YYYY-MM-DD")
             if c["status"] == "failing" and not c.get("reason"):
                 problems.add(where, f"chips.{chip} 'failing' needs the measured reason")
+            if "not_run_reason" in c and (c["status"] != "pending" or not str(c["not_run_reason"]).strip()):
+                problems.add(where, f"chips.{chip}.not_run_reason says why a pending chip has not been run: only on a "
+                                    "pending chip, never empty")
         for j, r in enumerate(m["results"]):
             for key in ("chip", "metric", "value", "date", "baseline"):
                 if not str(r.get(key, "")).strip():
@@ -251,10 +260,12 @@ def validate(reg, repo_root, problems, release=False):
                 problems.add(where, "release: hf_revision not pinned")
             if m["kind"] != "llm-gguf":
                 sts = [(m["chips"].get(c) or {}).get("status") for c in CHIPS]
-                if "passing" not in sts:
-                    problems.add(where, "release: no chip passing")
-                if any(x in ("pending", "failing", None) for x in sts):
-                    problems.add(where, "release: every chip must be passing or not supported (with reason)")
+                if "passing" not in sts and (m["chips"].get("cpu") or {}).get("status") != "passing":
+                    problems.add(where, "release: no chip passing (TPU, or the CPU for a CPU-only model)")
+                # a chip never run says "pending" with its not_run_reason, never a false "not supported"
+                if any(x in ("failing", None) or (x == "pending" and not not_run_reason(m, c)) for c, x in zip(CHIPS, sts)):
+                    problems.add(where, "release: every chip must be passing or not supported (with reason), or pending "
+                                        "with its not_run_reason")
             for j, f in enumerate(m["files"]):
                 if f.get("variant") and not (f.get("quality") and f.get("speed") and f.get("date")):
                     problems.add(where, f"release: variant files[{j}] needs measured quality, speed and date")
@@ -478,7 +489,15 @@ def gh_base(reg):
 
 
 def code_url(reg, m):
-    return f"{gh_base(reg)}/tree/v{reg['version']}/{m['path']}"
+    """The model's code at the release that ships it: the registry release, or the model's card_release when that is
+    newer (a model added after the last tag lives in the next one; v0.1.3 has no track2rig folder)."""
+    v, cr = reg["version"], m.get("card_release")
+    return f"{gh_base(reg)}/tree/v{cr if ver_newer(cr, v) else v}/{m['path']}"
+
+
+def ver_newer(a, b):
+    """True when version a ("0.1.4") is set and newer than version b."""
+    return bool(a) and tuple(map(int, a.split("."))) > tuple(map(int, b.split(".")))
 
 
 def docs_url(m):
@@ -491,15 +510,21 @@ def chip_label(m, chip):
     return CHIP_LABEL[chip] + (f" ({acc})" if acc and acc not in (chip, CHIP_LABEL[chip].split("(")[-1].rstrip(")")) else "")
 
 
+def not_run_reason(m, chip):
+    """Why a pending chip has not been run (models.json chips.<chip>.not_run_reason), "" when it states none. A released
+    row may say "pending" only with one; the pages print "Not tested yet", never "Not supported"."""
+    return str((m["chips"].get(chip) or {}).get("not_run_reason") or "").strip()
+
+
 def chip_cell(m, chip):
     """A chip's status for the released version: Supported or Not supported. The test date stays in models.json
-    (validate() needs it); public views never print it. A pending row reads "Not tested": it never claims a result,
-    and the release gate (validate --release) stops a release that still has one."""
+    (validate() needs it); public views never print it. A pending row reads "Not tested yet": it never claims a result,
+    and the release gate (validate --release) stops a release that has one without its not_run_reason."""
     st = (m["chips"].get(chip) or {}).get("status", "")
     if st == "passing":
         return "Supported"
     if st == "pending":
-        return "Not tested"
+        return "Not tested yet"
     return "Not supported" if st in ("failing", "not supported") else "n/a"
 
 
@@ -530,8 +555,9 @@ def live(reg):
 def models_table(reg, absolute):
     rows = []
     for m in live(reg):
-        link = code_url(reg, m) if absolute else m["path"]
-        rows.append([f"**[{m['name']}]({link})**<br>by {m['upstream']['maker']}",
+        # A model newer than the registry release is not in that tag: its README link pins to the release that ships it.
+        link = code_url(reg, m) if absolute or ver_newer(m.get("card_release"), reg["version"]) else m["path"]
+        rows.append([f"**[{m['name']}]({link})**<br>by {m['upstream']['maker']}" + experimental_note(m, "<br>"),
                      f"{KINDS[m['kind']]['label']}: {m['in']} in, {m['out']} out",
                      "<br>".join(f"{chip_label(m, c)}: {chip_note(m, c) or chip_cell(m, c)}" for c in CHIPS), readme_measured(m),
                      weights_cell(m)])
@@ -573,7 +599,7 @@ def profile_table(reg):
     rows = []
     for m in live(reg):
         passed = [CHIP_LABEL[c] for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
-        rows.append([f"**[{m['name']}]({code_url(reg, m)})** by {m['upstream']['maker']}",
+        rows.append([f"**[{m['name']}]({code_url(reg, m)})** by {m['upstream']['maker']}" + experimental_note(m, "<br>"),
                      f"{m['in']} in, {m['out']} out", profile_measured(m), ", ".join(passed) or "n/a"])
     return table(["Model", "What it does", "Measured", "Chips"], rows)
 
@@ -584,14 +610,24 @@ def runs_on(m):
     return f" Runs on: {', '.join(ok)}." if ok else ""
 
 
+def experimental(m):
+    """True when the row sets catalog.experimental (the one flag behind the "Experimental" label)."""
+    return bool((m.get("catalog") or {}).get("experimental"))
+
+
+def experimental_note(m, sep):
+    """The plain label "Experimental", printed with the model's name when catalog.experimental is true; "" otherwise."""
+    return f"{sep}Experimental" if experimental(m) else ""
+
+
 def llms_block(reg):
     return "\n".join(f"- [{m['name']}]({docs_url(m)}): {m['in']} in, {m['out']} out. {KINDS[m['kind']]['label']}."
-                     + runs_on(m) for m in live(reg))
+                     + experimental_note(m, " ") + ("." if experimental(m) else "") + runs_on(m) for m in live(reg))
 
 
 def front_matter(reg, m):
     up = m["upstream"]
-    lines = [f"base_model: {up['hf']}"]
+    lines = [] if up.get("own") else [f"base_model: {up['hf']}"]   # our own model has no base model
     if m.get("base_model_relation"):
         lines.append(f"base_model_relation: {m['base_model_relation']}")
     lines.append(f"license: {up['license']}")
@@ -600,6 +636,8 @@ def front_matter(reg, m):
     if m.get("pipeline_tag"):
         lines.append(f"pipeline_tag: {m['pipeline_tag']}")
     tags = ["tpu", "jax", "mashbox"] if m["kind"] != "llm-gguf" else ["gguf", "llama.cpp", "mashbox"]
+    if m["kind"] == "rig":
+        tags = ["jax", "mashbox", "rigging", "animation", "gltf"]   # CPU model: no tpu tag
     lines.append("tags:")
     lines += [f"- {t}" for t in tags]
     return "\n".join(lines)
@@ -636,6 +674,10 @@ def files_table(m):
            f"[{m['upstream']['hf']}](https://huggingface.co/{m['upstream']['hf']})."
     if not m["files"]:
         return lead
+    if m["kind"] == "rig":   # weights and example clips, no reduced-size variants: no quality or speed columns
+        size = lambda n: f"{n / 1e6:.1f} MB" if n >= 1e5 else f"{n / 1e3:.1f} KB"
+        return table(["File", "Format", "Size", "Note"],
+                     [[f"`{f['name']}`", f["format"], size(f["bytes"]), f.get("note") or f["kind"]] for f in m["files"]])
     rows = []
     for f in m["files"]:
         rows.append([f"`{f['name']}`", f["format"], f"{f['gb']:.2f}",
@@ -775,7 +817,8 @@ def hero(repo, m):
     if not gif.is_file():
         return ""
     cap = (gif.parent / "hero.txt").read_text().strip() if (gif.parent / "hero.txt").is_file() else ""
-    return (f'<img alt="{m["name"]} running on Google Cloud TPU" width="720" '
+    alt = f"{m['name']} preview" if m["kind"] == "rig" else f"{m['name']} running on Google Cloud TPU"
+    return (f'<img alt="{alt}" width="720" '
             f'src="https://huggingface.co/{m["hf_repo"]}/resolve/main/assets/hero.gif">\n\n' + (f"<sub>{cap}</sub>" if cap else ""))
 
 
@@ -859,7 +902,18 @@ def card_vars(reg, m, repo=None):
                                if any(f.get("kind") == "xla-cache" for f in m.get("files", [])) else ""))
                            if m.get("kernels") else "",
         "default_tag": (m.get("default_tag") or ""),
+        "weights_version": weights_version(m),
+        "maturity_label": experimental_note(m, ""),
     }
+
+
+def weights_version(m):
+    """One line naming the dated weights version (hf_tag); "" without one. It never prints the revision sha, so the card
+    reads the same before and after the upload that makes the revision models.json pins."""
+    if not m.get("hf_tag"):
+        return ""
+    return (f"Weights version `{m['hf_tag']}` (the Hugging Face tag of the revision `models.json` pins). Newer weights "
+            f"are published as new dated versions; a published version never changes.")
 
 
 def render_card(reg, m, templates, repo=None):
@@ -888,8 +942,8 @@ def pin_links(reg, repo, text, where, problems):
     from tree/), as the HF cards already pin code_url. Pinned URLs of an older version move to the current one."""
     org, name, ver = reg["github"]["org"], reg["github"]["repo"], reg["version"]
     old = re.compile(rf"(https://github\.com/{org}/{name}/(?:blob|tree)/|https://raw\.githubusercontent\.com/{org}/{name}/)"
-                     rf"v\d+\.\d+\.\d+(?=/)")
-    text = old.sub(lambda mt: mt.group(1) + "v" + ver, text)
+                     rf"v(\d+\.\d+\.\d+)(?=/)")
+    text = old.sub(lambda mt: mt.group(0) if ver_newer(mt.group(2), ver) else mt.group(1) + "v" + ver, text)
 
     def sub(mt):
         if mt.group(2) is not None:
@@ -968,7 +1022,7 @@ def render_all(reg, repo, profile, templates, problems, places=None):
 # ---------------------------------------------------------------- generated references (docs)
 # As llama.cpp's gen-docs and update-ops-docs: the docs are rendered from the code and CI fails when they differ.
 
-CLI_RE = re.compile(r"(<!-- cli:start ([a-z ]+) -->)(.*?)(<!-- cli:end -->)", re.S)
+CLI_RE = re.compile(r"(<!-- cli:start ([a-z0-9 -]+) -->)(.*?)(<!-- cli:end -->)", re.S)
 API_RE = re.compile(r"(<!-- api:start -->)(.*?)(<!-- api:end -->)", re.S)
 CHIPS_RE = re.compile(r"(<!-- chips:start -->)(.*?)(<!-- chips:end -->)", re.S)
 CATALOG_RE = re.compile(r"(<!-- catalog:start -->)(.*?)(<!-- catalog:end -->)", re.S)   # a docs page (mashbox.catalog)
@@ -1004,6 +1058,14 @@ def _package(repo, problems):
     src = str((repo / "src").resolve())
     if src not in sys.path:
         sys.path.insert(0, src)
+    cached = sys.modules.get("mashbox")
+    where = getattr(cached, "__file__", None)
+    if cached is not None and not (where and str(Path(where).resolve()).startswith(src)):
+        # an earlier call (another tree, or an installed copy) left a different mashbox in the module cache: drop it,
+        # else every later call refuses this tree's own package and renders no docs views
+        for name in [n for n in sys.modules if n == "mashbox" or n.startswith("mashbox.")]:
+            del sys.modules[name]
+        importlib.invalidate_caches()
     try:
         mods = {n: importlib.import_module(f"mashbox{n}") for n in ("", ".cli", ".tpu", ".runtime.openapi", ".catalog")}
     except Exception as e:
@@ -1066,6 +1128,19 @@ def cli_parsers(mods):
     return out
 
 
+def model_parser(mods, cmd):
+    """`run MODEL [FORM]` for a model with its own command line (cli.MODEL_CLI): the parser its app.parser(FORM) builds
+    (FORM defaults to run, as in `mashbox run track2rig --help`; `run track2rig eval` is its eval form). None for any
+    other command."""
+    import importlib
+    parts = cmd.split()
+    mod = getattr(mods[".cli"], "MODEL_CLI", {}).get(parts[1]) if len(parts) in (2, 3) and parts[0] == "run" else None
+    if mod is None:
+        return None
+    app = importlib.import_module(f"{mod}.app")
+    return app.parser(parts[2] if len(parts) == 3 else "run")
+
+
 def cli_page(mods):
     out = [f"<!-- {CLI_NOTE} -->", "# Command line", "",
            "Every `mashbox` command and option, rendered from the package's own parsers (`mashbox <command> --help` "
@@ -1095,13 +1170,14 @@ def chip_text(m, chip):
     if chip_note(m, chip):
         return chip_note(m, chip)
     why = c.get("note") if cell == "Supported" else (c.get("reason") or c.get("note"))
-    return cell + (f": {why}" if why and cell != "Not tested" else "")
+    return cell + (f": {why}" if why and cell != "Not tested yet" else "")
 
 
 def chips_block(reg):
     """Which chip each model runs on (the FAQ's and the chips page's table), from the models.json chips rows. Released
     models only, as every other view."""
-    rows = [[m["name"], f"TPU {m['cloud']['accelerator']}"] + [chip_text(m, c) for c in CHIPS] for m in live(reg)]
+    rows = [[m["name"], f"TPU {m['cloud']['accelerator']}" if m.get("cloud") else "CPU (on a TPU VM, the host CPU)"]
+            + [chip_text(m, c) for c in CHIPS] for m in live(reg)]
     return table(["Model", "Runs on"] + [CHIP_LABEL[c] for c in CHIPS], rows)
 
 
@@ -1136,6 +1212,12 @@ def docs_views(reg, repo, problems):
 
         def cli_sub(mt):
             p = by_cmd.get(mt.group(2).strip())
+            if p is None:
+                try:
+                    p = model_parser(mods, mt.group(2).strip())
+                except Exception as e:  # a model app that will not import stdlib-only, or a form its parser lacks
+                    problems.add(rel, f"cli block {mt.group(2)!r}: {type(e).__name__}: {e}")
+                    return mt.group(0)
             if p is None:
                 problems.add(rel, f"cli block names an unknown command: {mt.group(2)!r}")
                 return mt.group(0)
@@ -1307,7 +1389,7 @@ MARK_RE = re.compile(r"(<!-- r:([a-z0-9-]+)/([a-z0-9][a-z0-9_.-]*) -->)(.*?)(<!-
 
 def figure_text(reg, owner, key):
     """The text a number marker shows: r:MODEL/N is results[N] of that model (its short "ours" cell), r:MODEL/NAME is
-    its figures[NAME], r:MODEL/chip-v5e its chips row (status, date, why), r:MODEL/arg-ctx the value after --ctx in
+    its figures[NAME], r:MODEL/chip-v5e its chips row (status, why), r:MODEL/arg-ctx the value after --ctx in
     its cloud.agents.run_args, r:cloud/NAME is a top-level figure (chip waits, disk sizes: not one model's). None if
     absent."""
     if owner == "cloud":
@@ -1316,7 +1398,7 @@ def figure_text(reg, owner, key):
     m = next((x for x in reg["models"] if x["id"] == owner), None)
     if m is None:
         return None
-    if key.startswith("chip-") and key[5:] in CHIPS:
+    if key.startswith("chip-") and (key[5:] in CHIPS or key[5:] == "cpu"):   # chip-cpu: a CPU model's chips.cpu row
         return chip_text(m, key[5:])
     if key.startswith("arg-"):   # r:MODEL/arg-ctx: the value after --ctx in cloud.agents.run_args ("32,768")
         args = ((m.get("cloud") or {}).get("agents") or {}).get("run_args") or []
@@ -2029,6 +2111,17 @@ OTHER_FLAGS = {  # flags of other tools that the pages name in inline code: gclo
     "--no-enable-prefix-caching", "--durations"}   # and pytest (CI.md); --mbx-* are the shell's CSS variables
 
 
+def _package_flags(repo, rel):
+    """A page under packages/<name>/ documents that package's own command line: the flags its source adds."""
+    import ast
+    parts = Path(rel).parts
+    if len(parts) < 3 or parts[0] != "packages":
+        return set()
+    return {a.value for py in (Path(repo) / "packages" / parts[1]).rglob("*.py") for c in ast.walk(ast.parse(py.read_text()))
+            if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "add_argument"
+            for a in c.args if isinstance(a, ast.Constant) and str(a.value).startswith("-")}
+
+
 def check_commands(reg, repo, problems):
     """Every `mashbox ...` command in a page's code (blocks and inline) and every run_args list in models.json parses
     with the package's own parsers, and inline code made of flags names real flags (as vLLM checks its docs' commands).
@@ -2094,7 +2187,7 @@ def check_commands(reg, repo, problems):
         prose = INLINE_RE.sub(" ", FENCE_RE.sub(" ", text))
         for s in [x for x in spans if x.startswith("--")] + [mt.group(0) for mt in re.finditer(r"(?<![\w`-])--[A-Za-z][\w-]*", prose)]:
             for fl in re.findall(r"(?<![\w-])--[A-Za-z][\w-]*", s):
-                if fl not in flags and not fl.startswith("--mbx-"):
+                if fl not in flags and fl not in _package_flags(repo, rel) and not fl.startswith("--mbx-"):
                     problems.add(rel, f"`{s}`: {fl} is not an option of any mashbox command (docs/cli.md)")
     for m in reg["models"]:
         args = ((m.get("cloud") or {}).get("agents") or {}).get("run_args")

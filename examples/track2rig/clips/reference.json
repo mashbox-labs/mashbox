@@ -1,0 +1,179 @@
+{
+ "source": "rows recorded with these weights and this protocol (Track2Rig and SSDR at the same bone count, tracking noise on), AMD EPYC 7502P CPU, 8 clips in parallel",
+ "rows": [
+  {
+   "clip": "glass-snake_idle",
+   "method": "gt_rig",
+   "recon_heldout": 0.0014507985260504123,
+   "recon_tracked": 9.483931337518696e-05,
+   "j2j": 9.916663649140888,
+   "bones": 16,
+   "gt_bones": 27
+  },
+  {
+   "clip": "glass-snake_idle",
+   "method": "track2rig",
+   "recon_heldout": 0.6835129255166932,
+   "recon_tracked": 0.6070694069988047,
+   "j2j": 13.359711493524598,
+   "bones": 32,
+   "gt_bones": 27,
+   "secs": 0.18
+  },
+  {
+   "clip": "glass-snake_idle",
+   "method": "ssdr",
+   "recon_heldout": 0.7827200316200742,
+   "recon_tracked": 0.29520997538713123,
+   "j2j": 14.715879822012532,
+   "bones": 32,
+   "gt_bones": 27,
+   "secs": 132.7
+  },
+  {
+   "clip": "glass-snake_walk",
+   "method": "gt_rig",
+   "recon_heldout": 8.046233681854779e-05,
+   "recon_tracked": 0.0021719551098447216,
+   "j2j": 8.934110026996485,
+   "bones": 16,
+   "gt_bones": 27
+  },
+  {
+   "clip": "glass-snake_walk",
+   "method": "track2rig",
+   "recon_heldout": 0.6483334609956675,
+   "recon_tracked": 0.5998350659475913,
+   "j2j": 13.364869766806784,
+   "bones": 32,
+   "gt_bones": 27,
+   "secs": 0.18
+  },
+  {
+   "clip": "glass-snake_walk",
+   "method": "ssdr",
+   "recon_heldout": 0.9123915055578148,
+   "recon_tracked": 0.35639197832418346,
+   "j2j": 14.409851621405402,
+   "bones": 32,
+   "gt_bones": 27,
+   "secs": 133.3
+  },
+  {
+   "clip": "grison_idle",
+   "method": "gt_rig",
+   "recon_heldout": 0.01751563669104993,
+   "recon_tracked": 6.0128937107554727e-05,
+   "j2j": 1.131859367298429,
+   "bones": 29,
+   "gt_bones": 30
+  },
+  {
+   "clip": "grison_idle",
+   "method": "track2rig",
+   "recon_heldout": 0.6699489239057005,
+   "recon_tracked": 0.5384339528906253,
+   "j2j": 4.328711380044457,
+   "bones": 32,
+   "gt_bones": 30,
+   "secs": 2.22
+  },
+  {
+   "clip": "grison_idle",
+   "method": "ssdr",
+   "recon_heldout": 0.8183879559540564,
+   "recon_tracked": 0.34692765816775456,
+   "j2j": 6.480178084949488,
+   "bones": 32,
+   "gt_bones": 30,
+   "secs": 108.7
+  },
+  {
+   "clip": "grison_walk",
+   "method": "gt_rig",
+   "recon_heldout": 0.029212197480658345,
+   "recon_tracked": 0.0011942949519497383,
+   "j2j": 0.9949059750872357,
+   "bones": 29,
+   "gt_bones": 30
+  },
+  {
+   "clip": "grison_walk",
+   "method": "track2rig",
+   "recon_heldout": 0.7778634393091183,
+   "recon_tracked": 0.4901494813936015,
+   "j2j": 3.367568317965322,
+   "bones": 32,
+   "gt_bones": 30,
+   "secs": 2.42
+  },
+  {
+   "clip": "grison_walk",
+   "method": "ssdr",
+   "recon_heldout": 0.8692155886073635,
+   "recon_tracked": 0.3130772893914275,
+   "j2j": 3.9872711162121695,
+   "bones": 32,
+   "gt_bones": 30,
+   "secs": 99.9
+  },
+  {
+   "clip": "pelican-spider_idle",
+   "method": "gt_rig",
+   "recon_heldout": 0.01361397100920866,
+   "recon_tracked": 1.8273856858540141e-06,
+   "j2j": 2.2993861716586776,
+   "bones": 57,
+   "gt_bones": 58
+  },
+  {
+   "clip": "pelican-spider_idle",
+   "method": "track2rig",
+   "recon_heldout": 0.7118379403432825,
+   "recon_tracked": 0.49355044885002214,
+   "j2j": 6.081030883122921,
+   "bones": 32,
+   "gt_bones": 58,
+   "secs": 0.19
+  },
+  {
+   "clip": "pelican-spider_idle",
+   "method": "ssdr",
+   "recon_heldout": 0.8282868133821188,
+   "recon_tracked": 0.35218608970829984,
+   "j2j": 6.747087497461607,
+   "bones": 32,
+   "gt_bones": 58,
+   "secs": 126.8
+  },
+  {
+   "clip": "pelican-spider_walk",
+   "method": "gt_rig",
+   "recon_heldout": 0.8088141417727728,
+   "recon_tracked": 0.005982155928112337,
+   "j2j": 1.2826667848783215,
+   "bones": 57,
+   "gt_bones": 58
+  },
+  {
+   "clip": "pelican-spider_walk",
+   "method": "track2rig",
+   "recon_heldout": 1.3938682640191455,
+   "recon_tracked": 0.8544355121076092,
+   "j2j": 4.73274057757097,
+   "bones": 32,
+   "gt_bones": 58,
+   "secs": 0.21
+  },
+  {
+   "clip": "pelican-spider_walk",
+   "method": "ssdr",
+   "recon_heldout": 1.6187973470438433,
+   "recon_tracked": 0.5056551133105918,
+   "j2j": 9.059079431088175,
+   "bones": 32,
+   "gt_bones": 58,
+   "secs": 121.6
+  }
+ ]
+}

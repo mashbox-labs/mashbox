@@ -29,6 +29,7 @@ This repo holds one shared core and one set of folders per model. A change to a 
 | Model id | Port | App | Docs page | Upstream licence | Tests | Hugging Face card (generated) |
 |---|---|---|---|---|---|---|
 | `hy-nomas` | `src/mashbox/models/hy_nomas/` | `apps/hy-nomas/` | `docs/models/hy-nomas.md` | `licenses/hy-nomas/` | `tests/cpu/test_hy_nomas.py`, `tests/cpu/test_hy_nomas_port.py`, `tests/cpu/hy_nomas_tiny.py`, `tests/cpu/test_hy_nomas_fast_decoder.py`, `tests/cpu/test_hy_nomas_engine_handover.py`, `tests/cpu/test_hy_nomas_render.py`, `tests/tpu/hy_nomas_kernel_check.py`, `tests/tpu/hy_nomas_kernel_tolerances.json` | `hf/hy-nomas/README.md` |
+| `track2rig` | `src/mashbox/models/track2rig/` | none; video step: `packages/track2rig-video/`, `examples/track2rig/` | `docs/models/track2rig.md` | `licenses/track2rig/` (our own model: Apache-2.0) | `tests/cpu/test_track2rig.py`, `packages/track2rig-video/tests/` | `hf/track2rig/README.md` |
 | `qwen3-8-27b` | `src/mashbox/models/qwen3_8_27b/` | none | `docs/models/qwen3-8-27b.md` | `licenses/qwen3-8-27b/` | `tests/cpu/test_qwen3_8_27b.py`, `tests/cpu/qwen3_8_27b_checks.py`, `tests/tpu/qwen3_8_27b_smoke.py` | `hf/qwen3-8-27b/README.md` |
 
 Each model's compiled kernel bundle is not in this repo. It lives in that model's Hugging Face repo under `kernels/`, pinned by sha256 in the model's `models.json` row.

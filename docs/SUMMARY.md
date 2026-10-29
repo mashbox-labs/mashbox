@@ -21,6 +21,7 @@
 * [Supported models](supported-models.md)
 * [Qwen3.8-27B](models/qwen3-8-27b.md)
 * [Hy-Nomas](models/hy-nomas.md)
+* [Track2Rig](models/track2rig.md)
 
 ## Reference
 

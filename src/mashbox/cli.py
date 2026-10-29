@@ -8,6 +8,7 @@
   mashbox download qwen3-8-27b              download and check the files only
   mashbox models                            the models this version runs, by publisher, then model, then file
   mashbox run hy-nomas --ui                 world model in the browser on 127.0.0.1:8790 (TPU v6e-4)
+  mashbox run track2rig TRACKS.npz -o OUT   rig from 3D point tracks: OUT/rig.json and OUT/rig.glb (CPU)
   mashbox env                               versions and chip, for bug reports
   mashbox tpu up qwen3-8-27b                from your machine: a chip, install, server, tunnel (mashbox tpu -h)
 
@@ -19,16 +20,42 @@ import os
 import sys
 import time
 
+from . import hub
+
 
 def log(s):
     print(s, file=sys.stderr, flush=True)
 
 
+def catalog_runtimes(reg):
+    """(RUNNABLE, MODEL_CLI) read from the catalog, so no model id is typed into this file. A models.json row is runnable
+    when the package its path names (src/mashbox/models/<package>) ships in this version of mashbox; that package parses
+    its own `run` / `download` options when its __init__ defines main(cmd, argv) (read from the source, nothing is
+    imported)."""
+    import ast
+    import importlib.util
+    import pathlib
+    runnable, own = [], {}
+    for m in reg.get("models", []):
+        parts = pathlib.PurePosixPath(m.get("path") or "").parts
+        parts = parts[1:] if parts[:1] == ("src",) else parts
+        if len(parts) != 3 or parts[:2] != (__package__, "models"):
+            continue
+        mod = ".".join(parts)
+        spec = importlib.util.find_spec(mod)
+        if spec is None or not spec.origin:
+            continue
+        runnable.append(m["id"])
+        body = ast.parse(pathlib.Path(spec.origin).read_text(encoding="utf-8")).body
+        if any(isinstance(n, ast.FunctionDef) and n.name == "main" for n in body):
+            own[m["id"]] = mod
+    return tuple(runnable), own
+
+
 # Models whose runtime is in this version of the package. `run` and `download` for any other model in models.json
-# stop with a clear message (exit 2) instead of starting a download it cannot use.
-RUNNABLE = ("qwen3-8-27b", "hy-nomas")
-# Models whose package parses its own `run` / `download` options: model id -> module with main(cmd, argv).
-MODEL_CLI = {"hy-nomas": "mashbox.models.hy_nomas"}
+# stop with a clear message (exit 2) instead of starting a download it cannot use. MODEL_CLI: the models whose package
+# parses its own `run` / `download` options, model id -> module with main(cmd, argv).
+RUNNABLE, MODEL_CLI = catalog_runtimes(hub.registry())
 
 
 def setup_cache(d=None):
@@ -692,7 +719,7 @@ def main(argv=None):
     from .gguf import resolve as GR
     if a.cmd == "inspect" or GR.is_gguf_request(a.model):
         return cmd_gguf(a)
-    from . import hub, __version__
+    from . import __version__
     mid = hub.model_entry(a.model)["id"]
     if mid not in RUNNABLE:
         log(f"{mid} is not in mashbox {__version__}. Models in this version: https://mashbox.gg/docs/models")
