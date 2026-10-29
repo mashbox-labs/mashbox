@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>Chat | MASHBOX Labs</title>
+<link rel="icon" href="ui/shell/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="ui/shell/shell.css">
+<script type="application/json" id="mbx-module">{"model": "qwen3-8-27b", "module": "Chat", "status": {"state": "off", "text": "Not connected"}}</script>
+<script src="ui/shell/shell.js"></script>
+<style>
+  /* An example module: a chat screen with the shared sampler settings. Only the content area is the module's. */
+  .log { min-height: 300px; display: flex; flex-direction: column; gap: 10px; }
+  .log .empty { color: var(--mbx-faint); text-align: center; margin: auto; padding: 22px 6px; }
+  .composer { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .knobs { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 12px; }
+  .knob { display: flex; flex-direction: column; gap: 4px; }
+  .knob.wide { grid-column: 1 / -1; }
+  .knob .v { font-family: var(--mbx-mono); color: var(--mbx-ink); }
+  .knob input[type=number], .knob input[type=text] { width: 100%; }
+  .slide { display: flex; align-items: center; gap: 10px; }
+  .slide input[type=range] { flex: 1; }
+  pre.call { margin: 0; padding: 12px; background: var(--mbx-field); border: 2px solid var(--mbx-line); font: 13px/1.5 var(--mbx-mono);
+    color: var(--mbx-dim); overflow-x: auto; white-space: pre; }
+  #tab-api { --mbx-acc: var(--mbx-ok); }
+  @media (max-width: 480px) { .knobs { grid-template-columns: minmax(0, 1fr); } .log { min-height: 180px; } }
+</style>
+</head>
+<body class="mbx-ui">
+<header data-mbx-top></header>
+<nav class="mbx-tabs mbx-wrap" data-mbx-tabs aria-label="Screens">
+  <button type="button" data-tab="chat" class="on">Chat</button>
+  <button type="button" data-tab="api" style="--mbx-acc: var(--mbx-ok)">API</button>
+</nav>
+<main class="mbx-main">
+  <section class="mbx-tab" id="tab-chat">
+    <div class="mbx-room"><span class="mbx-plate">Chat</span><span class="mbx-room-line">Talk to the model on your chip. Every setting on the right goes with each message.</span></div>
+    <div class="mbx-cols">
+      <div class="mbx-panel">
+        <h3>Conversation</h3>
+        <div class="log" id="log"><div class="empty">No messages. Start the server, then send a message.</div></div>
+        <div class="composer">
+          <textarea id="msg" rows="3" spellcheck="false" placeholder="Write a message"></textarea>
+          <div class="mbx-row">
+            <label class="mbx-check"><input type="checkbox" checked> Stream the reply</label>
+            <label class="mbx-check"><input type="checkbox"> Keep the conversation</label>
+            <span class="mbx-spacer"></span>
+            <button type="button" class="ghost sm">Clear</button>
+            <button type="button" class="pri" disabled title="Start the server first">Send</button>
+          </div>
+        </div>
+      </div>
+      <div class="mbx-panel">
+        <h3>Sampling</h3>
+        <div class="knobs">
+          <div class="knob wide"><span class="mbx-label">Temperature <span class="v" data-for="t">0.00</span></span>
+            <div class="slide"><input type="range" id="t" min="0" max="2" step="0.05" value="0" aria-label="Temperature"></div></div>
+          <div class="knob wide"><span class="mbx-label">Top p <span class="v" data-for="p">1.00</span></span>
+            <div class="slide"><input type="range" id="p" min="0" max="1" step="0.01" value="1" aria-label="Top p"></div></div>
+          <label class="knob"><span class="mbx-label">Top k</span><input type="number" value="0" min="0"></label>
+          <label class="knob"><span class="mbx-label">Max new tokens</span><input type="number" placeholder="server default" min="1"></label>
+          <label class="knob"><span class="mbx-label">Seed</span><input type="number" value="0"></label>
+          <label class="knob"><span class="mbx-label">Presence penalty</span><input type="number" value="0" step="0.1"></label>
+          <label class="knob wide"><span class="mbx-label">Stop at</span><input type="text" placeholder="Text that ends the reply"></label>
+          <div class="knob wide"><span class="mbx-label">Thinking</span>
+            <div class="mbx-seg" role="group" aria-label="Thinking"><button type="button">On</button><button type="button" class="on">Off</button></div></div>
+        </div>
+        <p class="mbx-note" style="margin: 12px 0 0">Temperature 0 is greedy: the same message gives the same reply. Qwen suggests 0.7, top p 0.8 and top k 20 for sampled replies.</p>
+      </div>
+    </div>
+  </section>
+  <section class="mbx-tab" id="tab-api">
+    <div class="mbx-room"><span class="mbx-plate">API</span><span class="mbx-room-line">The same server speaks the OpenAI chat format, so any client or coding agent can use it.</span></div>
+    <div class="mbx-panel">
+      <h3>Call it</h3>
+<pre class="call">curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3-8-27b", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 128}'</pre>
+    </div>
+  </section>
+</main>
+<footer data-mbx-foot></footer>
+<script>
+  // the example's own behaviour: show slider values, flip the segmented control
+  document.querySelectorAll('input[type=range]').forEach(function (r) {
+    var out = document.querySelector('.v[data-for="' + r.id + '"]');
+    r.addEventListener('input', function () { out.textContent = Number(r.value).toFixed(2); });
+  });
+  document.querySelectorAll('.mbx-seg').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      if (e.target.tagName !== 'BUTTON') return;
+      g.querySelectorAll('button').forEach(function (b) { b.classList.toggle('on', b === e.target); });
+    });
+  });
+</script>
+</body>
+</html>

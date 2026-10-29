@@ -23,7 +23,7 @@ ${hero}
 On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](${agents_url})):
 
 ```bash
-python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"
+${install}
 ${run}
 ```
 

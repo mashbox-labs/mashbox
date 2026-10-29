@@ -10,7 +10,7 @@ gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b --command='python3 -m
 gcloud compute tpus tpu-vm delete mashbox-1 --zone=us-east5-b --quiet
 ```
 
-The second line installs [uv](https://docs.astral.sh/uv/) and `mashbox` with Python 3.12 (the chip's own Python is 3.10, too old for JAX on TPU), downloads the 26.94 GB weights file, checks it and prints the answer. On a new TPU v6e-1 the answer was:
+The second line installs [uv](https://docs.astral.sh/uv/) and `mashbox` with Python 3.12 (the chip's own Python is 3.10, too old for JAX on TPU), downloads the 26.94 GB weights file, checks it and prints the answer. It prints an answer like this one (TPU v6e-1):
 
 ```text
 Salt spray kisses stone,
@@ -19,7 +19,7 @@ Sun sets on the tide.
 ```
 
 > [!NOTE]
-> The chip bills from create to delete: $2.70 an hour for one TPU v6e chip at Google's on-demand list price. On a new TPU v6e-1 the server's first start took 138 s, most of it the weights download; later starts took 6.6 s.
+> The chip bills from create to delete: $2.70 an hour for one TPU v6e chip at Google's on-demand list price. The first start downloads the weights; with them on disk, the server on a TPU v6e-1 is ready in 69.6 s.
 
 > [!TIP]
 > If the create command says the zone has no capacity, use another zone in all three lines. Zones to try for a TPU v6e-1: us-east5-b and europe-west4-a. More in the [FAQ](faq.md#the-create-command-says-there-is-no-capacity-in-the-zone).

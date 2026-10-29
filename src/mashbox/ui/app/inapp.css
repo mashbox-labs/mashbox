@@ -1,0 +1,6 @@
+/* Added by the MASHBOX app to every module page it shows in its window. The window's sidebar already carries the
+   brand, the modules and the app's sections, so the web top bar and the footer's site links are left out (as Unsloth
+   Studio and Ollama show only the section you picked). The model bar, the page itself and its Resources list stay. */
+.mbx-top { display: none !important; }
+.mbx-foot-in { display: none !important; }
+.mbx-foot:not(:has(.mbx-res-wrap)) { display: none !important; }

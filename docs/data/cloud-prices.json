@@ -1,0 +1,61 @@
+{
+  "about": "Cloud list prices and memory bandwidth behind docs/tpu-vs-gpu.md. The page's tables are rendered from this file and models.json by tools/hf_github_sync_check.py (render --write); check --offline fails when a price was read more than max_age_days ago, when a table on the page differs from its render, or when models.json prices.per_chip_hour differs from the on-demand price here.",
+  "max_age_days": 45,
+  "hardware": {
+    "v6e": {
+      "name": "TPU v6e",
+      "unit": "chip",
+      "memory_gb": 32,
+      "bandwidth_gb_s": 1638,
+      "spec_source": "https://cloud.google.com/tpu/docs/v6e",
+      "spec_read_utc": "2026-10-28T10:12Z"
+    },
+    "v5e": {
+      "name": "TPU v5e",
+      "unit": "chip",
+      "memory_gb": 16,
+      "spec_source": "https://cloud.google.com/tpu/docs/v5e",
+      "spec_read_utc": "2026-10-28T10:12Z"
+    },
+    "h100": {
+      "name": "NVIDIA H100 80GB SXM",
+      "unit": "GPU",
+      "memory_gb": 80,
+      "bandwidth_gb_s": 3350,
+      "spec_source": "https://www.nvidia.com/en-us/data-center/h100/",
+      "spec_read_utc": "2026-10-28T10:13Z"
+    }
+  },
+  "prices": [
+    {"hardware": "v6e", "column": "On Demand", "usd_per_hour": "2.70", "per": "chip-hour", "region": "us-east1, us-east5", "source": "https://cloud.google.com/tpu/pricing", "read_utc": "2026-10-28T10:12Z"},
+    {"hardware": "v6e", "column": "DWS Flex-start", "usd_per_hour": "1.35", "per": "chip-hour", "region": "us-east1, us-east5", "source": "https://cloud.google.com/tpu/pricing", "read_utc": "2026-10-28T10:12Z"},
+    {"hardware": "v6e", "column": "1-year Commitment", "usd_per_hour": "1.89", "per": "chip-hour", "region": "us-east1, us-east5", "source": "https://cloud.google.com/tpu/pricing", "read_utc": "2026-10-28T10:12Z"},
+    {"hardware": "v6e", "column": "3-year Commitment", "usd_per_hour": "1.22", "per": "chip-hour", "region": "us-east1, us-east5", "source": "https://cloud.google.com/tpu/pricing", "read_utc": "2026-10-28T10:12Z"},
+    {"hardware": "v5e", "column": "On Demand", "usd_per_hour": "1.20", "per": "chip-hour", "region": "us-central1, us-east5, us-west1, us-west4", "source": "https://cloud.google.com/tpu/pricing", "read_utc": "2026-10-28T10:12Z"},
+    {"hardware": "h100", "column": "On demand", "usd_per_hour": "88.490000119", "per": "VM-hour", "vm": "a3-highgpu-8g", "units_per_vm": 8, "region": "us-central1", "source": "https://cloud.google.com/products/compute/pricing/accelerator-optimized", "read_utc": "2026-10-28T10:12Z"},
+    {"hardware": "h100", "column": "DWS Flex-start", "usd_per_hour": "38.32", "per": "VM-hour", "vm": "a3-highgpu-8g", "units_per_vm": 8, "region": "us-central1", "source": "https://cloud.google.com/products/compute/pricing/accelerator-optimized", "read_utc": "2026-10-28T10:12Z"},
+    {"hardware": "h100", "column": "1 Year CUD", "usd_per_hour": "61.383674231", "per": "VM-hour", "vm": "a3-highgpu-8g", "units_per_vm": 8, "region": "us-central1", "source": "https://cloud.google.com/products/compute/pricing/accelerator-optimized", "read_utc": "2026-10-28T10:12Z"},
+    {"hardware": "h100", "column": "3 Year CUD", "usd_per_hour": "38.864383195", "per": "VM-hour", "vm": "a3-highgpu-8g", "units_per_vm": 8, "region": "us-central1", "source": "https://cloud.google.com/products/compute/pricing/accelerator-optimized", "read_utc": "2026-10-28T10:12Z"}
+  ],
+  "options": {
+    "on_demand": {"v6e": "On Demand", "h100": "On demand", "label": "On demand"},
+    "flex_start": {"v6e": "DWS Flex-start", "h100": "DWS Flex-start", "label": "DWS Flex-start"},
+    "one_year": {"v6e": "1-year Commitment", "h100": "1 Year CUD", "label": "1-year commitment"},
+    "three_year": {"v6e": "3-year Commitment", "h100": "3 Year CUD", "label": "3-year commitment"}
+  },
+  "rows": [
+    {"label": "1 TPU v6e chip", "hardware": "v6e", "count": 1},
+    {"label": "TPU v6e-4 (4 chips)", "hardware": "v6e", "count": 4},
+    {"label": "1 NVIDIA H100 80GB SXM", "hardware": "h100", "count": 1}
+  ],
+  "ceiling": {
+    "model": "qwen3-8-27b",
+    "params": "27B parameters, dense",
+    "users": 1,
+    "what": "memory bandwidth divided by the bytes of the default weights file in models.json, read once per output token"
+  },
+  "measured": [
+    {"model": "qwen3-8-27b", "result": 0, "hardware": "v6e", "count": 1, "users": "1"},
+    {"model": "qwen3-8-27b", "result": 1, "hardware": "v6e", "count": 1, "users": "8 at once"}
+  ]
+}

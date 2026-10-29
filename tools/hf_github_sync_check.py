@@ -10,16 +10,41 @@ Views:
   llms.txt             the block between <!-- models:start --> and <!-- models:end -->
   hf/<id>/README.md    the Hugging Face card of every model that has an HF repo
                        (rendered from templates/hf/card-<kind>.md in the repo)
+  docs/openapi.json    the server's OpenAPI 3.1 description, from src/mashbox/runtime/openapi.py
+  docs/server-api.md   the Server API page, from the same module (one section per route)
+  docs/cli.md          every command and option, from the package's argparse parsers
+  docs pages           blocks between <!-- cli:start CMD --> / <!-- cli:end --> (option table of `mashbox CMD`)
+                       and <!-- api:start --> / <!-- api:end --> (routes and sampling fields) in docs/*.md, docs/models/*.md
+  versions             models.json is the one source: src/mashbox/__init__.py reads it, pyproject.toml takes it
+                       from mashbox.__version__ (dynamic), and no other file writes a version
+  licences             LICENSE, pyproject [project].license, licenses/<id>/LICENSE sha256 and every page's licence
+                       wording agree with models.json (report only: fails on a mismatch, never edits)
+  cloud prices         blocks between <!-- cloud:start NAME --> / <!-- cloud:end --> in docs pages, from
+                       docs/data/cloud-prices.json (dated Google Cloud list prices, memory bandwidth) and models.json;
+                       fails when a price was read more than max_age_days (45) ago or models.json prices differ
+  numbers in prose     <!-- r:MODEL/N -->TEXT<!-- /r --> in README.md, llms.txt and docs pages: TEXT is result N of
+                       MODEL in models.json (short.ours, or its part before " ("); r:MODEL/NAME a figure, r:MODEL/chip-v5e
+                       a chips row, r:MODEL/arg-ctx a run_args value; render fills it (pages and the app's HTML). Every
+                       other measured number on every public page (git ls-files *.md, tests/ and hf/ too, but the
+                       rendered cards), in the UI text of the package (src/mashbox and apps/ .html/.js) and in the
+                       pyproject description fails T0 unless tools/numbers_allowed.txt names it.
+                       The pages carry no markers: render --write moves them, and the named figures, into the number
+                       map internal/numbers.json (maintainers only), which records where each number sits; the checks
+                       put the markers back from it before they read a page. Without the map the number guard is
+                       skipped.
 
 Usage:
   hf_github_sync_check.py render --repo ROOT [--profile PATH] [--templates DIR] [--write] [--out DIR]
+  hf_github_sync_check.py markup --repo ROOT PAGE...   (number markers back in these pages, to edit the words around them)
+  hf_github_sync_check.py licence --repo ROOT   (the licence lines for a person, then the licence check; exit 1 on a mismatch)
   hf_github_sync_check.py check  --repo ROOT [--profile PATH] [--templates DIR] [--offline|--online]
                                   [--release] [--fixtures DIR]
 
   --offline  schema + rendered views equal the files on disk (no network). Default.
   --online   also asks the Hugging Face and GitHub APIs: repo public, pinned revision exists,
              card at that revision equals the rendered card, no repo in the HF org missing
-             from models.json, the version tag exists on GitHub.
+             from models.json, the version tag exists on GitHub. A model with "launch" set
+             (coming soon) only has to be private or absent: it must not be public yet.
   --release  stricter: every model with an HF repo has a measured result and a passing chip.
   --fixtures replay API answers from DIR (tests). Tokens, if needed, come from the
              environment (HF_TOKEN, GH_TOKEN), never from arguments.
@@ -29,6 +54,7 @@ Exit status: 0 in sync, 1 out of sync or invalid, 2 usage error.
 import argparse
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
+import html
 import json
 import os
 import re
@@ -46,7 +72,8 @@ KINDS = {
     "image": {"suffix": "-TPU", "label": "Image"},
     "voice": {"suffix": "-TPU", "label": "Voice"},
 }
-CHIPS = ("v6e", "v5e")
+CHIPS = ("v5e", "v6e", "v5p-8", "v6e-4")      # the chip types people rent: v5e, v6e, a v5p slice and a v6e slice
+CHIP_LABEL = {"v5e": "TPU v5e", "v6e": "TPU v6e", "v5p-8": "TPU v5p slice (v5p-8)", "v6e-4": "TPU v6e slice (v6e-4)"}
 CHIP_STATUS = ("pending", "passing", "failing", "not supported")
 UNCONFIRMED = {"", "unconfirmed", "todo", "tbd", "unknown"}
 MARK_START, MARK_END = "<!-- models:start -->", "<!-- models:end -->"
@@ -66,7 +93,7 @@ class Problems(list):
 # ---------------------------------------------------------------- validation
 
 def validate(reg, repo_root, problems, release=False):
-    for key in ("schema", "github", "hf", "version", "license", "models"):
+    for key in ("schema", "github", "hf", "version", "license", "company_line", "install", "prices", "models"):
         if key not in reg:
             problems.add("models.json", f"missing key {key!r}")
     if problems:
@@ -127,8 +154,8 @@ def validate(reg, repo_root, problems, release=False):
                 continue
             if c["status"] in ("passing", "failing") and not DATE_RE.match(str(c.get("date", ""))):
                 problems.add(where, f"chips.{chip} {c['status']} needs a date YYYY-MM-DD")
-            if c["status"] == "not supported" and not c.get("reason"):
-                problems.add(where, f"chips.{chip} 'not supported' needs a reason")
+            if c["status"] == "failing" and not c.get("reason"):
+                problems.add(where, f"chips.{chip} 'failing' needs the measured reason")
         for j, r in enumerate(m["results"]):
             for key in ("chip", "metric", "value", "date", "baseline"):
                 if not str(r.get(key, "")).strip():
@@ -253,12 +280,22 @@ def docs_url(m):
     return f"https://mashbox.gg/docs/models/{m['id']}"
 
 
+def chip_label(m, chip):
+    """"TPU v5e (v5e-4)": the chip column's name plus the host the model needs when it differs (one source: the row's accelerator)."""
+    acc = (m["chips"].get(chip) or {}).get("accelerator")
+    return CHIP_LABEL[chip] + (f" ({acc})" if acc and acc not in (chip, CHIP_LABEL[chip].split("(")[-1].rstrip(")")) else "")
+
+
 def chip_cell(m, chip):
-    c = m["chips"].get(chip) or {}
-    st = c.get("status", "")
-    if st in ("passing", "failing"):
-        return f"{st}, {c['date']}"
-    return st or "n/a"
+    """A chip's status for the released version: Supported or Not supported. The test date stays in models.json
+    (validate() needs it); public views never print it. A pending row reads "Not tested": it never claims a result,
+    and the release gate (validate --release) stops a release that still has one."""
+    st = (m["chips"].get(chip) or {}).get("status", "")
+    if st == "passing":
+        return "Supported"
+    if st == "pending":
+        return "Not tested"
+    return "Not supported" if st in ("failing", "not supported") else "n/a"
 
 
 def weights_cell(m):
@@ -274,17 +311,8 @@ def table(head, rows):
 
 
 def live(reg):
-    """Models shown with links in the views; a model with "launch": "coming soon" is named once, without links."""
+    """Models shown in the views. A model with "launch" set is not released, so no public view names it."""
     return [m for m in reg["models"] if not m.get("launch")]
-
-
-def soon_line(reg):
-    soon = [m for m in reg["models"] if m.get("launch") == "coming soon"]
-    if not soon:
-        return ""
-    return "\n\nComing soon: " + "; ".join(
-        f"**{m['name']}** by {m['upstream']['maker']} ({KINDS[m['kind']]['label'].lower()}: {m['in']} in, {m['out']} out)"
-        for m in soon) + "."
 
 
 def models_table(reg, absolute):
@@ -293,8 +321,8 @@ def models_table(reg, absolute):
         link = code_url(reg, m) if absolute else m["path"]
         rows.append([f"**[{m['name']}]({link})**<br>by {m['upstream']['maker']}",
                      f"{KINDS[m['kind']]['label']}: {m['in']} in, {m['out']} out",
-                     f"TPU v6e: {chip_cell(m, 'v6e')}<br>TPU v5e: {chip_cell(m, 'v5e')}", readme_measured(m), weights_cell(m)])
-    return table(["Model", "What it does", "Chips", "Measured", "Weights"], rows) + soon_line(reg)
+                     "<br>".join(f"{chip_label(m, c)}: {chip_cell(m, c)}" for c in CHIPS), readme_measured(m), weights_cell(m)])
+    return table(["Model", "What it does", "Chips", "Measured", "Weights"], rows)
 
 
 def short_metric(r):
@@ -304,7 +332,7 @@ def short_metric(r):
 def measured_cell(m, n=2):
     """Headline results for the README table: the first n results of the model, chip named."""
     if not m["results"]:
-        return "chip tests running"
+        return "n/a"
     return "<br>".join(f"{short_metric(r)}: **{r['value'].split(' (', 1)[0]}** ({r['chip']})" for r in m["results"][:n])
 
 
@@ -314,7 +342,7 @@ def readme_measured(m):
     if not hl or not m["hf_repo"]:
         return measured_cell(m)
     r = m["results"][hl[0]["results"][0]]
-    return ("; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" ({r['chip']}, {r['date']}). "
+    return ("; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" ({r['chip']}). "
             f"[All results](https://huggingface.co/{m['hf_repo']})")
 
 
@@ -328,20 +356,24 @@ def profile_measured(m):
 
 
 def profile_table(reg):
-    """Compact view for the org profile (reads on a phone): model and maker, in and out, chips passed."""
+    """Compact view for the org profile (reads on a phone): model and maker, in and out, supported chips."""
     rows = []
     for m in live(reg):
-        passed = [f"TPU {c} ({m['chips'][c]['date']})" for c in CHIPS
-                  if (m["chips"].get(c) or {}).get("status") == "passing"]
+        passed = [CHIP_LABEL[c] for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
         rows.append([f"**[{m['name']}]({code_url(reg, m)})** by {m['upstream']['maker']}",
-                     f"{m['in']} in, {m['out']} out", profile_measured(m), ", ".join(passed) or "pending"])
-    return table(["Model", "What it does", "Measured", "Chip tests"], rows) + soon_line(reg)
+                     f"{m['in']} in, {m['out']} out", profile_measured(m), ", ".join(passed) or "n/a"])
+    return table(["Model", "What it does", "Measured", "Chips"], rows)
+
+
+def runs_on(m):
+    """" Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1)." from the passing chips rows (agents read llms.txt to pick a chip)."""
+    ok = [chip_label(m, c) for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
+    return f" Runs on: {', '.join(ok)}." if ok else ""
 
 
 def llms_block(reg):
-    return "\n".join([f"- [{m['name']}]({docs_url(m)}): {m['in']} in, {m['out']} out. {KINDS[m['kind']]['label']}."
-                      for m in live(reg)] + [f"- {m['name']}: coming soon. {KINDS[m['kind']]['label']}."
-                                             for m in reg["models"] if m.get("launch")])
+    return "\n".join(f"- [{m['name']}]({docs_url(m)}): {m['in']} in, {m['out']} out. {KINDS[m['kind']]['label']}."
+                     + runs_on(m) for m in live(reg))
 
 
 def front_matter(reg, m):
@@ -362,7 +394,7 @@ def front_matter(reg, m):
 
 def results_table(m):
     if not m["results"]:
-        return "No measured results yet."
+        return "n/a"
     if all(r.get("short") for r in m["results"]):
         notes, rows = [], []
 
@@ -371,32 +403,35 @@ def results_table(m):
                 if n not in notes:
                     notes.append(n)
             return f"<sup>{','.join(str(notes.index(n) + 1) for n in ns)}</sup>" if ns else ""
-        same = len({(r["chip"], r["date"]) for r in m["results"]}) == 1  # one chip and date: say it once (phone width)
+        same = len({r["chip"] for r in m["results"]}) == 1  # one chip: say it once (phone width)
         for r in m["results"]:
             sh = r["short"]
             rows.append([sh["measure"] + mark(sh.get("notes", [])), f"**{sh['ours']}**",
-                         sh["vs"] + mark(sh.get("vs_notes", []))] + ([] if same else [f"{r['chip']}, {r['date']}"]))
+                         sh["vs"] + mark(sh.get("vs_notes", []))] + ([] if same else [r["chip"]]))
         foot = "\n".join(f"<sub><sup>{i}</sup> {n}</sub><br>" for i, n in enumerate(notes, 1))
         r0 = m["results"][0]
-        head = f"All {len(rows)} measurements" + (f", all on {r0['chip']}, {r0['date']}" if same else "")
+        head = f"All {len(rows)} measurements" + (f", all on {r0['chip']}" if same else "")
         return (f"<details>\n<summary>{head}</summary>\n\n"
-                + table(["Measure", "Ours", "Compared with"] + ([] if same else ["Chip, date"]), rows)
+                + table(["Measure", "Ours", "Compared with"] + ([] if same else ["Chip"]), rows)
                 + f"\n\n{foot}\n\n</details>")
-    return table(["Chip", "Measure", "Result", "Baseline", "Date"],
-                 [[r["chip"], r["metric"], r["value"], r["baseline"], r["date"]] for r in m["results"]])
+    return table(["Chip", "Measure", "Result", "Baseline"],
+                 [[r["chip"], r["metric"], r["value"], r["baseline"]] for r in m["results"]])
 
 
 def files_table(m):
+    lead = "This port loads the original weights unchanged from " \
+           f"[{m['upstream']['hf']}](https://huggingface.co/{m['upstream']['hf']})."
     if not m["files"]:
-        return "This port loads the original weights unchanged from " \
-               f"[{m['upstream']['hf']}](https://huggingface.co/{m['upstream']['hf']})."
+        return lead
     rows = []
     for f in m["files"]:
         rows.append([f"`{f['name']}`", f["format"], f"{f['gb']:.2f}",
                      f"{f['bpw']:.2f}" if isinstance(f.get("bpw"), (int, float)) else "n/a",
-                     f.get("quality") or ("reference" if not f.get("variant") else "not measured"),
-                     f.get("speed") or "not measured", f.get("date") or ""])
-    return table(["File", "Format", "Size (GB)", "Bits per weight", "Quality vs full precision", "Speed", "Measured"], rows)
+                     f.get("quality") or ("reference" if not f.get("variant") else "n/a"), f.get("speed") or "n/a"])
+    out = table(["File", "Format", "Size (GB)", "Bits per weight", "Quality vs full precision", "Speed"], rows)
+    if not any(f.get("kind", "weights") == "weights" for f in m["files"]):  # e.g. only a compile cache of ours
+        return lead + "\n\n" + out
+    return out
 
 
 def chips_table(m):
@@ -404,7 +439,7 @@ def chips_table(m):
     for chip in CHIPS:
         c = m["chips"].get(chip) or {}
         note = c.get("reason") or c.get("note") or ""
-        rows.append([f"TPU {chip}", chip_cell(m, chip), note])
+        rows.append([CHIP_LABEL[chip], chip_cell(m, chip), note])
     return table(["Chip", "Status", "Note"], rows)
 
 
@@ -442,18 +477,37 @@ def weights_licence(m):
     return f"Weights: {name} licence, from [{pin}]({url})"
 
 
-def upstream_licence_file(m):
+def upstream_licence_file(m, source=False):
+    """The line that says the upstream LICENSE file travels with our repo, unchanged. source=True also names where it
+    comes from (the world card); the LLM cards keep their words until their next card upload."""
     if not (m["upstream"].get("license_sha256") and m["hf_repo"]):
         return ""
+    if source:
+        up = m["upstream"]
+        return (f"[LICENSE](https://huggingface.co/{m['hf_repo']}/blob/main/LICENSE) in this repo is {up['maker']}'s "
+                f"licence file from [{up['hf']}](https://huggingface.co/{up['hf']}) on Hugging Face, unchanged. ")
     return (f"{m['upstream']['maker']}'s LICENSE file is in this repo, unchanged: "
             f"[LICENSE](https://huggingface.co/{m['hf_repo']}/blob/main/LICENSE). ")
 
 
+def own_files(repo, m):
+    """Our own files in the model's HF repo, as its upstream.json pins them: (name, title, licence). The licence of our
+    own weights is set by a maintainer and recorded on the file's row; it is never derived."""
+    f = Path(repo) / m["path"] / "upstream.json" if repo is not None else None
+    if f is None or not f.is_file() or not m["hf_repo"]:
+        return []
+    return [(x["name"], x.get("title"), x.get("license")) for r in json.loads(f.read_text()).get("repos", {}).values()
+            if r.get("hf") == m["hf_repo"] for x in r.get("files", [])]
+
+
+def own_files_licence(repo, m):
+    rows = [f"`{n}`" + (f" ({t})" if t else "") + f": {SPDX.get(str(lic).lower(), lic)}"
+            for n, t, lic in own_files(repo, m) if lic]
+    return ("Our own weights in this repo: " + "; ".join(rows) + ". ") if rows else ""
+
+
 def highlights(m):
-    if not m["results"]:
-        return "- Measured results are added here when the chip tests finish."
-    out = [f"- **{r['value']}**: {r['metric'][0].lower() + r['metric'][1:]}, on {r['chip']} (measured {r['date']})"
-           for r in m["results"]]
+    out = [f"- **{r['value']}**: {r['metric'][0].lower() + r['metric'][1:]}, on {r['chip']}" for r in m["results"]]
     for f in m["files"]:
         if f.get("quality") and f.get("default"):
             out.append(f"- **{f['quant_type'] if f.get('quant_type') else f['name']}** ({f['gb']:.2f} GB, "
@@ -462,14 +516,14 @@ def highlights(m):
 
 
 def headline(m):
-    """At most 4 headline numbers as a 2 x 2 strip (reads on a phone), chip and date under each; else the bullets."""
+    """At most 4 headline numbers as a 2 x 2 strip (reads on a phone), the chip under each; else the bullets."""
     hl = m.get("headline")
     if not hl:
         return highlights(m)
     cells = []
     for h in hl:
         r = m["results"][h["results"][0]]
-        cells.append(f'<td width="50%"><b>{h["big"]}</b><br>{h["label"]}<br><sub>{r["chip"]}, {r["date"]}</sub></td>')
+        cells.append(f'<td width="50%"><b>{h["big"]}</b><br>{h["label"]}<br><sub>{r["chip"]}</sub></td>')
     rows = ["<tr>\n" + "\n".join(cells[i:i + 2]) + "\n</tr>" for i in range(0, len(cells), 2)]
     out = "<table>\n" + "\n".join(rows) + "\n</table>"
     return out + (f"\n\n<sub>{m['headline_note']}</sub>" if m.get("headline_note") else "")
@@ -525,7 +579,7 @@ def results_charts(repo, m):
                    if dark.is_file() else src)
     if not out:
         return ""
-    return "Each chart names its measurement date (UTC) and the hardware on both sides.\n\n" + "\n\n".join(out)
+    return "Each chart names the hardware on both sides.\n\n" + "\n\n".join(out)
 
 
 def badges(reg, m):
@@ -560,6 +614,8 @@ def agents_section(m):
 
 
 def card_vars(reg, m, repo=None):
+    # a card keeps the GitHub links of the release its pinned Hugging Face revision was published with (card_release)
+    reg = dict(reg, version=m.get("card_release") or reg["version"])
     up = m["upstream"]
     return {
         "banner": (f"https://huggingface.co/{m['hf_repo']}/resolve/main/assets/banner-dark.png" if m["hf_repo"] else ""),
@@ -567,7 +623,7 @@ def card_vars(reg, m, repo=None):
         "hero": hero(repo, m), "links_table": links_table(reg, m),
         "front_matter": front_matter(reg, m),
         "name": m["name"], "id": m["id"], "summary": m["summary"], "in": m["in"], "out": m["out"],
-        "run": m["run"], "maker": up["maker"], "upstream_hf": up["hf"],
+        "run": m["run"], "install": m.get("install") or reg["install"], "maker": up["maker"], "upstream_hf": up["hf"],
         "upstream_url": f"https://huggingface.co/{up['hf']}",
         "upstream_github": f"https://github.com/{up['github']}" if up.get("github") else f"https://huggingface.co/{up['hf']}",
         "hf_repo": m["hf_repo"] or "", "version": reg["version"], "code_url": code_url(reg, m),
@@ -575,10 +631,13 @@ def card_vars(reg, m, repo=None):
         "results_table": results_table(m), "results_charts": results_charts(repo, m), "files_table": files_table(m), "chips_table": chips_table(m),
         "license_text": license_text(reg, m), "our_license": reg["license"],
         "weights_licence": weights_licence(m), "upstream_licence_file": upstream_licence_file(m),
+        "upstream_licence_source": upstream_licence_file(m, source=True), "own_files_licence": own_files_licence(repo, m),
         "notes": m.get("notes", ""), "agents_section": agents_section(m),
         "kernels_section": kernels_section(reg, m),
-        "kernels_license": (f"The compiled kernels in `kernels/` are under their own licence: "
-                            f"[LICENSE-KERNELS]({gh_base(reg)}/blob/v{reg['version']}/LICENSE-KERNELS).")
+        "kernels_license": ((f"The compiled kernels in `kernels/` are under their own licence: "
+                             f"[LICENSE-KERNELS]({gh_base(reg)}/blob/v{reg['version']}/LICENSE-KERNELS).")
+                            + (" The compile cache in `xla-cache/` is under the same licence."
+                               if any(f.get("kind") == "xla-cache" for f in m.get("files", [])) else ""))
                            if m.get("kernels") else "",
         "default_tag": (m.get("default_tag") or ""),
     }
@@ -600,7 +659,8 @@ def splice(text, block, where, problems):
     return text[:a] + "\n" + block + "\n" + text[b:]
 
 
-LINK_RE = re.compile(r'(!?\[[^\]]*\]\()([^)\s]+)(\))|((?:src|srcset|href)=")([^"]+)(")')
+LINK_RE = re.compile(r'(!?\[[^\]]*\]\()([^)\s]+)((?:[ \t]+"[^"\n]*")?\))|((?:src|srcset|href)=["\'])([^"\']+)(["\'])')
+REF_RE = re.compile(r"^( {0,3}\[[^\]]+\]:[ \t]*<?)([^\s>]+)", re.M)   # reference-style: [id]: target
 
 
 def pin_links(reg, repo, text, where, problems):
@@ -629,11 +689,16 @@ def pin_links(reg, repo, text, where, problems):
         else:
             url = f"{gh_base(reg)}/{'tree' if (repo / path).is_dir() else 'blob'}/v{ver}/{path.rstrip('/')}"
         return pre + url + ("#" + frag if frag else "") + post
-    return LINK_RE.sub(sub, text)
+
+    def ref(mt):
+        return sub(re.match(r"(\[\]\()(.*)(\))", f"[]({mt.group(2)})")).replace("[](", mt.group(1), 1)[:-1]
+    return REF_RE.sub(ref, LINK_RE.sub(sub, text))
 
 
-def render_all(reg, repo, profile, templates, problems):
-    """Return {relative path or 'profile': rendered text} for every view."""
+def render_all(reg, repo, profile, templates, problems, places=None):
+    """Return {relative path or 'profile': rendered text} for every view. places: the pages section of the private
+    number map (None without one): pages get their markers back from it, are filled, and come out without markers;
+    the new places are left in render_all.places."""
     views = {}
     readme = repo / "README.md"
     if readme.exists():
@@ -656,13 +721,1178 @@ def render_all(reg, repo, profile, templates, problems):
     for m in live(reg):  # a "coming soon" model's card is not published yet; it is checked again at its launch
         if m["hf_repo"]:
             views[f"hf/{m['id']}/README.md"] = render_card(reg, m, templates, repo)
+    if (repo / "docs").is_dir() and (repo / "src" / "mashbox").is_dir():
+        views.update(docs_views(reg, repo, problems))
+    prose = set()
+    for page in number_pages(reg, repo) + ui_pages(repo):   # every public page (not the cards) and the app's UI text
+        rel = page.relative_to(repo).as_posix()
+        if rel.startswith(("hf/", "docs/_templates/")):
+            continue
+        prose.add(rel)
+        if rel not in views and (rel in (places or {}) or MARK_RE.search(page.read_text())):
+            views[rel] = page.read_text()
+    render_all.places = {}
+    for key in [k for k in views if k in prose]:
+        text = fill_numbers(reg, mark_up(views[key], (places or {}).get(key, []), key, problems), key, problems)
+        if places is None:
+            views[key] = text            # no private map (public export, a test tree): a page keeps its own markers
+            continue
+        views[key], spots = unmark(text)
+        if mark_up(views[key], spots) != text:
+            problems.add(key, "number markers cannot be placed back from the page text alone (two equal numbers with "
+                              "equal words before them): reword one of them")
+        if spots:
+            render_all.places[key] = spots
     return views
+
+
+# ---------------------------------------------------------------- generated references (docs)
+# As llama.cpp's gen-docs and update-ops-docs: the docs are rendered from the code and CI fails when they differ.
+
+CLI_RE = re.compile(r"(<!-- cli:start ([a-z ]+) -->)(.*?)(<!-- cli:end -->)", re.S)
+API_RE = re.compile(r"(<!-- api:start -->)(.*?)(<!-- api:end -->)", re.S)
+CHIPS_RE = re.compile(r"(<!-- chips:start -->)(.*?)(<!-- chips:end -->)", re.S)
+CLI_NOTE = ("Generated from the argparse parsers in src/mashbox/cli.py and src/mashbox/tpu/__init__.py by "
+            "tools/hf_github_sync_check.py render --write. Do not edit.")
+
+
+class _Parser(Exception):
+    pass
+
+
+def _parser_of(main, argv):
+    """The parser a main() builds, caught at its parse_args call (for a CLI without a build_parser())."""
+    orig = argparse.ArgumentParser.parse_args
+
+    def grab(self, *a, **k):
+        raise _Parser(self)
+    argparse.ArgumentParser.parse_args = grab
+    try:
+        main(argv)
+    except _Parser as e:
+        return e.args[0]
+    finally:
+        argparse.ArgumentParser.parse_args = orig
+    raise RuntimeError("main() returned without parsing its arguments")
+
+
+def _package(repo, problems):
+    """Import mashbox from <repo>/src (stdlib-only modules), or None with a problem."""
+    import importlib
+    sys.dont_write_bytecode = True      # never write __pycache__ into the tree being checked (a release export stays == its manifest)
+    src = str((repo / "src").resolve())
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    try:
+        mods = {n: importlib.import_module(f"mashbox{n}") for n in ("", ".cli", ".tpu", ".runtime.openapi")}
+    except Exception as e:
+        problems.add("src/mashbox", f"cannot import the package to render the docs: {type(e).__name__}: {e}")
+        return None
+    if not str(Path(mods[""].__file__).resolve()).startswith(src):
+        problems.add("src/mashbox", f"mashbox imported from {mods[''].__file__}, not {src}")
+        return None
+    return mods
+
+
+def _subparsers(p):
+    for a in p._actions:
+        if isinstance(a, argparse._SubParsersAction):
+            helps = {c.dest: c.help for c in a._choices_actions}
+            return [(name, sp, helps.get(name) or "") for name, sp in a.choices.items()]
+    return []
+
+
+def _usage(name, p):
+    if p.usage:
+        return p.usage
+    pos = []
+    for a in p._actions:
+        if not a.option_strings and not isinstance(a, argparse._SubParsersAction):
+            m = (a.metavar or a.dest).upper()
+            pos.append(f"[{m}]" if a.nargs == "?" else m)
+    opts = any(a.option_strings and not isinstance(a, argparse._HelpAction) for a in p._actions)
+    return " ".join([name] + pos + (["[options]"] if opts else []))
+
+
+def options_table(p):
+    rows = []
+    for a in p._actions:
+        if isinstance(a, (argparse._HelpAction, argparse._VersionAction, argparse._SubParsersAction)):
+            continue
+        if a.help == argparse.SUPPRESS:     # argparse's own --help leaves these out, so the docs do too
+            continue
+        if a.option_strings:
+            opt = max(a.option_strings, key=len)
+            cell = opt if a.nargs == 0 else f"{opt} {a.metavar or a.dest.upper()}"
+        else:
+            cell = (a.metavar or a.dest).upper()
+        flag = a.nargs == 0
+        default = "off" if flag else "" if a.default in (None, argparse.SUPPRESS) else f"`{a.default}`"
+        text = (a.help or "").replace("%(default)s", str(a.default))
+        if a.choices and not flag:
+            text += (" " if text else "") + "(" + ", ".join(f"`{c}`" for c in a.choices) + ")"
+        rows.append([f"`{cell}`", default, text.replace("|", "\\|")])
+    return table(["Option", "Default", "What it does"], rows) if rows else "No options."
+
+
+def cli_parsers(mods):
+    """[(command line, parser, one-line help)] for every documented command."""
+    top = mods[".cli"].build_parser()
+    # the top parser lists `tpu` for --help only; its commands are rendered from mashbox.tpu's own parser below
+    out = [(f"mashbox {n}", sp, h) for n, sp, h in _subparsers(top) if n != "tpu"]
+    tpu = _parser_of(mods[".tpu"].main, ["status"])
+    out += [(f"mashbox tpu {n}", sp, h) for n, sp, h in _subparsers(tpu)]
+    return out
+
+
+def cli_page(mods):
+    out = [f"<!-- {CLI_NOTE} -->", "# Command line", "",
+           "Every `mashbox` command and option, rendered from the package's own parsers (`mashbox <command> --help` "
+           "prints the same). On a TPU VM the command is `~/.local/bin/mashbox` until `~/.local/bin` is on your PATH."]
+    for cmd, p, h in cli_parsers(mods):
+        out += ["", f"## {cmd}", ""] + ([h[0].upper() + h[1:] + ".", ""] if h else []) + \
+               ["```", _usage(cmd, p), "```", "", options_table(p)]
+    return "\n".join(out) + "\n"
+
+
+def api_block(mods, page):
+    O = mods[".runtime.openapi"]
+    link = os.path.relpath("docs/server-api.md", os.path.dirname(page))
+    routes = ", ".join(f"`{r['method'].upper()} {r['path']}`" for r in O.ROUTES)
+    samp = ", ".join(f"`{k}`" for k in O.SAMPLING)
+    return (f"Routes: {routes}. Each one, with every request field and response shape: [Server API]({link}); the same as "
+            f"an OpenAPI file at `GET /openapi.json`. Send `\"stream\": true` for server-sent events. Sampling fields on "
+            f"every generating route: {samp}; temperature 0 (the default) is greedy.")
+
+
+def chip_text(m, chip):
+    """A models.json chip row as one line for the released version: "Supported: a v5e-4 (4 chips) ..." or
+    "Not supported: runs only on a v6e-4 ...". The condition follows a colon, never in brackets, so a page that
+    shows the line up to its first " (" still carries it."""
+    c = m["chips"].get(chip) or {}
+    cell = chip_cell(m, chip)
+    why = c.get("note") if cell == "Supported" else (c.get("reason") or c.get("note"))
+    return cell + (f": {why}" if why and cell != "Not tested" else "")
+
+
+def chips_block(reg):
+    """Which chip each model runs on (the FAQ's and the chips page's table), from the models.json chips rows. Released
+    models only, as every other view."""
+    rows = [[m["name"], f"TPU {m['cloud']['accelerator']}"] + [chip_text(m, c) for c in CHIPS] for m in live(reg)]
+    return table(["Model", "Runs on"] + [CHIP_LABEL[c] for c in CHIPS], rows)
+
+
+def docs_views(reg, repo, problems):
+    """Generated docs files and blocks: {relative path: text}."""
+    views = {}
+    mods = _package(repo, problems)
+    if mods is None:
+        return views
+    pp = (repo / "pyproject.toml").read_text()
+    if re.search(r'^version\s*=\s*"', pp, re.M):
+        problems.add("pyproject.toml", "the version is written here; it has one source, models.json "
+                     '(dynamic = ["version"] and version = {attr = "mashbox.__version__"})')
+    elif not (re.search(r'^dynamic\s*=\s*\[[^\]]*"version"', pp, re.M)
+              and re.search(r'^version\s*=\s*\{\s*attr\s*=\s*"mashbox\.__version__"\s*\}', pp, re.M)):
+        problems.add("pyproject.toml", 'the version must be dynamic = ["version"] with version = {attr = "mashbox.__version__"}')
+    versions = {"models.json": reg["version"], "src/mashbox/__init__.py": mods[""].__version__}
+    if len(set(versions.values())) != 1:
+        problems.add("version", "versions differ: " + ", ".join(f"{k} {v}" for k, v in versions.items()))
+    O = mods[".runtime.openapi"]
+    views["docs/openapi.json"] = O.spec_text(version=reg["version"])
+    ex = repo / "docs" / "api-examples.json"  # real answers per route (tools/record_api_examples.py on a chip)
+    views["docs/server-api.md"] = O.markdown(version=reg["version"], recorded=json.loads(ex.read_text()) if ex.exists() else None)
+    views["docs/cli.md"] = cli_page(mods)
+    by_cmd = {cmd[len("mashbox "):]: p for cmd, p, _ in cli_parsers(mods)}
+    cloud = cloud_data(repo, problems)
+    for page in doc_pages(repo):
+        rel = page.relative_to(repo).as_posix()
+        if rel in views:
+            continue
+        text = page.read_text()
+
+        def cli_sub(mt):
+            p = by_cmd.get(mt.group(2).strip())
+            if p is None:
+                problems.add(rel, f"cli block names an unknown command: {mt.group(2)!r}")
+                return mt.group(0)
+            return f"{mt.group(1)}\n{options_table(p)}\n{mt.group(4)}"
+        new = CLI_RE.sub(cli_sub, text)
+        new = API_RE.sub(lambda mt: f"{mt.group(1)}\n{api_block(mods, rel)}\n{mt.group(3)}", new)
+        new = CHIPS_RE.sub(lambda mt: f"{mt.group(1)}\n{chips_block(reg)}\n{mt.group(3)}", new)
+        if CLOUD_RE.search(text):
+            if cloud is None:
+                problems.add(rel, f"cloud blocks need {CLOUD.as_posix()}")
+            else:
+                new = CLOUD_RE.sub(lambda mt: f"{mt.group(1)}\n{cloud_block(mt.group(2), cloud, reg)}\n{mt.group(4)}", new)
+        if new != text or CLI_RE.search(text) or API_RE.search(text) or CHIPS_RE.search(text) or CLOUD_RE.search(text):
+            views[rel] = new
+    return views
+
+
+# ---------------------------------------------------------------- cloud prices and memory bandwidth (docs/tpu-vs-gpu.md)
+# One dated source, docs/data/cloud-prices.json: Google Cloud list prices (column, region, source page, read UTC) and the
+# vendors' memory bandwidth. Pages carry <!-- cloud:start NAME --> / <!-- cloud:end --> blocks rendered from it and from
+# models.json (measured speed, weights size). T0 fails when a block differs from its render, a price was read more than
+# max_age_days ago, or models.json prices.per_chip_hour differs from the on-demand price in the file.
+
+CLOUD = Path("docs") / "data" / "cloud-prices.json"
+CLOUD_RE = re.compile(r"(<!-- cloud:start ([a-z-]+) -->)(.*?)(<!-- cloud:end -->)", re.S)
+CLOUD_BLOCK_RE = re.compile(r"<!-- cloud:start.*?<!-- cloud:end -->", re.S)
+UTC_MIN_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}Z$")
+CENT = Decimal("0.01")
+
+
+def _usd(d):
+    return f"${d.quantize(CENT, ROUND_HALF_UP):,}"
+
+
+def _dec(d, places=2):  # 1.60 -> "1.6", 1.956 -> "1.96"
+    return f"{d.quantize(Decimal(1).scaleb(-places), ROUND_HALF_UP):f}".rstrip("0").rstrip(".")
+
+
+def cloud_data(repo, problems):
+    f = repo / CLOUD
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text())
+    except ValueError as e:
+        problems.add(CLOUD.as_posix(), f"not JSON: {e}")
+        return None
+
+
+def _unit_price(d, hw, column):
+    """USD per hour for one chip or GPU in a price column (a VM price divided by its units), rounded to the cent."""
+    p = next((p for p in d["prices"] if p["hardware"] == hw and p["column"] == column), None)
+    if p is None:
+        raise KeyError(f"no {hw} price in column {column!r}")
+    return (Decimal(p["usd_per_hour"]) / p.get("units_per_vm", 1)).quantize(CENT, ROUND_HALF_UP), p
+
+
+def _first_num(s):
+    m = NUM_RE.search(s)
+    return Decimal(m.group(0).replace(",", ""))
+
+
+def cloud_rows(d, reg):
+    """The page rows with their numbers: price per hour, memory, bandwidth, the one-user ceiling for the model."""
+    m = next(x for x in reg["models"] if x["id"] == d["ceiling"]["model"])
+    wf = next(f for f in m["files"] if f.get("kind") == "weights" and f.get("default"))
+    gb = Decimal(str(wf["gb"]))
+    rows = []
+    for r in d["rows"]:
+        hw = d["hardware"][r["hardware"]]
+        unit, src = _unit_price(d, r["hardware"], d["options"]["on_demand"][r["hardware"]])
+        bw = hw["bandwidth_gb_s"] * r["count"]
+        exact = Decimal(bw) / gb  # cost per 1M uses this, so one chip and four chips (same GB/s per $) cost the same
+        rows.append(dict(r, hw=hw, src=src, unit=unit, price=unit * r["count"], memory=hw["memory_gb"] * r["count"],
+                         bw=bw, exact=exact, ceiling=exact.quantize(Decimal(1), ROUND_HALF_UP)))
+    return m, wf, rows
+
+
+def cloud_block(name, d, reg):
+    m, wf, rows = cloud_rows(d, reg)
+    src = {p["hardware"]: p["source"] for p in d["prices"]}
+    if name == "prices":
+        def listed(r):
+            s = r["src"]
+            if s.get("vm"):
+                return f"{_usd(Decimal(s['usd_per_hour']))} per hour for {s['vm']} ({s['units_per_vm']} GPUs), divided by {s['units_per_vm']}"
+            return (f"{r['count']} x " if r["count"] > 1 else "") + f"{_usd(Decimal(s['usd_per_hour']))} per {s['per']}"
+        return (f"Google Cloud on-demand list prices in USD, from Google's [Cloud TPU pricing]({src['v6e']}) "
+                f"and [GPU pricing]({src['h100']}) pages. Each price includes the host machine.\n\n"
+                + table(["Hardware", "Memory", "Per hour", "Region", "As Google lists it"],
+                        [[r["label"], f"{r['memory']} GB", _usd(r["price"]), r["src"]["region"], listed(r)] for r in rows]))
+    if name == "options":
+        one = [r for r in rows if r["count"] == 1]
+        cols = list(d["options"].values())
+        return (f"The same Google Cloud pages, per hour for one chip or one GPU:\n\n"
+                + table(["Per hour"] + [c["label"] for c in cols],
+                        [[r["label"]] + [_usd(_unit_price(d, r["hardware"], c[r["hardware"]])[0]) for c in cols] for r in one]))
+    if name == "bandwidth":
+        def spec(r):
+            hw = r["hw"]
+            maker = "Google" if hw["spec_source"].startswith("https://cloud.google.com/") else "NVIDIA"
+            return f"[{maker}]({hw['spec_source']})" if r["count"] == 1 else f"{r['count']} x the chip"
+        return table(["Hardware", "Memory", "Memory bandwidth", "Bandwidth per $1 an hour, on demand", "Spec"],
+                     [[r["label"], f"{r['memory']} GB", f"{r['bw']:,} GB/s",
+                       f"{(Decimal(r['bw']) / r['price']).quantize(Decimal(1), ROUND_HALF_UP):,} GB/s", spec(r)] for r in rows])
+    if name == "pair":
+        a, b = rows[1], rows[2]
+        return (f"For about the same price per hour ({_usd(a['price'])} and {_usd(b['price'])}), a {a['label'].split(' (')[0]} "
+                f"has {_dec(Decimal(a['memory']) / b['memory'])}x the memory ({a['memory']} GB and {b['memory']} GB) and "
+                f"{_dec(Decimal(a['bw']) / b['bw'])}x the memory bandwidth ({a['bw']:,} GB/s and {b['bw']:,} GB/s) of one H100.")
+    meas = []
+    for x in d["measured"]:
+        mm = next(y for y in reg["models"] if y["id"] == x["model"])
+        res = mm["results"][x["result"]]
+        r = next(r for r in rows if r["hardware"] == x["hardware"] and r["count"] == x["count"])
+        meas.append((r, x["users"], _first_num((res.get("short") or {}).get("ours") or res["value"])))
+    total = lambda users, n: f"{n:,}" + (" total" if users != "1" else "")
+    if name == "speed":
+        head = (f"{m['name']} ({d['ceiling']['params']}), our default weights file ({wf['gb']} GB, "
+                f"{_dec(Decimal(str(wf['bpw'])))} bits per weight), output tokens per second:\n\n")
+        body = [[r["label"], _usd(r["price"]), users, total(users, n), "measured"] for r, users, n in meas]
+        body += [[r["label"], _usd(r["price"]), "1", f"~{r['ceiling']}", f"ceiling: {r['bw']:,} GB/s / {wf['gb']} GB"] for r in rows]
+        return head + table(["Hardware", "Per hour", "Users", "Tokens per second", "Kind"], body)
+    if name == "cost":
+        per_m = lambda price, n: _usd(price / (n * 3600) * 1000000)
+        body = sorted([[r["label"], users, f"{total(users, n)}, measured", per_m(r["price"], n)] for r, users, n in meas],
+                      key=lambda row: Decimal(row[3][1:].replace(",", "")))
+        body += [[r["label"], "1", f"~{r['ceiling']}, ceiling", per_m(r["price"], r["exact"])] for r in rows]
+        return (f"{m['name']}, estimated as price per hour / output tokens per hour, at the Google Cloud on-demand list "
+                f"prices above:\n\n" + table(["Hardware", "Users", "Tokens per second", "USD per 1M output tokens"], body))
+    raise KeyError(f"unknown cloud block {name!r}")
+
+
+def check_cloud(reg, repo, problems, today=None):
+    """Prices are at most max_age_days old (models.json prices.read too) and models.json prices.per_chip_hour equals the
+    on-demand price in docs/data/cloud-prices.json for each chip."""
+    import datetime
+    d = cloud_data(repo, problems)
+    if d is None:
+        return
+    today = today or datetime.datetime.now(datetime.timezone.utc).date()
+    age = lambda iso: (today - datetime.date.fromisoformat(iso)).days
+    where, limit = CLOUD.as_posix(), d.get("max_age_days", 45)
+    for p in d.get("prices", []):
+        m = UTC_MIN_RE.match(p.get("read_utc", ""))
+        if not m or not p.get("source", "").startswith("https://") or p.get("hardware") not in d.get("hardware", {}):
+            problems.add(where, f"price {p.get('hardware')}/{p.get('column')}: needs hardware, read_utc YYYY-MM-DDTHH:MMZ and an https source")
+        elif age(m.group(1)) > limit:
+            problems.add(where, f"price {p['hardware']}/{p['column']} was read {age(m.group(1))} days ago (more than "
+                                f"{limit}): read {p['source']} again and update the price and read_utc")
+    if age(reg["prices"]["read"]) > limit:
+        problems.add("models.json", f"prices.read is {age(reg['prices']['read'])} days old (more than {limit}): read the "
+                                    f"price again (and {where})")
+    for chip, v in reg["prices"]["per_chip_hour"].items():
+        try:
+            ours = _unit_price(d, chip, d["options"]["on_demand"].get(chip, "On Demand"))[0]
+        except KeyError:
+            problems.add(where, f"no on-demand price for {chip} (models.json prices.per_chip_hour has one)")
+            continue
+        if Decimal(v) != ours:
+            problems.add("models.json", f"prices.per_chip_hour {chip} {v} differs from {where} ({ours})")
+
+
+MARK_RE = re.compile(r"(<!-- r:([a-z0-9-]+)/([a-z0-9][a-z0-9_.-]*) -->)(.*?)(<!-- /r -->)", re.S)  # its own name: NUM_RE is the number guard
+
+
+def figure_text(reg, owner, key):
+    """The text a number marker shows: r:MODEL/N is results[N] of that model (its short "ours" cell), r:MODEL/NAME is
+    its figures[NAME], r:MODEL/chip-v5e its chips row (status, date, why), r:MODEL/arg-ctx the value after --ctx in
+    its cloud.agents.run_args, r:cloud/NAME is a top-level figure (chip waits, disk sizes: not one model's). None if
+    absent."""
+    if owner == "cloud":
+        f = (reg.get("figures") or {}).get(key)
+        return f and f["text"]
+    m = next((x for x in reg["models"] if x["id"] == owner), None)
+    if m is None:
+        return None
+    if key.startswith("chip-") and key[5:] in CHIPS:
+        return chip_text(m, key[5:])
+    if key.startswith("arg-"):   # r:MODEL/arg-ctx: the value after --ctx in cloud.agents.run_args ("32,768")
+        args = ((m.get("cloud") or {}).get("agents") or {}).get("run_args") or []
+        flag = "--" + key[4:]
+        v = args[args.index(flag) + 1] if flag in args[:-1] else None
+        return v and (f"{int(v):,}" if v.isdigit() else v)
+    if key.isdigit():
+        res = m.get("results") or []
+        return ((res[int(key)].get("short") or {}).get("ours") or res[int(key)]["value"]) if int(key) < len(res) else None
+    f = (m.get("figures") or {}).get(key)
+    return f and f["text"]
+
+
+NUMBERS = Path("internal") / "numbers.json"   # the maintainers' number map: not in the public tree
+_BEFORE = 40                                  # characters of the page kept before each number to find it again
+
+
+def load_numbers(repo):
+    """The private number map ({"figures": {owner: {key: figure}}, "pages": {page: [place]}}), or None without one."""
+    f = repo / NUMBERS
+    return json.loads(f.read_text()) if f.is_file() else None
+
+
+def merge_figures(reg, nmap, problems=None):
+    """The named figures live in the private map; the checks read them as models.json's. A figure still in models.json
+    (a branch from before the map) is read too, and fails the check until render --write moves it."""
+    figs = nmap.get("figures") or {}
+    for owner, row in [("cloud", reg)] + [(m["id"], m) for m in reg["models"]]:
+        inline = row.get("figures") or {}
+        if inline and problems is not None:
+            problems.add("models.json", f"{owner}: {len(inline)} figures belong in {NUMBERS.as_posix()} (run render --write)")
+        row["figures"] = {**(figs.get(owner) or {}), **inline}
+
+
+def unmark(text):
+    """(text without number markers, [place]); a place is {"r": "MODEL/KEY", "text": shown text, "before": the text just
+    before it on its line, up to _BEFORE characters, with the line start as a newline}."""
+    out, spots, pos, plain = [], [], 0, ""
+    for mt in MARK_RE.finditer(text):
+        out.append(text[pos:mt.start()])
+        plain = "".join(out)
+        tail = plain[-_BEFORE:]
+        k = tail.rfind("\n")
+        spots.append({"r": f"{mt.group(2)}/{mt.group(3)}", "text": mt.group(4), "before": tail[k:] if k >= 0 else tail})
+        out.append(mt.group(4))
+        pos = mt.end()
+    out.append(text[pos:])
+    return "".join(out), spots
+
+
+def mark_up(text, spots, where="", problems=None):
+    """The page with its number markers back, from its places in the private map (in page order). A marker already in
+    the page (written by hand, or put back to edit the words around it) wins over the map's place for that number."""
+    plain, inline, pos = unmark(text)[0], [], 0
+    for mt in MARK_RE.finditer(text):           # inline markers, at their offsets in the plain text
+        pos += mt.start() - (inline[-1][4] if inline else 0)
+        inline.append((pos, pos + len(mt.group(4)), f"{mt.group(2)}/{mt.group(3)}", mt.group(4), mt.end()))
+        pos += len(mt.group(4))
+    found, pos = [], 0
+    for s in spots:
+        b = len(s["before"])   # the words before a number can hold the number before it ("4.0 to 4.7 s")
+        i = plain.find(s["before"] + s["text"], max(0, pos - b))
+        while i >= 0 and i + b < pos:
+            i = plain.find(s["before"] + s["text"], i + 1)
+        if i < 0:
+            if not inline and problems is not None:
+                problems.add(where, f"number r:{s['r']} {s['text']!r} after {s['before'][-30:]!r} is not on the page any "
+                                    f"more: put its marker back in the page (<!-- r:{s['r']} -->...<!-- /r -->) and run "
+                                    f"render --write, or remove the number")
+            continue
+        found.append((i + b, i + b + len(s["text"]), s["r"], s["text"]))
+        pos = i + b + len(s["text"])
+    keep = [f for f in found if not any(x < f[1] and f[0] < y for x, y, *_ in inline)]
+    out, pos = [], 0
+    for x, y, r, shown, *_ in sorted([i[:4] for i in inline] + keep):
+        out += [plain[pos:x], f"<!-- r:{r} -->{shown}<!-- /r -->"]
+        pos = y
+    out.append(plain[pos:])
+    return "".join(out)
+
+
+def _page(repo, f, places):
+    """A page as the number checks read it: its markers back in place."""
+    rel = f.relative_to(repo).as_posix()
+    return mark_up(f.read_text(), (places or {}).get(rel, []))
+
+
+def fill_numbers(reg, text, where, problems):
+    """Every <!-- r:MODEL/KEY -->TEXT<!-- /r --> gets its figure from models.json (results by number, figures by name)."""
+    def sub(mt):
+        ours = figure_text(reg, mt.group(2), mt.group(3))
+        if ours is None:
+            problems.add(where, f"number marker r:{mt.group(2)}/{mt.group(3)}: no such result or figure in models.json")
+            return mt.group(0)
+        short = ours if mt.group(3).startswith("chip-") else ours.split(" (")[0]   # a chip status keeps its condition
+        keep = mt.group(4) if mt.group(4) in (ours, short) else short
+        return mt.group(1) + keep + mt.group(5)
+    return MARK_RE.sub(sub, text)
+
+
+# ---------------------------------------------------------------- measured numbers typed in prose (M4c)
+# Every measured number in a hand-written page sits in a number marker, so it comes from models.json; numbers that are
+# not measurements (Google's chip specs, settings, sizes in an example) are listed by page and text in
+# tools/numbers_allowed.txt with the reason. A new or changed number anywhere else fails T0.
+
+_NUM = r"\d[\d,]*(?:\.\d+)?"
+_UNIT = (r"(?:[\s-]?(?:tokens/sec|tok/sec|tokens/s|tok/s|tokens a second|tokens per second|tokens?|frames? (?:a|per) second|"
+         r"fps|requests? (?:a|per) second|times|ms|milliseconds?|secs?|s|seconds?|minutes?|mins?|hours?|hrs?|days?|"
+         r"[KMGT]i?B/s|[KMGT]i?Bps|[KMG]bit/s|[KMG]bps|TB|TiB|GB|GiB|MB|MiB|KB|TFLOPS|TFLOPs|TOPs|%|percent|bpw|bits per weight|"
+         r"fold)"
+         r"|x|\s?\u00d7)")
+# a number with its unit (also "5.2-second", "767-token"), a range ("6-7 s", "6 to 7 s") or a range that ends in a marker
+# ("4.0 to <!-- r:... -->"); a bare number alone in a table cell (its unit is in the header); a dollar amount that is
+# not a price an hour or a day (check_prose checks those against models.json prices); a number in words before a unit
+_CELL = rf"\$?{_NUM}(?: ?(?:-|\u2013|to) ?{_NUM})?(?=\s?[|(,;*/+])"
+MEASURE_RE = re.compile(rf"(?<![\w.$/:-]){_NUM}(?:\s?(?:-|\u2013|to|and)\s?(?:{_NUM}{_UNIT}|\x00)|{_UNIT})(?![\w/])"
+                        rf"|(?:(?<=\|)|(?<=\| )|(?<=\| ~)|(?<=\| about ))(?<![\w.]){_CELL}"   # a table cell that starts with a number
+                        rf"|\b(?:seconds|secs|minutes|mins|hours|ms|milliseconds|tokens|tok/s|fps|GB|GiB|MB|MiB|percent)\)?"
+                        rf"\s?[:=]\s?{_NUM}"                                    # the unit first: "in seconds: 5.2"
+                        r"|\d(?=\x00)|(?<=\x00)\d"                              # a digit typed against a marker
+                        r"|(?<![\w.])\$\d[\d,]*(?:\.\d+)?[MKk]?(?![\w.]*\d)(?!\s(?:an|a|per)\s(?:chip-)?hour|/hour|\sa day)")
+_WORDS = ("one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|"
+          "eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million")
+WORD_NUM_RE = re.compile(rf"\b(?:{_WORDS})(?:[\s-](?:and a half|{_WORDS}))*[\s-](?:seconds?|minutes?|hours?|milliseconds?|"
+                         rf"times|tokens|frames|percent|gigabytes|megabytes)\b", re.I)
+CODE_LANGS = r"(?:bash|sh|shell|zsh|json|jsonc|toml|python|py|yaml|yml|js|javascript|ts|html|css|ini|diff|powershell|ps1)"
+STRIP_RES = (re.compile(rf"^```{CODE_LANGS}\b[^\n]*\n.*?^```", re.S | re.M),   # code; output blocks (text, console, plain) are read
+             re.compile(r"<!-- (models|cli|api|chips):start.*?<!-- (models|cli|api|chips):end -->", re.S),
+             CLOUD_BLOCK_RE,  # rendered from docs/data/cloud-prices.json and checked by render-and-diff (check_cloud)
+             re.compile(r"\]\([^)\s]*\)"), re.compile(r"^```.*$", re.M))  # inline code is read: a number there is public too
+TAG_RE = re.compile(r"<[^>]*>")   # a tag is dropped, the words it shows or exposes read (tag_words)
+# alt and title text, ARIA text, a form value or placeholder, a meta content, data-* (CSS attr() puts it on screen)
+TAG_WORDS_RE = re.compile(r"(?<![\w-])(alt|title|aria-[\w-]+|placeholder|value|content|label|"
+                          r"data-[\w-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'=<>`]+))", re.I)
+
+
+SHOWN_VALUE_RE = re.compile(r"(?is)<input\b(?![^>]*\btype\s*=\s*[\"']?(?:range|hidden|checkbox|radio|color|file|image|date|"
+                            r"time|datetime-local|month|week)\b)")
+
+
+COMPONENT_RE = re.compile(r"<[A-Z][a-z]\w*\b")   # an MDX (JSX) component: <Stat value="..." />
+PROP_RE = re.compile(r"""(?<![\w-])[\w:.-]+\s*=\s*(?:"([^"]*)"|'([^']*)'|\{\s*["'`]([^"'`]*)["'`]\s*\})""")
+
+
+def tag_words(tag):
+    """The words a tag puts in front of a reader, quoted or not: what the number, chip and company checks read. A value
+    is read where the browser prints it: an <input> box or button (a slider's or checkbox's value is not text). An MDX
+    component shows its props as it likes: every string prop is read."""
+    if COMPONENT_RE.match(tag):
+        return " " + " ".join(a or b or c for a, b, c in PROP_RE.findall(tag)) + " "
+    shown = SHOWN_VALUE_RE.match(tag)
+    return " " + " ".join(a or b or c for k, a, b, c in TAG_WORDS_RE.findall(tag) if k.lower() != "value" or shown) + " "
+
+
+CHIP_WORD_RE = re.compile(r"\b(?:TPU )?v[56][ep]\b")
+STATUS_WORD_RE = re.compile(r"(?i)\b(?:not supported|not yet|supported|passing|failing|too little memory|do(?:es)? not fit|"
+                            r"needs? more than)\b")
+RUNS_ON_RE = re.compile(r"(?i)(?<!not )(?<!n't )\b(?:runs?|works?|fits?)(?: fine| well)? on (?:an? |one |the )?(?:single )?(?:TPU )?(v[56][ep](?:-\d+)?)\b")
+ARG_RE = re.compile(r"(--(?:ctx|slots))[ =](\d+)|(model_context_window\s*=\s*|\"contextWindow\":\s*)(\d+)")
+ALLOWED = Path("tools") / "numbers_allowed.txt"
+
+
+CARD_RE = re.compile(r"^hf/[^/]+/README\.md$")   # rendered from models.json and templates/hf (render-and-diff)
+
+
+def number_pages(reg, repo):
+    """Every public page but the HF cards (rendered from models.json) and the page templates. docs/cli.md and
+    docs/server-api.md are read too: a number in a --help text or a route description lands there. A coming-soon
+    model's page is read like the others: it is public from its first push. Any other file under hf/ is read too."""
+    return [f for f in _prose(repo) if not CARD_RE.match(r := f.relative_to(repo).as_posix()) and not r.startswith("docs/_templates/")]
+
+
+def ui_pages(repo):
+    """The text people read in the package, the Mac app and the docs' own pictures and pages: every .html, .svg and .js
+    file under src/mashbox, apps/ and docs/."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "ls-files", "--cached", "--others", "--exclude-standard", "--",
+                              "src/mashbox", "apps", "docs"], capture_output=True, text=True, check=True).stdout.splitlines()
+        files = [repo / x for x in out]
+    except (OSError, subprocess.CalledProcessError):
+        files = [f for d in ("src/mashbox", "apps", "docs") for f in (repo / d).rglob("*")]
+    return sorted({f for f in files if f.suffix in (".html", ".svg", ".js") and f.is_file()}, key=lambda f: f.relative_to(repo).as_posix())
+
+
+JS_STR_RE = re.compile(r"'((?:[^'\\\n]|\\.)*)'|\"((?:[^\"\\\n]|\\.)*)\"|`((?:[^`\\]|\\.)*)`")
+
+
+def ui_text(f, text=None):
+    """What a person can read in a UI file: an HTML or SVG page's text and the words its tags show (tag_words), and the
+    string literals of its scripts (and of a .js file). Styles and code are left out; "$1" in a regex replacement too.
+    text: the file with its number markers put back (the map's places), else the file as it is."""
+    t, js = (f.read_text() if text is None else text), ""
+    if f.suffix in (".html", ".svg"):   # an SVG's text, title and desc are its words
+        t = re.sub(r"(?is)<style\b.*?</style>", " ", t)
+        js = "\n".join(re.findall(r"(?is)<script\b[^>]*>(.*?)</script>", t))
+        t = re.sub(r"(?is)<script\b.*?</script>", " ", t)
+        t = re.sub(r"<(?!!-- (?:r:|/r ))[^>]*>",   # number markers stay (render fills them), other tags give their words
+                   lambda mt: tag_words(mt.group(0)), t)
+    else:
+        t, js = "", t
+    js = re.sub(r"(?m)^\s*//.*$", " ", js)
+    lits = [a or b or c for a, b, c in JS_STR_RE.findall(js)]
+    return re.sub(r"\$\d+\b(?![.,]\d)", " ", t + "\n" + "\n".join(lits))
+
+
+def guard_pages(reg, repo, places=None):
+    """(path, text) of everything the number guard reads: the public pages, the UI text and the PyPI summary line,
+    with their number markers back from the map (places)."""
+    out = [(f.relative_to(repo).as_posix(), _page(repo, f, places)) for f in number_pages(reg, repo)]
+    seen = set()
+    for f in ui_pages(repo):   # a byte-identical copy (the app's page in the package and in apps/) is read once
+        raw = _page(repo, f, places)
+        if raw not in seen:
+            seen.add(raw)
+            out.append((f.relative_to(repo).as_posix(), ui_text(f, raw)))
+    pp = repo / "pyproject.toml"    # its description is the PyPI page's first line
+    if pp.exists():
+        out.append(("pyproject.toml", "\n".join(re.findall(r'^description\s*=\s*"(.*)"', pp.read_text(), re.M))))
+    return out
+
+
+def _guard_text(text):
+    """A page as the number guard reads it: code blocks out (output blocks stay), markers as \x00, generated blocks
+    and link targets out, tags as their alt/title text, bold marks out, whitespace joined."""
+    keep = lambda mt: " ".join(re.findall(r"(?m)^[ \t]*(?:#|//)[ \t]+(.*)$", mt.group(0))) + " "   # comments are prose
+    text = MARK_RE.sub(lambda mt: "\x00\x01" if mt.group(3).startswith("chip-") else "\x00",   # a marker stays a place
+                       STRIP_RES[0].sub(keep, text))                                      # holder: "4.0 to <marker>"
+    for rx in STRIP_RES[1:]:
+        text = rx.sub(" ", text)
+    text = TAG_RE.sub(lambda mt: tag_words(mt.group(0)), text)
+    text = re.sub(r"\u00a0", " ", html.unescape(text)).replace("**", "").replace("__", "")
+    return text
+
+
+def _run_arg_values(reg, repo):
+    """{flag or config key: values a page may show}: models.json run_args, and the `mashbox run` defaults."""
+    out = {"--ctx": set(), "--slots": set()}
+    for m in reg["models"]:
+        args = ((m.get("cloud") or {}).get("agents") or {}).get("run_args") or []
+        for i, a in enumerate(args[:-1]):
+            if a in out:
+                out[a].add(args[i + 1])
+    ctx = set(out["--ctx"])     # an agent's context setting (Codex, Pi) is the server's --ctx of run_args
+    mods = _package(repo, Problems())
+    if mods is not None:
+        p = next((sp for n, sp, _ in _subparsers(mods[".cli"].build_parser()) if n == "run"), None)
+        for a in (p._actions if p else []):
+            for f in out:
+                if f in a.option_strings and a.default not in (None, argparse.SUPPRESS):
+                    out[f].add(str(a.default))
+    out["ctx"] = ctx
+    return out
+
+
+def bad_chip_claims(m, piece):
+    """The chips a sentence says model m runs on ("runs on a TPU v5e-8") while its models.json chips row says not
+    supported or failing."""
+    out = []
+    for chip in RUNS_ON_RE.findall(piece):
+        chip = chip if chip in CHIPS else chip.split("-")[0]   # v6e-4 is its own row; v6e-1, v5e-8: the chip's
+        if (m["chips"].get(chip) or {}).get("status") in ("not supported", "failing"):
+            out.append(chip)
+    return out
+
+
+def docstrings(repo):
+    """(path, text) of every docstring in the package (module, class, function): help() and API references show them."""
+    import ast
+    out = []
+    for py in sorted((repo / "src" / "mashbox").rglob("*.py")):
+        try:
+            tree = ast.parse(py.read_text())
+        except (SyntaxError, ValueError):
+            continue   # a file that does not parse fails ruff and the tests
+        for n in [tree] + [x for x in ast.walk(tree) if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]:
+            d = ast.get_docstring(n, clean=True)
+            if d:
+                out.append((py.relative_to(repo).as_posix(), d))
+    return out
+
+
+def check_numbers(reg, repo, problems, places=None):
+    """M4c: every measured number in hand-written prose is in a number marker or allowed by name; figures are
+    checked against their result when they repeat one (figures[...]["from"]). places: the private map's pages."""
+    for owner, figs in [("cloud", reg.get("figures") or {})] + [(m["id"], m.get("figures") or {}) for m in reg["models"]]:
+        for key, f in figs.items():
+            if not re.fullmatch(r"[a-z][a-z0-9_.-]*", key) or not f.get("text") or not f.get("what"):
+                problems.add("models.json", f"figure {owner}/{key}: needs a lower-case name, text and what")
+            elif "from" in f:
+                m = next(x for x in reg["models"] if x["id"] == owner)
+                bad = unbacked(f["text"], result_sources(m["results"][f["from"]]))
+                if bad:
+                    problems.add("models.json", f"figure {owner}/{key} {f['text']!r}: {bad} not in result {f['from']}")
+    allowed, used = {}, set()
+    f = repo / ALLOWED
+    for i, line in enumerate(f.read_text().splitlines() if f.exists() else [], 1):
+        if line.strip() and not line.startswith("#"):
+            parts = line.split("|")
+            page, phrase, why = parts[0].strip(), " ".join("|".join(parts[1:-1]).split()), parts[-1].strip()
+            if len(parts) < 3 or not why or page == "*" or len(phrase.split()) < 3:
+                problems.add(ALLOWED.as_posix(), f"line {i}: want 'page | the number with the words around it, as "
+                                                 f"written (3 words or more) | why it is not a measurement' (no * lines)")
+                continue
+            allowed[(page, phrase)] = i
+    args = _run_arg_values(reg, repo)
+    names = {w: m for m in reg["models"] for w in (m["name"], m["id"], m["name"].split()[0])}
+    name_re = re.compile("|".join(re.escape(w) for w in sorted(names, key=len, reverse=True)))
+    for rel, raw in guard_pages(reg, repo, places):
+        text = _guard_text(raw)
+        own = next((m for m in reg["models"] if rel == f"docs/models/{m['id']}.md"), None)
+        status = []   # a sentence (or table row) that gives a model's chip status: from the chips row (marker) only
+        for line in text.splitlines():
+            for piece in re.split(r"(?<=[.!?])\s+", line):
+                said = {names[w]["id"]: names[w] for w in name_re.findall(piece)} or ({own["id"]: own} if own else {})
+                if CHIP_WORD_RE.search(piece) and STATUS_WORD_RE.search(piece) and "\x01" not in piece and said:
+                    status.append(" ".join(piece.split()))   # \x01: a chip marker
+                for m in said.values():   # "Hy-Nomas runs on a TPU v5e-8" while its v5e row says not supported
+                    for chip in bad_chip_claims(m, piece) if "\x01" not in line else []:
+                        problems.add(rel, f"says {m['name']} runs on {chip} ({' '.join(piece.split())[:100]!r}), "
+                                          f"but its models.json chips row is {chip_text(m, chip)!r}")
+        text = " ".join(text.replace("\x01", "").split())
+        spans = [(mt.start(), mt.end(), k) for k in allowed if k[0] == rel
+                 for mt in re.finditer(re.escape(k[1]).replace("<marker>", "\x00"), text)]
+
+        def allow(a, b):
+            hit = next((k for x, y, k in spans if x <= a and b <= y), None)
+            if hit:
+                used.add(hit)
+            return hit
+        hits = [(mt.start(), mt.end(), mt.group(0)) for rx in (MEASURE_RE, WORD_NUM_RE) for mt in rx.finditer(text)]
+        for a, b, num in sorted(hits):
+            if num.startswith("$") and text[max(0, a - 13):a] == "for a day is ":
+                continue   # "a day is $64.80": check_prose
+            if num.isdigit() and text[max(0, a - 4):a] == "| | " and (f"| | {int(num) + 1} |" in text[b:b + 4000]
+                                                                    or f"| | {int(num) - 1} |" in text[max(0, a - 4000):a]):
+                continue   # a table's first column counting rows (turn 1, turn 2): the row's number, not a measurement
+            if rel in ("docs/cli.md", "docs/server-api.md") and text[a - 2:a] == "| " and text[b:b + 2] == " |":
+                continue   # a default in a table rendered from the parsers or the spec (their prose is read)
+            if num.startswith("$") and re.search(r"\d+ minutes is about $", text[max(0, a - 25):a]):
+                continue   # "30 minutes is about $1.35": check_prose
+            if not allow(a, b):
+                around = text[max(0, a - 30):b + 20].replace("\x00", "<marker>")
+                problems.add(rel, f"measured number {num!r} typed by hand (...{around}...): put it in a number "
+                                  f"marker (<!-- r:MODEL/KEY -->...<!-- /r -->, value in models.json) or, if it is not a "
+                                  f"measurement, on its page in {ALLOWED.as_posix()} with the words around it")
+        for s in status:
+            a = text.find(s)
+            if not allow(a, a + len(s)):
+                problems.add(rel, f"chip status typed by hand: {s[:120]!r}: use the chips row "
+                                  f"(<!-- r:MODEL/chip-v5e -->...<!-- /r -->), so it follows models.json")
+        # --ctx/--slots and agent context settings: models.json run_args or the `mashbox run` default (n11b)
+        for where, body, spanned in [("text", text, True)] + [("code", b, False) for b in FENCE_RE.findall(raw)]:
+            for mt in ARG_RE.finditer(body):
+                key, val = (mt.group(1), mt.group(2)) if mt.group(1) else ("ctx", mt.group(4))
+                if val in args[key] or (spanned and allow(mt.start(), mt.end())):
+                    continue
+                problems.add(rel, f"{mt.group(0)!r} in {where}: not models.json cloud.agents.run_args "
+                                  f"({sorted(args[key])}) or the mashbox run default; change it with run_args, or list the "
+                                  f"example in {ALLOWED.as_posix()}")
+    for rel, doc in docstrings(repo):   # a docstring (help(), API references) makes no chip claim against the chips rows
+        own = next((m for m in reg["models"] if rel.startswith(f"src/mashbox/models/{m['id'].replace('-', '_')}/")), None)
+        for piece in re.split(r"(?<=[.!?])\s+", " ".join(doc.split())):
+            for m in ({names[w]["id"]: names[w] for w in name_re.findall(piece)} or ({own["id"]: own} if own else {})).values():
+                for chip in bad_chip_claims(m, piece):
+                    problems.add(rel, f"docstring says {m['name']} runs on {chip} ({piece[:100]!r}), "
+                                      f"but its models.json chips row is {chip_text(m, chip)!r}")
+    which = re.compile(r"\b(first|later)\b", re.I)   # a result marker after "first start" must be a first-start result
+    for f in number_pages(reg, repo):
+        raw = _page(repo, f, places)
+        for mt in MARK_RE.finditer(raw):
+            m = next((x for x in reg["models"] if x["id"] == mt.group(2)), None)
+            if m is None or not mt.group(3).isdigit() or int(mt.group(3)) >= len(m["results"]):
+                continue
+            r = m["results"][int(mt.group(3))]
+            own = {w.lower() for w in which.findall((r.get("short") or {}).get("measure") or r["metric"])}
+            said = {w.lower() for w in which.findall(re.split(r"[.;:(|]|<!--|-->", raw[max(0, mt.start() - 60):mt.start()])[-1])}
+            words = set(re.findall(r"[a-z]{4,}", r["metric"].lower())) - {"with", "from", "that", "this", "time", "same"}
+            line = raw[raw.rfind("\n", 0, mt.start()) + 1:mt.start()]   # prose (a table's column header names its measure)
+            near = re.sub(r"<!--.*?-->", " ", raw[max(0, mt.start() - 160):mt.start()]).lower()
+            if words and not line.lstrip().startswith("|") and not words & set(re.findall(r"[a-z]{4,}", near)):
+                problems.add(f.relative_to(repo).as_posix(), f"marker r:{mt.group(2)}/{mt.group(3)} ({r['metric'][:60]}) "
+                                                             f"has none of its words before it: is it the right result?")
+            if own and said and not own & said:
+                problems.add(f.relative_to(repo).as_posix(), f"marker r:{mt.group(2)}/{mt.group(3)} ({r['metric']}) follows "
+                                                             f"words for the {'/'.join(sorted(said))} start: wrong result number?")
+    refs = {(mt.group(2), mt.group(3)) for f in _prose(repo) + ui_pages(repo) for mt in MARK_RE.finditer(_page(repo, f, places))}
+    for owner, figs in [("cloud", reg.get("figures") or {})] + [(m["id"], m.get("figures") or {}) for m in reg["models"]]:
+        for key in figs:
+            if (owner, key) not in refs:
+                problems.add("models.json", f"figure {owner}/{key} is on no page (remove it)")
+    for k, i in allowed.items():
+        if k not in used:
+            problems.add(ALLOWED.as_posix(), f"line {i}: {k[1]!r} holds no number on {k[0]} any more (remove the line)")
+
+
+# ---------------------------------------------------------------- facts typed in prose (install line, prices, company line, release status)
+# One value in models.json, every copy in the pages checked against it (as llama.cpp checks its generated docs).
+
+FENCE_RE = re.compile(r"^```[^\n]*\n(.*?)^```", re.S | re.M)
+UV_RE = re.compile(r"(?:python3? -m )?(?:uv tool install|uv pip install|uvx|pipx install|pip3? install)\b.*?(?=\s*(?:&&|'|`|$))", re.M)
+PRICE_RE = re.compile(r"\$(\d+\.\d{2})(?: (?:an|a|per) (?:chip-)?hour\b|/hour\b)|\$(\d+\.\d{2}) a day\b|\bfor a day is \$(\d+\.\d{2})")
+MINUTES_PRICE_RE = re.compile(r"\b(\d+) minutes is about \$(\d+\.\d{2})")
+READ_RE = re.compile(r"\bread (\d{1,2} [A-Z][a-z]+ \d{4})")
+COMPANY_RE = re.compile(r"\bMASHBOX\s+Labs(?:\s*[,(:]| (?:is|was|has|will|can|[a-z]+s)\b)|\b(?:we|us|team) at MASHBOX\b"
+                        r"|(?-i:\bMASHBOX) (?:is|was|has been) (?:a|an|the|our)\b[^.]{0,40}?\b(?:lab|company|team|startup|studio)\b", re.I)
+STAGING_RE = re.compile(r"(?i)\bstatus:\s*staging|pre-release package|\bnot released\b|\bbefore release\b")
+VERSION_KEY_RE = re.compile(r"(?im)^[ \t]*[\w-]*(?:version|release)[\w-]*[ \t]*:[ \t]*[\"']?v?(\d+\.\d+\.\d+)\b")
+VERSION_META_RE = re.compile(r"(?i)\b(?:name|property|itemprop)\s*=\s*[\"']?[\w:.-]*(?:version|release)")
+HISTORY = {"CORE-CHANGES.md"}   # dated history: its entries keep the words and numbers of their date
+_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "build", "dist", ".pytest_cache", ".ruff_cache", "__pycache__"}
+
+
+def _prose(repo):
+    """The one page list: render, numbers, links, commands and prose checks all read it. Every Markdown (and MDX) page of the
+    repo (git ls-files, committed and new; every *.md outside build and tool folders when the tree is no checkout) and
+    llms.txt, without dated history, so a new page (a root BENCHMARKS.md, a package README) is checked from its first
+    commit."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "ls-files", "--cached", "--others", "--exclude-standard", "--",
+                              "*.md", "*.mdx", "llms.txt"], capture_output=True, text=True, check=True).stdout.splitlines()
+        files = [repo / x for x in out if x]
+    except (OSError, subprocess.CalledProcessError):
+        files = [f for g in ("*.md", "*.mdx") for f in repo.rglob(g) if not _SKIP_DIRS & set(f.relative_to(repo).parts[:-1])] \
+            + [repo / "llms.txt"]
+    return sorted({f for f in files if f.is_file() and f.relative_to(repo).as_posix() not in HISTORY},
+                  key=lambda f: f.relative_to(repo).as_posix())
+
+
+def doc_pages(repo):
+    """The docs pages of the one list, without the page templates in docs/_templates."""
+    return [f for f in _prose(repo) if (r := f.relative_to(repo).as_posix()).startswith("docs/")
+            and not r.startswith("docs/_templates/")]
+
+
+def _long_date(iso):
+    y, mo, d = (int(x) for x in iso.split("-"))
+    months = ("January February March April May June July August September October November December").split()
+    return f"{d} {months[mo - 1]} {y}"
+
+
+def check_prose(reg, repo, problems):
+    """install: every uv tool install line in a code block is models.json's install (or a model's own install).
+    prices: every "$N.NN an hour" is a listed chip price times 1, 2, 4 or 8 chips, with no "read <date>" stamp (the
+    date stays in models.json prices.read; tools/docs_lint.py fails every other date on a page). company_line: README, llms.txt (and the org profile) carry it word for word. A released model's page
+    has no staging or before-release text."""
+    allowed = {m.group(0) for src in [reg["install"]] + [m.get("install", "") for m in reg["models"]]
+               for m in UV_RE.finditer(src) if "mashbox" in m.group(0)}
+    per_chip = {k: Decimal(v) for k, v in reg["prices"]["per_chip_hour"].items()}
+    ok_amounts = {(v * n).quantize(Decimal("0.01")) for v in per_chip.values() for n in (1, 2, 4, 8)}
+    for f in _prose(repo):
+        rel, text = f.relative_to(repo).as_posix(), CLOUD_BLOCK_RE.sub(" ", f.read_text())  # cloud blocks: check_cloud
+        spans = [s for s in INLINE_RE.findall(FENCE_RE.sub("", text)) if not re.match(r"(?:python3? -m )?pip3? install(?!.*==)", s)]
+        for block in FENCE_RE.findall(text) + spans:   # inline: plain `pip install "mashbox[tpu]"` is the documented failure
+            for uv in UV_RE.finditer(block.replace("\\\n", " ")):
+                if re.search(r"\bmashbox\b(?!-labs)", uv.group(0)) and uv.group(0) not in allowed:
+                    problems.add(rel, f"install line differs from models.json install: {uv.group(0)!r}")
+        for line in re.sub(r"&nbsp;|\u00a0", " ", text).splitlines():
+            amounts = PRICE_RE.findall(line)
+            for hour, d1, d2 in amounts:
+                day = d1 or d2
+                if hour and Decimal(hour) not in ok_amounts:
+                    problems.add(rel, f"${hour} an hour is not a models.json prices.per_chip_hour price times 1, 2, 4 or 8 chips")
+                if day and Decimal(day) not in {(v * 24).quantize(Decimal("0.01")) for v in ok_amounts}:
+                    problems.add(rel, f"${day} a day is not 24 hours of a models.json prices.per_chip_hour price times 1, 2, 4 or 8")
+            for mins, amt in MINUTES_PRICE_RE.findall(line):
+                if Decimal(amt) not in {(v * int(mins) / 60).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) for v in ok_amounts}:
+                    problems.add(rel, f"{mins} minutes is about ${amt}: not {mins} minutes of a models.json prices.per_chip_hour price")
+            for d in READ_RE.findall(line):
+                problems.add(rel, f"price read date {d!r} on a public page: a page states the price, the date it was "
+                                  f"read stays in models.json prices.read")
+    pins = set()
+    def walk(x):
+        if isinstance(x, dict):
+            pins.update(str(v) for k, v in x.items() if k in ("jax", "jaxlib") and isinstance(v, str))
+            [walk(v) for v in x.values()]
+        elif isinstance(x, list):
+            [walk(v) for v in x]
+    walk(reg["models"])
+    pp = repo / "pyproject.toml"
+    jax_re = re.compile(r"\b(?:JAX|jax(?:lib)?(?:\[tpu\])?==|jax(?:lib)? )v?(\d+\.\d+\.\d+)")
+    if len(pins) > 1:
+        problems.add("models.json", f"kernel bundles pin different JAX versions: {sorted(pins)}")
+    for rel, text in [(f.relative_to(repo).as_posix(), f.read_text()) for f in _prose(repo)] + \
+            ([("pyproject.toml", pp.read_text())] if pp.exists() else []):
+        for line in text.splitlines():
+            for v in jax_re.findall(line) if pins and "Measured on" not in line else []:
+                if v not in pins:
+                    problems.add(rel, f"JAX {v} is not the models.json kernel bundle pin ({', '.join(sorted(pins))}): "
+                                      f"{line.strip()[:100]!r}")
+    for rel in ("README.md", "llms.txt"):
+        f = repo / rel
+        if f.exists() and reg["company_line"] not in f.read_text():
+            problems.add(rel, "company line differs from models.json company_line")
+    pages = [(f.relative_to(repo).as_posix(), f.read_text()) for f in _prose(repo)]
+    pp = repo / "pyproject.toml"    # its description is the PyPI page's first line
+    pages += [("pyproject.toml", "\n".join(re.findall(r'^description\s*=\s*"(.*)"', pp.read_text(), re.M)))] if pp.exists() else []
+    pages += docstrings(repo)   # help() shows them
+    for rel, text in pages:   # anywhere the company is described ("MASHBOX Labs makes/builds/is ...", "MASHBOX Labs, a ..."), it is the line itself
+        text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", TAG_RE.sub(lambda mt: tag_words(mt.group(0)), text)).replace("**", "").replace("__", "")
+        text = " ".join(html.unescape(text).replace("\u00a0", " ").split())
+        for mt in COMPANY_RE.finditer(text):
+            if not text.startswith(reg["company_line"], mt.start()):
+                problems.add(rel, f"describes the company in other words: "
+                             f"{text[mt.start():mt.start() + 70]!r}... (use models.json company_line word for word)")
+    for f in _prose(repo) + ui_pages(repo):   # a version a page declares as metadata (front matter, <meta>) is the release
+        rel, text = f.relative_to(repo).as_posix(), f.read_text()
+        fm = re.match(r"---\n(.*?)\n---", text, re.S)
+        said = VERSION_KEY_RE.findall(fm.group(1)) if fm else []
+        said += [v for tag in re.findall(r"(?i)<meta\b[^>]*>", text) if VERSION_META_RE.search(tag)
+                 for v in re.findall(r"(?i)\bcontent\s*=\s*[\"']?v?(\d+\.\d+\.\d+)", tag)]
+        for v in said:
+            if v != reg["version"]:
+                problems.add(rel, f"declares version {v} in its metadata; the release is models.json version {reg['version']}")
+    for m in reg["models"]:
+        page = repo / "docs" / "models" / f"{m['id']}.md"
+        if not m.get("launch") and page.exists():
+            hit = STAGING_RE.search(page.read_text())
+            if hit:
+                problems.add(page.relative_to(repo).as_posix(), f"released model page still says {hit.group(0)!r}")
+
+
+HEAD_RE = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", re.M)
+
+
+def slug(text):
+    """A heading's anchor as GitHub and the docs site make it (github-slugger, as gen_faq.slug)."""
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    return re.sub(r"[^\w\- ]", "", text.strip().lower().replace("`", "")).replace(" ", "-")
+
+
+def anchors(page):
+    out, seen = set(re.findall(r'<a\s+(?:id|name)="([^"]+)"', page.read_text())), {}
+    for h in HEAD_RE.findall(FENCE_RE.sub("", page.read_text())):
+        s = slug(h)
+        out.add(s if s not in seen else f"{s}-{seen[s]}")
+        seen[s] = seen.get(s, 0) + 1
+    return out
+
+
+CSS_URL_RE = re.compile(r"url\(\s*([\"']?)([^\"')\s]+)\1\s*\)")
+CSS_IMPORT_RE = re.compile(r"@import\s+([\"'])([^\"'\s]+)\1")   # @import "x.css" (the url() form is CSS_URL_RE)
+
+
+def html_targets(body):
+    """Local targets a browser follows in a page's raw HTML and CSS, quoted or not (html.parser reads attributes as a
+    browser does): href, src, srcset, action, formaction, poster, object data, a meta refresh URL, url() in style
+    blocks and style attributes, and @import in style blocks."""
+    from html.parser import HTMLParser
+    out = []
+
+    class Tags(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            a = {k: v or "" for k, v in attrs}
+            out.extend(a[k] for k in ("href", "src", "action", "formaction", "poster") if a.get(k))
+            out.extend([a["data"]] if tag == "object" and a.get("data") else [])
+            out.extend(s.split()[0] for s in a.get("srcset", "").split(",") if s.split())
+            if tag == "meta" and a.get("http-equiv", "").lower() == "refresh":
+                out.extend(re.findall(r"(?i)\burl\s*=\s*[\"']?([^\"';\s]+)", a.get("content", "")))
+            out.extend(u for _, u in CSS_URL_RE.findall(a.get("style", "")))
+        handle_startendtag = handle_starttag
+    p = Tags(convert_charrefs=True)
+    p.feed(body)
+    p.close()
+    return out + [u for css in re.findall(r"(?is)<style\b[^>]*>(.*?)</style>", body)
+                  for _, u in CSS_URL_RE.findall(css) + CSS_IMPORT_RE.findall(css)]
+
+
+def check_relative_links(repo, problems, reg=None):
+    """Every relative link and image in the hand-written pages (inline or [id]: style) points at a file or folder in
+    the repo, and a #fragment into a page at one of its headings (T0, offline). README's links are pinned to
+    github.com/ORG/REPO/blob/vX.Y.Z/..., read as the same repo path. sync_docs turns a missing target into a GitHub link
+    that answers 404 and GitHub answers 200 for any fragment, so a typo would otherwise ship."""
+    own = re.compile(rf"https://github\.com/{reg['github']['org']}/{reg['github']['repo']}/(?:blob|tree)/[^/#?\s]+/"
+                     if reg else r"(?!)")
+    site = re.compile(r"https://mashbox\.gg/docs(?=[/#]|$)/?")
+
+    def site_path(rest):   # mashbox.gg/docs/PATH is docs/PATH.md (or PATH/README.md) as sync_docs publishes it
+        path, _, frag = rest.partition("#")
+        path = path.split("?", 1)[0].strip("/")
+        cands = [f"docs/{path}.md", f"docs/{path}/README.md", f"docs/{path}"] if path else ["docs/README.md"]
+        return next((c for c in cands if (repo / c).is_file()), cands[0]) + ("#" + frag if frag else "")
+    refs = ({"main", f"v{reg['version']}"} | {f"v{m['card_release']}" for m in reg["models"] if m.get("card_release")}) if reg else set()
+    for f in _prose(repo):
+        rel, body = f.relative_to(repo).as_posix(), FENCE_RE.sub("", f.read_text())
+        targets = [mt.group(2) or mt.group(5) for mt in LINK_RE.finditer(body)] + [mt.group(2) for mt in REF_RE.finditer(body)]
+        targets += html_targets(body)
+        targets += [u for u in URL_RE.findall(body) if own.match(u) or site.match(u)]   # bare URLs too
+        for u in URL_RE.findall(body):
+            ref = own.match(u) and u.split("/")[6]
+            if ref and ref not in refs and not SHA_RE.match(ref):
+                problems.add(rel, f"GitHub link at {ref!r}: our links name main or this release's tag ({sorted(refs)}): {u}")
+            sp = re.match(r"https?://(?:www\.)?mashbox\.gg(/[^#?]*)?", u)
+            if sp and not site.match(u) and (sp.group(1) or "/").strip("/") not in SITE_PATHS:
+                problems.add(rel, f"mashbox.gg link outside /docs that the site does not serve: {u} "
+                                  f"(the site's own paths: {sorted(SITE_PATHS)})")
+        for target in dict.fromkeys(t.rstrip(".,;:*") for t in targets):
+            base = f.parent
+            if own.match(target):
+                base, target = repo, own.sub("", target)
+            elif site.match(target):
+                base, target = repo, site_path(site.sub("", target))
+            elif re.match(r"/docs(?=[/#?]|$)", target):   # site root: /docs/PATH is mashbox.gg/docs/PATH
+                base, target = repo, site_path(target[len("/docs"):])
+            elif re.match(r"/(?!/)", target):
+                if target.split("#")[0].split("?")[0].strip("/") not in SITE_PATHS:
+                    problems.add(rel, f"root-relative link the site does not serve: {target} (its paths: /docs/..., "
+                                      f"{sorted('/' + s for s in SITE_PATHS)})")
+                continue
+            elif re.match(r"([a-z][a-z0-9+.-]*:|/)", target, re.I) or re.search(r"[<{$]", target):
+                continue
+            path, _, frag = target.partition("#")
+            dest = base / path.split("?", 1)[0] if path else f
+            if not dest.exists():
+                problems.add(rel, f"relative link to a missing path: {target}")
+            elif frag and dest.suffix == ".md" and frag not in anchors(dest):
+                problems.add(rel, f"link to a heading that is not there: {target}")
+
+
+SITE_PATHS = {"", "install.sh"}   # mashbox.gg paths outside /docs: the home page and the install script
+APP_CATALOG = Path("src/mashbox/ui/app/__init__.py")
+
+
+def catalog_url(reg):
+    gh = reg["github"]
+    return f"https://raw.githubusercontent.com/{gh['org']}/{gh['repo']}/main/models.json"
+
+
+def check_app(reg, repo, app, fetch, problems):
+    """The MASHBOX app (Mac): its catalog is this models.json, and the runtime it bundles is the release.
+    Offline (T0): the app's CATALOG_URL is the public models.json. With --app <desktop checkout>: the one bundled wheel
+    has models.json's version and the same models.json inside; with --online also the PyPI wheel's sha256 for that
+    version (the app ships the released wheel, never a build of a later commit)."""
+    f = repo / APP_CATALOG
+    if f.exists():   # one module-level CATALOG_URL, a plain string (registry() reading it is tests/cpu/test_app_module.py)
+        import ast
+        sets = [n for n in ast.walk(ast.parse(f.read_text())) if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+                and any(isinstance(t, ast.Name) and t.id == "CATALOG_URL" for t in getattr(n, "targets", [getattr(n, "target", None)]))]
+        vals = [n.value.value for n in sets if isinstance(n.value, ast.Constant)]
+        if len(sets) != 1 or vals != [catalog_url(reg)]:
+            problems.add(APP_CATALOG.as_posix(), f"want one CATALOG_URL = {catalog_url(reg)!r}, found {len(sets)} assignment(s): {vals}")
+    if app is None:
+        return
+    import zipfile
+    wheels = sorted((Path(app) / "src-tauri" / "resources" / "wheels").glob("mashbox-*.whl"))
+    if len(wheels) != 1:
+        problems.add("app", f"want one bundled mashbox wheel, found {len(wheels)}")
+        return
+    w = wheels[0]
+    ver = w.name.split("-")[1]
+    if ver != reg["version"]:
+        problems.add("app", f"bundled wheel {w.name} is not the release {reg['version']}")
+    with zipfile.ZipFile(w) as z:
+        inside = z.read("mashbox/models.json") if "mashbox/models.json" in z.namelist() else b""
+    if json.loads(inside or b"{}") != reg:
+        problems.add("app", f"bundled wheel {w.name}: its models.json differs from this models.json")
+    if fetch is not None:
+        st, body = fetch.get(f"https://pypi.org/pypi/mashbox/{ver}/json")
+        sums = {u["digests"]["sha256"] for u in json.loads(body).get("urls", []) if u["filename"].endswith(".whl")} if st == 200 else set()
+        if hashlib.sha256(w.read_bytes()).hexdigest() not in sums:
+            problems.add("app", f"bundled wheel {w.name} is not PyPI's mashbox {ver} wheel (sha256); bundle the released wheel")
+
+
+CMD_RE = re.compile(r"(?:^[ \t]*(?:\$ )?|(?<=&& )|(?<=; )|(?<=\| )|(?<=\()|(?<=='')|(?<==)(?=\S*/bin/mashbox\b)|(?<=-m ))"
+                    r"(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"\n]*\"|'[^'\n]*'|\S*)|nohup|sudo(?: -\S+)*|env|time|exec)[ \t]+)*"
+                    r"(?:[~$%\w./{}-]*/bin/|/\S*/)?mashbox((?:[ \t]+(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s'\"&|;)`]+))*)", re.M)
+INLINE_RE = re.compile(r"`([^`\n]+)`")
+# a command given as a key's value in YAML, TOML or JSON (command: ..., "run": "...", exec = "..."): read as a command line
+KEYED_CMD_RE = re.compile(r"""(?m)^[ \t]*(?:-[ \t]+)?["']?(?:command|cmd|run|exec|script|entrypoint)["']?[ \t]*[:=][ \t]*(["']?)(.*?)\1[ \t]*,?[ \t]*$""")
+# a command in exec form, a list of strings (Dockerfile, Compose, Kubernetes, JSON): ["mashbox", "run", "x"]
+EXEC_FORM_RE = re.compile(r"""\[[ \t]*(?:"[^"\n]*"|'[^'\n]*')(?:[ \t]*,[ \t]*(?:"[^"\n]*"|'[^'\n]*'))*[ \t]*,?[ \t]*\]""")
+DOCKER_RE = re.compile(r"(?m)^[ \t]*(?:RUN|CMD|ENTRYPOINT)[ \t]+")   # a Dockerfile line runs the command after it
+
+
+def _exec_line(mt):
+    import ast
+    import shlex
+    try:
+        return shlex.join(ast.literal_eval(mt.group(0)))
+    except (ValueError, SyntaxError, TypeError):
+        return mt.group(0)
+
+
+def code_block(b):
+    """A code block as the command lines it runs: a key's value (command: ...), a list in exec form read as its command
+    line, and a Dockerfile RUN, CMD or ENTRYPOINT line read as the command it gives."""
+    return DOCKER_RE.sub("", EXEC_FORM_RE.sub(_exec_line, KEYED_CMD_RE.sub(r"\2", b.replace("\\\n", " "))))
+
+
+def example_files(repo):
+    """Files people run as they are: everything under examples/ and every shell script outside tests/."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "ls-files", "--cached", "--others", "--exclude-standard", "--",
+                              "examples", "*.sh", "*.bash"], capture_output=True, text=True, check=True).stdout.splitlines()
+        files = [repo / x for x in out if x]
+    except (OSError, subprocess.CalledProcessError):
+        files = list((repo / "examples").rglob("*")) + [f for g in ("*.sh", "*.bash") for f in repo.rglob(g)]
+    return sorted({f for f in files if f.is_file() and not _SKIP_DIRS & set(f.relative_to(repo).parts[:-1])
+                   and not f.relative_to(repo).as_posix().startswith("tests/")}, key=lambda f: f.relative_to(repo).as_posix())
+
+
+OTHER_FLAGS = {  # flags of other tools that the pages name in inline code: gcloud, Claude Code, Codex, vLLM
+    "--accelerator-type", "--version", "--profile", "--settings", "--strict-mcp-config", "--permission-mode",
+    "--allowedTools", "--dangerously-bypass-approvals-and-sandbox", "--max-num-seqs", "--gpu-memory-utilization",
+    "--no-enable-prefix-caching", "--durations"}   # and pytest (CI.md); --mbx-* are the shell's CSS variables
+
+
+def check_commands(reg, repo, problems):
+    """Every `mashbox ...` command in a page's code (blocks and inline) and every run_args list in models.json parses
+    with the package's own parsers, and inline code made of flags names real flags (as vLLM checks its docs' commands).
+    Renaming a flag or a typo in an example fails here, not on a user's chip."""
+    mods = _package(repo, problems)
+    if mods is None:
+        return
+    import contextlib
+    import io
+    import shlex
+    by_cmd = {cmd[len("mashbox "):]: p for cmd, p, _ in cli_parsers(mods)}
+    own = {}   # a model with its own command line (cli.MODEL_CLI): the flags its parser() adds, read from the source
+    import ast
+    for mid, mod in getattr(mods[".cli"], "MODEL_CLI", {}).items():
+        own[mid] = {a.value for py in (repo / "src" / Path(*mod.split("."))).glob("*.py") for fn in ast.walk(ast.parse(py.read_text()))
+                    if isinstance(fn, ast.FunctionDef) and fn.name == "parser" for c in ast.walk(fn)
+                    if isinstance(c, ast.Call) and getattr(c.func, "attr", "") == "add_argument"
+                    for a in c.args if isinstance(a, ast.Constant) and str(a.value).startswith("-")}
+    flags = {o for p in by_cmd.values() for o in p._option_string_actions} | {f for v in own.values() for f in v} | OTHER_FLAGS
+
+    def parse(argv, where, partial=False):
+        if argv[:1] in (["run"], ["download"]) and len(argv) > 1 and argv[1] in own:
+            for fl in argv[2:]:
+                if fl.startswith("-") and fl.split("=")[0] not in own[argv[1]] | {"-h", "--help"}:
+                    problems.add(where, f"mashbox {' '.join(argv)}: {fl} is not an option of mashbox {argv[0]} {argv[1]}")
+            return
+        key = " ".join(argv[:2]) if argv[:1] == ["tpu"] else " ".join(argv[:1])
+        p = by_cmd.get(key)
+        if p is None and partial and any(k.startswith(key + " ") for k in by_cmd):
+            return   # `mashbox tpu` in prose: the command group
+        if p is None:
+            return problems.add(where, f"unknown command: mashbox {' '.join(argv)}")
+        rest = argv[len(key.split()):]
+        if key == "tpu up" and "--" in rest:    # after --: options for mashbox run on the chip
+            parse(["run", "MODEL"] + rest[rest.index("--") + 1:], where)
+            rest = rest[:rest.index("--")]
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                p.parse_args(rest)
+        except SystemExit as e:
+            msg = (err.getvalue().strip().splitlines() or [""])[-1]
+            if e.code and not (partial and "arguments are required" in msg):
+                problems.add(where, f"mashbox {' '.join(argv)}: {msg}")
+
+    pages = [(f.relative_to(repo).as_posix(), re.sub(r"<!--.*?-->", " ", f.read_text(), flags=re.S)) for f in number_pages(reg, repo)]
+    pages += [(f.relative_to(repo).as_posix(), "```\n" + f.read_text(errors="replace") + "\n```\n") for f in example_files(repo)]
+    for rel, text in pages:   # an example file is one code block
+        if rel in ("docs/cli.md", "docs/server-api.md"):
+            continue   # rendered from the parsers and the spec themselves
+        blocks = [code_block(b) for b in FENCE_RE.findall(text)]
+        spans = INLINE_RE.findall(FENCE_RE.sub("", text))
+        for code, partial in [(b, False) for b in blocks] + [(s, True) for s in spans]:
+            code = re.sub(r"\$\{[^}]*\}|<[^>\n]*>", "X", re.sub(r" \[[a-z .]+\]", "", code))  # ${id}, <model id>, [options]
+            for mt in CMD_RE.finditer(code):
+                try:
+                    argv = shlex.split(mt.group(1))
+                except ValueError as e:
+                    problems.add(rel, f"cannot read the command mashbox{mt.group(1)}: {e}")
+                    continue
+                if argv:
+                    parse(argv, rel, partial)
+        prose = INLINE_RE.sub(" ", FENCE_RE.sub(" ", text))
+        for s in [x for x in spans if x.startswith("--")] + [mt.group(0) for mt in re.finditer(r"(?<![\w`-])--[A-Za-z][\w-]*", prose)]:
+            for fl in re.findall(r"(?<![\w-])--[A-Za-z][\w-]*", s):
+                if fl not in flags and not fl.startswith("--mbx-"):
+                    problems.add(rel, f"`{s}`: {fl} is not an option of any mashbox command (docs/cli.md)")
+    for m in reg["models"]:
+        args = ((m.get("cloud") or {}).get("agents") or {}).get("run_args")
+        if args is not None:
+            parse(["run", m["id"]] + list(args), f"models.json {m['id']} cloud.agents.run_args")
+
+
+def licence_report(reg, repo):
+    """Lines that state a licence, beside LICENSE and the package metadata. A report for a person: it never edits and
+    never fails (licence wording is decided by people, not by this tool)."""
+    lic = (repo / "LICENSE").read_text().split() if (repo / "LICENSE").exists() else ["missing"]
+    out = [f"LICENSE starts: {' '.join(lic[:4])}",
+           f"models.json license: {reg.get('license')!r}"]
+    py = repo / "pyproject.toml"
+    if py.exists():
+        lic = [x.strip() for x in py.read_text().splitlines() if re.match(r"\s*licen[cs]e(-files)?\s*=", x)]
+        out.append(f"pyproject.toml: {lic or 'no license field'}")
+    pat = re.compile(r"(?i)licen[cs]e|apache|\bMIT\b|not chosen")
+    for f in _prose(repo):
+        for i, line in enumerate(f.read_text().splitlines(), 1):
+            if pat.search(line) and ("not chosen" in line.lower() or "licen" in line.lower()):
+                out.append(f"{f.relative_to(repo).as_posix()}:{i}: {line.strip()[:200]}")
+    return out
 
 
 LICENCE_UNSTATED_RE = re.compile(r"(?i)not chosen|not decided|pending|all rights reserved|LICENSE-PENDING")
 APACHE_HEAD = ("Apache License", "Version 2.0, January 2004")
-LICENCE_GLOBS = ("README.md", "llms.txt", "AGENTS.md", "CONTRIBUTING.md", "SECURITY.md", "docs/*.md", "docs/models/*.md",
-                 "hf/*/README.md", "templates/hf/*.md")
 LICENCE_HISTORY = {"CORE-CHANGES.md"}  # dated history: older entries keep the words they had on their date
 
 
@@ -709,6 +1939,11 @@ def check_licences(reg, repo, problems):
             problems.add(where, f"licenses/{m['id']}/LICENSE missing (copy the upstream file unchanged)")
         elif want and _sha256(f) != want:
             problems.add(f"licenses/{m['id']}/LICENSE", "differs from the pinned upstream file (upstream.license_sha256); never edit it")
+        for name, _, lic in own_files(repo, m):
+            if not lic:
+                problems.add(where, f"{name}: our own file in {m['hf_repo']} has no licence in upstream.json (a maintainer decides it)")
+            elif str(lic).lower() not in SPDX:
+                problems.add(where, f"{name}: licence {lic!r} is not one of {sorted(SPDX)}")
         pins = _upstream_pins(repo, m)
         if pins is not None and up["hf"] in pins and pins[up["hf"]] != up.get("revision"):
             problems.add(where, f"upstream.revision differs from upstream.json ({str(pins[up['hf']])[:12]})")
@@ -719,10 +1954,7 @@ def check_licences(reg, repo, problems):
                     problems.add(where, f"upstream.components {src}: {key} is empty")
             if pins is not None and pins.get(src) != c.get("revision"):
                 problems.add(where, f"upstream.components {src}: revision differs from upstream.json ({str(pins.get(src))[:12]})")
-    files = []
-    for g in LICENCE_GLOBS:
-        files += [f for f in sorted(repo.glob(g)) if f.is_file() and f not in files]
-    for f in files:
+    for f in _prose(repo) + sorted((repo / "templates" / "hf").glob("*.md")):
         rel = f.relative_to(repo).as_posix()
         if rel in LICENCE_HISTORY:
             continue
@@ -758,8 +1990,21 @@ class Fetcher:
         except Exception as e:  # network down counts as a failure, never as a pass
             return 0, str(e)
 
+    def status(self, url):
+        """HTTP status of a link, logged out, without reading the body (a link may be a 27 GB weights file)."""
+        if self.fixtures is not None:
+            return self.get(url)[0]
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (mashbox-sync-check link check)"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception:
+            return 0
 
-def check_online(reg, views, fetch, problems):
+
+def check_online(reg, views, fetch, problems, repo=None):
     hf_org = reg["hf"]["org"]
     st, body = fetch.get(f"https://huggingface.co/api/models?author={hf_org}&limit=1000")
     listed = set()
@@ -814,13 +2059,59 @@ def check_online(reg, views, fetch, problems):
     st, _ = fetch.get(f"https://api.github.com/repos/{gh['org']}/{gh['repo']}/git/ref/tags/v{reg['version']}")
     if st != 200:
         problems.add("github", f"tag v{reg['version']} not found in {gh['org']}/{gh['repo']} (HTTP {st})")
+    # PyPI: the newest release is this version (pyproject, __version__ and models.json are held equal offline)
+    st, body = fetch.get("https://pypi.org/pypi/mashbox/json")
+    if st != 200:
+        problems.add("pypi", f"cannot read the mashbox project (HTTP {st})")
+    elif json.loads(body)["info"]["version"] != reg["version"]:
+        problems.add("pypi", f"newest release is {json.loads(body)['info']['version']}, models.json says {reg['version']}")
+    # The org profile's models block is a view of models.json too (the repo's own copy is checked offline with --profile)
+    st, prof = fetch.get(f"https://raw.githubusercontent.com/{gh['org']}/.github/main/profile/README.md")
+    if st != 200:
+        problems.add("profile", f"org profile not readable (HTTP {st})")
+    elif MARK_START not in prof or MARK_END not in prof:
+        problems.add("profile", f"org profile has no {MARK_START} / {MARK_END} block")
+    elif prof.split(MARK_START, 1)[1].split(MARK_END, 1)[0].strip() != profile_table(reg).strip():
+        problems.add("profile", "org profile models block differs from the one rendered from models.json")
+    pages = {f.relative_to(repo).as_posix(): f.read_text() for f in _prose(repo)} if repo is not None else {}
+    check_links(reg, {**pages, **views}, fetch, problems)  # every page, hand-written or generated (views win: rendered text)
+
+
+URL_RE = re.compile(r"https?://[^\s)\"'<>`\]|{}]+")
+
+
+def check_links(reg, views, fetch, problems):
+    """Every absolute link in the pages (README, llms.txt, every docs page, HF cards) answers 200 logged out.
+    Skipped: local addresses, placeholders, and a coming-soon model's page, card and private repo (its own check is above)."""
+    later = [m for m in reg["models"] if m.get("launch")]  # coming soon: its page, card and links are checked at its launch
+    soon = tuple(f"https://huggingface.co/{m['hf_repo']}" for m in later if m["hf_repo"]) + \
+        tuple(f"https://mashbox.gg/docs/models/{m['id']}" for m in later)
+    skip = {f"hf/{m['id']}/README.md" for m in later} | {f"docs/models/{m['id']}.md" for m in later}
+    urls = {}
+    for key, text in views.items():
+        if key in skip:
+            continue
+        for u in URL_RE.findall(text):
+            u = u.rstrip(".,;:*")
+            if re.match(r"https?://(127\.0\.0\.1|localhost|0\.0\.0\.0)([:/]|$)", u) or u.startswith(soon) \
+                    or re.search(r"YOUR_|<|\{|\$|^https://link$|/v1/?$", u) or "huggingface.co/api/" in u:
+                continue
+            urls.setdefault(u.split("#", 1)[0], key)
+    for u, where in sorted(urls.items()):
+        st = fetch.status(u)
+        if st != 200:
+            problems.add(f"link in {where}", f"{u} answers HTTP {st}")
 
 
 # ---------------------------------------------------------------- main
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("cmd", choices=["render", "check"])
+    ap.add_argument("cmd", choices=["render", "check", "licence", "markup"],
+                    help="licence: print every line that states a licence, then the licence check (never edits; exit 1 on a "
+                         "mismatch). markup PAGE...: write the number markers back into these pages from the number map, to "
+                         "edit the words around a number; render --write takes them out again")
+    ap.add_argument("pages", nargs="*", help="markup: the pages (repo-relative)")
     ap.add_argument("--repo", required=True, help="root of the main repo (holds models.json)")
     ap.add_argument("--profile", help="org profile README to keep in sync (optional)")
     ap.add_argument("--org-defaults", help="the .github repo: CONTRIBUTING.md and SECURITY.md must equal the main repo's")
@@ -832,9 +2123,17 @@ def main(argv=None):
     mode.add_argument("--online", action="store_true")
     ap.add_argument("--release", action="store_true")
     ap.add_argument("--fixtures")
-    a = ap.parse_args(argv)
+    ap.add_argument("--app", help="MASHBOX app (desktop) checkout: its bundled wheel must be the release (private nightly)")
+    a = ap.parse_intermixed_args(argv)
 
     repo = Path(a.repo)
+    if a.cmd == "markup":
+        nmap = load_numbers(repo) or {"pages": {}}
+        for rel in a.pages:
+            f = repo / rel
+            f.write_text(mark_up(f.read_text(), nmap["pages"].get(rel, [])))
+            print("marked", rel, len(nmap["pages"].get(rel, [])), "numbers")
+        return 0
     templates = Path(a.templates) if a.templates else \
         (repo / "templates" / "hf" if (repo / "templates" / "hf").is_dir() else DEFAULT_TEMPLATES)
     profile = Path(a.profile) if a.profile else None
@@ -849,7 +2148,39 @@ def main(argv=None):
         for p in problems:
             print("FAIL", p)
         return 1
-    views = render_all(reg, repo, profile, templates, problems)
+    if a.cmd == "licence":
+        print("\n".join(licence_report(reg, repo)))
+        check_licences(reg, repo, problems)
+        for p in problems:
+            print("FAIL", p)
+        print(f"{'OK' if not problems else 'LICENCE MISMATCH'}: {len(problems)} problems")
+        return 1 if problems else 0
+    nmap = load_numbers(repo)
+    if nmap is not None:
+        moved = {o: dict(r.get("figures") or {}) for o, r in [("cloud", reg)] + [(m["id"], m) for m in reg["models"]]}
+        merge_figures(reg, nmap, problems if a.cmd == "check" else None)
+    views = render_all(reg, repo, profile, templates, problems, nmap["pages"] if nmap is not None else None)
+
+    if a.cmd == "render" and nmap is not None and (a.write or a.out):
+        # the private map: figures move out of models.json, places follow the pages as rendered
+        new = {"_about": nmap.get("_about", ""), "figures": {}, "pages": render_all.places}
+        for o, r in [("cloud", reg)] + [(m["id"], m) for m in reg["models"]]:
+            if r.get("figures"):
+                new["figures"][o] = dict(sorted(r["figures"].items()))
+        base = Path(a.out) if a.out else repo
+        (base / NUMBERS).parent.mkdir(parents=True, exist_ok=True)
+        (base / NUMBERS).write_text(json.dumps(new, indent=2, ensure_ascii=False) + "\n")
+        print("wrote", base / NUMBERS)
+        if any(moved.values()):
+            raw = json.loads((repo / "models.json").read_text())
+            for row in [raw] + raw["models"]:
+                row.pop("figures", None)
+            text = json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
+            for dest in [base / "models.json"] + ([base / "src" / "mashbox" / "models.json"]
+                                                 if (repo / "src" / "mashbox" / "models.json").exists() else []):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(text)
+                print("wrote", dest, "(figures moved to the number map)")
 
     if a.cmd == "render":
         for key, text in views.items():
@@ -872,15 +2203,31 @@ def main(argv=None):
         if not path.exists():
             problems.add(key, "rendered view missing on disk (run render --write)")
         elif path.read_text() != text:
-            problems.add(key, "differs from the view rendered from models.json (run render --write)")
+            problems.add(key, "differs from its generated view: models.json, runtime/openapi.py or the CLI parsers (run render --write)")
+    check_prose(reg, repo, problems)
+    check_relative_links(repo, problems, reg)
+    if nmap is not None:
+        check_numbers(reg, repo, problems, nmap["pages"])
+        if nmap["pages"] != render_all.places:
+            problems.add(NUMBERS.as_posix(), "differs from the pages (run render --write)")
+    else:
+        print(f"note: no {NUMBERS.as_posix()} in this tree: measured numbers in prose are checked by the maintainers")
+    check_commands(reg, repo, problems)
+    check_cloud(reg, repo, problems)
     check_licences(reg, repo, problems)
+    if profile is not None and profile.exists() and reg["company_line"] not in profile.read_text():
+        problems.add(str(profile), "company line differs from models.json company_line")
     if a.org_defaults:
         for name in ("CONTRIBUTING.md", "SECURITY.md"):
             mine, theirs = repo / name, Path(a.org_defaults) / name
             if not theirs.exists() or not mine.exists() or mine.read_bytes() != theirs.read_bytes():
                 problems.add(name, "org default copy differs from the main repo's (copy it at release)")
+    check_app(reg, repo, a.app, Fetcher(a.fixtures) if a.online else None, problems)
     if a.online:
-        check_online(reg, views, Fetcher(a.fixtures), problems)
+        check_online(reg, views, Fetcher(a.fixtures), problems, repo)
+        st, body = Fetcher(a.fixtures).get(catalog_url(reg))  # the catalog the MASHBOX app reads at run time
+        if st != 200 or json.loads(body or "{}") != reg:
+            problems.add("app", f"the app's catalog {catalog_url(reg)} differs from this models.json (HTTP {st})")
     for p in problems:
         print("FAIL", p)
     n = sum(1 for m in reg["models"])

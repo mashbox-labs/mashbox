@@ -43,7 +43,7 @@ PLAIN_TRIES = 3                                              # zones tried with 
 QUEUE_ZONES = 3                                              # queued requests made at once
 READY_MIN = 45                                               # minutes to wait for the server before giving up
 PRICE = {"v6e": 2.70, "v5litepod": 1.20}                     # USD per chip-hour, on demand
-PRICE_NOTE = "ESTIMATE: Google's on-demand list price per chip-hour, US regions, October 2026; Google bills the real price"
+PRICE_NOTE = "estimate at Google's on-demand list price per chip-hour, US regions; Google bills the real price"
 SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 STATE = os.path.join(os.path.expanduser("~"), ".config", "mashbox", "tpu.json")
 REMOTE_MB = "~/.local/bin/mashbox"
@@ -186,6 +186,26 @@ def all_zones():
     z = [z for m in registry()["models"] for z in m.get("cloud", {}).get("zones", [])]
     z += [v.get("zone") for v in load_state().values() if v.get("zone")]
     return list(dict.fromkeys(z))
+
+
+def offered(m):
+    """[(chip, models.json chips row)] that `tpu up` can create for this model: every passing row that names its Google
+    type, the model's default chip (cloud.accelerator) first. One source: the same rows the README and docs chip tables show."""
+    rows = [(c["accelerator"], c) for c in (m.get("chips") or {}).values()
+            if isinstance(c, dict) and c.get("status") == "passing" and c.get("gcloud_type") and c.get("accelerator")]
+    return sorted(rows, key=lambda r: r[1]["gcloud_type"] != m["cloud"]["accelerator"])
+
+
+def pick_chip(m, chip):
+    """The model with its cloud settings for one chip type (--chip v5e-4); no chip = the model's default, unchanged."""
+    if not chip:
+        return m
+    rows = dict(offered(m))
+    if chip not in rows:
+        raise Stop(f"{m['name']} runs on: {', '.join(k for k, _ in offered(m)) or m['cloud']['accelerator']}. Not on {chip}")
+    c = rows[chip]
+    return dict(m, cloud=dict(m["cloud"], accelerator=c["gcloud_type"], runtime=c.get("runtime") or m["cloud"]["runtime"],
+                              zones=list(c.get("zones") or m["cloud"]["zones"])))
 
 
 def chips(acc):
@@ -592,11 +612,16 @@ class Port:
     (it is never released, not even while a dropped tunnel is reopened) nor reach or replace the socket."""
 
     def __init__(self, port):
-        self.dir = tempfile.mkdtemp(prefix="mbx-")                          # mode 0700
-        self.sock = os.path.join(self.dir, "s")
         self.ls = socket.socket()
-        self.ls.bind(("127.0.0.1", port))
-        self.ls.listen(64)
+        self.ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)     # the port a session just closed is free again
+        try:                                                                # (its relayed connections sit in TIME_WAIT for
+            self.ls.bind(("127.0.0.1", port))                               # a minute); a port another socket listens on
+            self.ls.listen(64)                                              # is still refused
+        except OSError:
+            self.ls.close()
+            raise
+        self.dir = tempfile.mkdtemp(prefix="mbx-")                          # mode 0700; made once the port is ours
+        self.sock = os.path.join(self.dir, "s")
         self.port = port
         threading.Thread(target=self.accept, daemon=True).start()
 
@@ -741,6 +766,14 @@ def hold(tun, project, zone, name, m, lp, deadline):
     terminal, its max lifetime); at the deadline take the chip down from here too."""
     reopened = 0.0
     try:
+        return _hold(tun, project, zone, name, m, lp, deadline, reopened)
+    finally:
+        if hasattr(lp, "close"):
+            lp.close()                                  # the port and the private socket directory
+
+
+def _hold(tun, project, zone, name, m, lp, deadline, reopened):
+    try:
         while True:
             if deadline and now() > deadline + 600:
                 say("Max lifetime reached and the chip is still here: taking it down from this machine.")
@@ -798,7 +831,7 @@ def info(m, name, zone, acc, spot, lport, deadline, life, agents=False):
 
 # ------------------------------------------------------------------------------------------------------------- commands
 def cmd_up(a):
-    m = model(a.model)
+    m = pick_chip(model(a.model), a.chip)
     c, acc = m["cloud"], m["cloud"]["accelerator"]
     name = a.name or f"mashbox-{m['id']}"[:60]
     if a.max_hours < 0:
@@ -813,7 +846,7 @@ def cmd_up(a):
     if node:
         zone, x = node
         age = now() - (created(x) or now())
-        say(f"{name} already exists in {zone} ({x.get('state')}, up {mins(age)}, about {money((p or 0) * age / 3600)} so far, ESTIMATE). Using it.")
+        say(f"{name} already exists in {zone} ({x.get('state')}, up {mins(age)}, about {money((p or 0) * age / 3600)} so far, estimate). Using it.")
         if x.get("state") not in ("READY", "CREATING", "STARTING", "RESTARTING", "REPAIRING"):
             raise Stop(f"{name} is {x.get('state')}. Take it down (mashbox tpu down {name}) and run up again")
         if x.get("state") != "READY" and not wait_ready_node(project, zone, name):
@@ -894,7 +927,7 @@ def take_down(project, targets, nodes=None, qrs=None):
         for z, x in n:
             age = now() - (created(x) or now())
             say(f"{name} ({x.get('acceleratorType')}, {z}): up {mins(age)}, about "
-                f"{money((price(x.get('acceleratorType', '')) or 0) * age / 3600)} so far (ESTIMATE, list price). Deleting ...")
+                f"{money((price(x.get('acceleratorType', '')) or 0) * age / 3600)} so far (estimate at list price). Deleting ...")
         for z, x in q:
             if not delete_qr(project, z, short(x.get("name"))):
                 rc = 1
@@ -964,8 +997,8 @@ def cmd_status(a):
         st = (x.get("state") or {}).get("state", "?")
         if st != "ACTIVE":
             say(f"{qr_node(x)[0] + ' (queued)':<28} {z:<18} {(qr_node(x)[1].get('acceleratorType') or '?'):<12} "
-                f"{st:<21} {mins(now() - (created(x) or now())):>8} {'$0.00':>8} {'$0.00':>9}  (no chip yet)")
-    say(f"Running now: {money(rate)} per hour, about {money(total)} so far. {PRICE_NOTE}.")
+                f"{st:<21} {mins(now() - (created(x) or now())):>8} {'$0.00':>8} {'$0.00':>9}  (waiting for a chip)")
+    say(f"Running now: {money(rate)} per hour, about {money(total)} so far ({PRICE_NOTE}).")
     say("Take one down: mashbox tpu down <name>")
     return 0
 
@@ -1006,6 +1039,7 @@ def main(argv):
                        usage="mashbox tpu up MODEL [options] [-- options for mashbox run on the chip]")
     u.add_argument("model")
     u.add_argument("--zone", type=checked(ZONE, "zone"), help="only this zone (default: the model's zones in order)")
+    u.add_argument("--chip", help="chip type, e.g. v6e-1, v5e-4, v6e-4 (default: the model's first; the model's docs page lists the chips it runs on)")
     u.add_argument("--spot", action="store_true", help="a spot chip: cheaper, Google can stop it at any time")
     u.add_argument("--name", type=checked(NAME, "chip name"), help="chip name (default mashbox-<model>)")
     u.add_argument("--max-hours", type=float, default=8.0, help="the chip deletes itself this long after it starts (default 8; 0 = off)")
@@ -1013,8 +1047,12 @@ def main(argv):
     u.add_argument("--yes", action="store_true", help="create without asking")
     u.add_argument("--agents", action="store_true", help="start the server with the coding-agent settings of the model's row")
     u.add_argument("--restart", action="store_true", help="stop a running server (Ctrl-C, SIGINT) and start it again")
+    helps = dict(down="delete a mashbox chip and its queued request",
+                 status="list this project's mashbox chips and queued requests",
+                 ssh="open a shell on a running mashbox chip",
+                 tunnel="open the local tunnel to the server on a running mashbox chip again")
     for n in ("down", "status", "ssh", "tunnel"):
-        p = sub.add_parser(n)
+        p = sub.add_parser(n, help=helps[n])
         if n != "status":
             p.add_argument("name", nargs="?", type=checked(NAME, "chip name"))
         p.add_argument("--zone", type=checked(ZONE, "zone"), help="this zone only" if n in ("down", "status") else None)

@@ -92,10 +92,22 @@ def _top_p_cut(key, p, top_p):
 
 def sample(x, sp, step, greedy_tok=None):
     """x (B, V) penalised logits f32, step (B,) int32 token index per row -> (B,) int32 tokens."""
-    t = sp["temperature"]
-    greedy = t <= 0.0
+    greedy = sp["temperature"] <= 0.0
     if greedy_tok is None:
         greedy_tok = jnp.argmax(x, -1).astype(i32)
+    x = transform(x, sp)
+
+    def draw(row, seed, st):
+        key = jax.random.fold_in(jax.random.wrap_key_data(seed, impl="threefry2x32"), st)
+        return jnp.argmax(row + jax.random.gumbel(key, row.shape, f32)).astype(i32)
+    return jnp.where(greedy, greedy_tok, jax.vmap(draw)(x, sp["seed"], step))
+
+
+def transform(x, sp):
+    """temperature -> top_k -> top_p -> min_p on (B, V) penalised logits: the logits one draw is taken from (cut tokens
+    -inf). Speculative decoding builds both its draft and target distributions with it."""
+    t = sp["temperature"]
+    greedy = t <= 0.0
     x = x / jnp.where(greedy, 1.0, t)[:, None]
     k = sp["top_k"]
     x = lax.cond(jnp.any(k > 0),
@@ -112,9 +124,4 @@ def sample(x, sp, step, greedy_tok=None):
     def cut_min(x):
         pm = jax.nn.softmax(x, -1)
         return jnp.where((mp > 0.0)[:, None] & (pm < mp[:, None] * jnp.max(pm, -1, keepdims=True)), -jnp.inf, x)
-    x = lax.cond(jnp.any(mp > 0.0), cut_min, lambda x: x, x)
-
-    def draw(row, seed, st):
-        key = jax.random.fold_in(jax.random.wrap_key_data(seed, impl="threefry2x32"), st)
-        return jnp.argmax(row + jax.random.gumbel(key, row.shape, f32)).astype(i32)
-    return jnp.where(greedy, greedy_tok, jax.vmap(draw)(x, sp["seed"], step))
+    return lax.cond(jnp.any(mp > 0.0), cut_min, lambda x: x, x)

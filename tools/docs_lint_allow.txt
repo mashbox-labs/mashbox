@@ -1,0 +1,16 @@
+# Lines of public pages that keep a word tools/docs_lint.py flags, each with the reason (read by tools/docs_lint.py,
+# T0). One line each: page | the words of the line that hold the hit, as the page reads (2 words or more) | why.
+# A line that matches nothing on its page any more fails the lint, so this list only shrinks.
+CORE-CHANGES.md | This supersedes "not chosen yet" in the docs entry | licence history, quoted as it read (licence wording is never edited)
+CORE-CHANGES.md | licence not chosen yet" now says Apache-2.0 | licence history, quoted as it read (licence wording is never edited)
+CORE-CHANGES.md | says a licence is not chosen, pending or reserved | names the licence words the check fails on
+CORE-CHANGES.md | (reference: says "not chosen yet", as | licence history, quoted as it read (licence wording is never edited)
+docs/models/hy-nomas.md | plus the compute meter and a UTC clock | the app's on-screen clock, not a date on the page
+src/mashbox/hub.py | stamp under ~/.cache/mashbox/verified records | the name of a file the program writes
+src/mashbox/models/hy_nomas/server.py | video sent and not yet acked | the state of the video stream
+src/mashbox/models/qwen3_8_27b/model.py | (FI-1) x linear | a formula (FI minus 1) in an error message, not an id
+src/mashbox/runtime/engine.py | slot has no point yet | the state of a cache slot
+src/mashbox/tpu/__init__.py | install.sh (and staging files) | the files copied to the chip ahead of the install
+src/mashbox/tpu/__init__.py | %H:%M UTC | a time format: the person's own delete deadline, printed in UTC
+src/mashbox/tpu/__init__.py | from an earlier run. Delete it | the person's own chip, left from an earlier command
+src/mashbox/ui/app/__init__.py | not yet serving | the state of a server the function returns

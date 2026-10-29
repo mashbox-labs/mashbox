@@ -9,9 +9,9 @@ import json
 import os
 import time
 
-# Downloads use plain HTTPS unless you set HF_HUB_DISABLE_XET yourself (0 = use Xet). In our first-run tests on new TPU VMs
-# (28 October 2026), Xet transfers of the 26.9 GB weights file stopped with HTTP 429 or stalled in 3 of 4 tries; HTTPS finished
-# every time. Set before huggingface_hub is imported, which reads it once.
+# Downloads use plain HTTPS unless you set HF_HUB_DISABLE_XET yourself (0 = use Xet). On new TPU VMs, Xet transfers of the
+# 26.9 GB weights file can stop with HTTP 429 or stall, where plain HTTPS finishes. Set before huggingface_hub is imported,
+# which reads it once.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
 UPSTREAM_FILES = ("config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "LICENSE")
@@ -78,16 +78,39 @@ def upstream_dir(m, log=print):
     return d
 
 
-def weights_file(m, name=None, path=None, log=print):
-    """Local path of the model's weights file (downloaded and checked unless `path` is given)."""
+def weights_row(m, name=None):
+    """The models.json row of the model's weights file: the default one, or the one called `name`."""
     rows = [f for f in m["files"] if f.get("kind", "weights") == "weights"]
     rows = ([f for f in rows if f.get("default")] or rows) if name is None else [f for f in rows if f["name"] == name]
     if not rows:
         raise SystemExit(f"no weights file {name!r} in models.json for {m['id']}")
-    row = rows[0]
+    return rows[0]
+
+
+def weights_file(m, name=None, path=None, log=print):
+    """Local path of the model's weights file (downloaded and checked unless `path` is given)."""
+    row = weights_row(m, name)
     if path:
         return verify(path, row["sha256"], log) if row.get("sha256") and os.environ.get("MASHBOX_VERIFY", "1") != "0" else path
     p = fetch(m["hf_repo"], row["name"], m["hf_revision"])
+    return verify(p, row["sha256"], log)
+
+
+def draft_row(m):
+    """The models.json files[] row of the model's speculative-decoding draft weights (kind "draft"), or None."""
+    return next((f for f in m.get("files", []) if f.get("kind") == "draft"), None)
+
+
+def draft_file(m, path=None, log=print):
+    """Local path of the draft weights (downloaded and checked unless `path` is given). A row may pin its own revision of
+    the model repo (a draft file added after the weights' release commit); else the model's hf_revision."""
+    row = draft_row(m)
+    if path:
+        ok = row and row.get("sha256") and os.environ.get("MASHBOX_VERIFY", "1") != "0"
+        return verify(path, row["sha256"], log) if ok else path
+    if row is None:
+        raise SystemExit(f"no draft file in models.json for {m['id']}")
+    p = fetch(m["hf_repo"], row["name"], row.get("revision") or m["hf_revision"])
     return verify(p, row["sha256"], log)
 
 

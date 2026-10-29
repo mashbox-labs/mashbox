@@ -45,3 +45,109 @@ def test_chip_label_from_devices():
         device_kind = "TPU v6 lite"
     assert chip.chip_label([D()] * 4, zone_name="asia-northeast1-b") == "TPU v6e-4 (4 chips), asia-northeast1-b"
     assert chip.chip_label([D()], zone_name="") == "TPU v6e-1 (1 chip)"
+
+
+
+def _viewer_on_link(mbit, rtt, secs=60.0, acks=True, bunch=0.0):
+    """One app viewer (server.Client) on a simulated link: a 24 fps stream (110 kB key frame every 48 frames, 30 kB
+    otherwise, about 5.8 Mbit/s, the sizes measured on the live stream) leaves through one bottleneck of `mbit` Mbit/s with
+    `rtt` s round trip; the viewer acks each frame it receives, as page.html does (or never, as an older page). With
+    `bunch` > 0 frames reach the viewer only at multiples of `bunch` s (a lost packet holds up the ones behind it), so
+    their acks come back bunched.
+    Returns (frames offered, [(offer time, arrival time)] of the frames that went out)."""
+    from mashbox.models.hy_nomas import server as SV
+
+    class Clock:
+        t = 1000.0
+
+    class Viewer(SV.Client):
+        clock = staticmethod(lambda: Clock.t)
+
+    c = Viewer(sock=None, mode='h264')
+    rate, free, due, out = mbit * 1e6 / 8, Clock.t, [], []
+    n = int(secs * 24)
+    for i in range(n):
+        t = 1000.0 + i / 24
+        while due and due[0][0] <= t:          # acks reach the server in order
+            Clock.t, g = due.pop(0)
+            c.on_ack(g)
+        Clock.t = t
+        c.offer(bytes(110000 if i % 48 == 0 else 30000), i % 48 == 0, i + 1)
+        if c.vq:                               # it went out: one queue (socket + link) in front of the bottleneck
+            m = c.vq.popleft()
+            free = max(free, t) + len(m) / rate
+            arrive = free + rtt / 2
+            if bunch:
+                arrive = (int(arrive / bunch) + 1) * bunch
+            out.append((t, arrive))
+            if acks:
+                due.append((arrive + rtt / 2, i + 1))
+    return n, out
+
+def lag_p95(got, after=10.0):
+    lags = sorted(a - t for t, a in got if t >= 1000.0 + after)
+    return lags[int(len(lags) * 0.95)]
+
+
+def test_viewer_video_stays_live_on_slow_links():
+    """The app server keeps old video out of slow links (newest frame wins) and changes nothing on a fast one."""
+    n, got = _viewer_on_link(100, 0.002)
+    assert len(got) == n and lag_p95(got) < 0.05
+    n, got = _viewer_on_link(5, 0.15)
+    assert len(got) > n * 0.5 and lag_p95(got) < 1.0
+    n, got = _viewer_on_link(1, 0.25)
+    assert len(got) > n * 0.05 and lag_p95(got) < 2.0
+    n, got = _viewer_on_link(1, 0.25, bunch=0.5)
+    assert len(got) > n * 0.05 and lag_p95(got) < 2.5
+    n, got = _viewer_on_link(5, 0.15, bunch=0.3)
+    assert len(got) > n * 0.2 and lag_p95(got) < 1.5
+    n, got = _viewer_on_link(100, 0.002, acks=False)  # an older page that never acks still gets every frame after 5 s
+    assert len([1 for t, a in got if t >= 1006.0]) == n - 6 * 24
+
+
+def test_app_server_answers_only_its_route_table():
+    """The Hy-Nomas app server's handlers compare the request path only with the paths in server.ROUTES (GET in do_GET,
+    POST in api), so a new route is added to that one table."""
+    import ast
+    import pathlib
+    from mashbox.models.hy_nomas import server
+    tree = ast.parse(pathlib.Path(server.__file__).read_text())
+    seen = {"GET": set(), "POST": set()}
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and fn.name in ("do_GET", "do_POST", "api"):
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Compare) and isinstance(n.left, ast.Name) and n.left.id == "path":
+                    for c in ast.walk(n):
+                        if isinstance(c, ast.Constant) and isinstance(c.value, str):
+                            seen["GET" if fn.name == "do_GET" else "POST"].add(c.value)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name) \
+                        and n.func.value.id == "path" and n.func.attr != "split":   # path.startswith(...): a route as well
+                    for a in n.args:   # the one allowed prefix is the shell's files: '/' + shell.ROUTE
+                        if not (isinstance(a, ast.BinOp) and isinstance(a.right, ast.Attribute) and a.right.attr == "ROUTE"):
+                            seen["GET" if fn.name == "do_GET" else "POST"].add(ast.unparse(a))
+    assert seen == {k: set(v) for k, v in server.ROUTES.items()}, seen
+
+
+def test_kernel_download_error_stops_with_one_plain_line(monkeypatch):
+    """A kernel bundle download that the Hub refuses (a private or missing repo answers 401) or that cannot reach the Hub
+    stops the run with one line naming the repo and the way out (--no-kernels), not a traceback."""
+    requests = pytest.importorskip("requests")
+    errors = pytest.importorskip("huggingface_hub.errors")
+    import inspect
+    from mashbox import hub
+    from mashbox.models.hy_nomas import app
+    m = hub.model_entry('hy-nomas')
+    r = requests.Response()
+    r.status_code = 401
+    for err in (errors.RepositoryNotFoundError('401 Client Error. Repository Not Found', response=r),
+                requests.exceptions.ConnectionError('Max retries exceeded with url')):
+        def refuse(m, log, err=err):
+            raise err
+        monkeypatch.setattr(hub, 'kernel_bundle', refuse)
+        with pytest.raises(SystemExit) as e:
+            app.kernel_bundle(m, print)
+        msg = str(e.value.code)
+        assert 'https://huggingface.co/mashbox-labs/Hy-Nomas-TPU' in msg and '--no-kernels' in msg
+        assert ('HTTP 401' in msg) == (err.__class__.__name__ == 'RepositoryNotFoundError')
+        assert '\n' not in msg and 'Traceback' not in msg
+    assert 'kernel_bundle(m, log)' in inspect.getsource(app.Model) and 'hub.kernel_bundle' not in inspect.getsource(app.Model)

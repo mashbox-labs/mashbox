@@ -1,13 +1,16 @@
 """Live Hy-Nomas server: play a world in the browser, steer it with the keyboard, add timed actions.
 
 One process owns the chips. Each 5 s window is generated ahead of the play clock (``lead`` seconds before its first frame
-plays), decoded in three parts in parallel on the decoder chips, crossfaded at the part seams, and sent at its 24 fps play
+plays), decoded in parts in parallel on the decoder chips (four on a v6e-4), crossfaded at the part seams, and sent at its 24 fps play
 time as H.264 over a WebSocket (WebCodecs in the page). Keys held during the last 5 s drive the next window, frame by frame.
 
-The server binds 127.0.0.1 only. Open it from your machine through an SSH tunnel (see docs/models/hy-nomas.md).
+The server binds 127.0.0.1 only. Open it from your machine through an SSH tunnel (see docs/models/hy-nomas.md). Every
+request passes runtime/guard.py first (Host, Origin, JSON-only POST), and POST and /ws also need this run's token, which
+the server writes into the page it serves; so other web pages the browser has open cannot drive or watch the session.
 ``StubEngine`` stands in for the chips (synthetic frames, fixed stage times) to test the page, controls and streaming on CPU.
 """
 import base64
+import collections
 import hashlib
 import json
 import os
@@ -18,48 +21,27 @@ import struct
 import subprocess
 import threading
 import time
+import urllib.parse
 from importlib import resources
 
 import numpy as np
 
 from . import prompts as PR
+from ...runtime.guard import Guard, new_token
+from ...ui import shell
 from .cameras import Cameras, block_angles
 
 HOST = '127.0.0.1'
-LOOPBACK = {'127.0.0.1', 'localhost', '::1'}
-
-
-def _hostname(v):
-    """'127.0.0.1:8790', '[::1]:8790' or 'http://localhost:18873' -> the bare lower-case host name ('' when missing)."""
-    v = (v or '').strip().lower()
-    v = v.split('://', 1)[1] if '://' in v else v
-    v = v.split('/', 1)[0]
-    if v.startswith('['):
-        return v[1:v.find(']')] if ']' in v else ''
-    return v.rsplit(':', 1)[0] if v.count(':') == 1 else v
-
-
-def request_allowed(headers, allow):
-    """Pages on this machine only: the Host must be a loopback name (any port, so an SSH tunnel on another local port works) or
-    one listed in MASHBOX_ALLOW_HOSTS, which refuses DNS-rebinding names; an Origin, when the browser sends one, must pass the
-    same test, which refuses pages of other sites (their POSTs and their WebSockets)."""
-    o = headers.get('Origin')
-    return _hostname(headers.get('Host')) in allow and (o is None or _hostname(o) in allow)
-
-
-def seed_of(v, default):
-    """Seed from a request: a whole number from 0 to 2**32 - 1 (numpy's range), else ValueError (answered 400)."""
-    v = default if v is None or v == '' else v                    # 0 is a seed, not "no seed"
-    if isinstance(v, float) and v.is_integer():
-        v = int(v)
-    if isinstance(v, bool) or not isinstance(v, (int, str)):
-        raise ValueError('seed must be a whole number from 0 to 4294967295')
-    s = int(v)                                                   # a string that is not a whole number: ValueError
-    if not 0 <= s < 2 ** 32:
-        raise ValueError('seed must be a whole number from 0 to 4294967295')
-    return s
 FPS = 24.0
 GUID = b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+SEED_MAX = 2**32 - 1                      # numpy's RandomState takes 0..2**32-1 (runtime.DiTRuntime.reset)
+_LOCAL_ORIGIN = re.compile(r'https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?')
+
+
+# Every path the app's HTTP server answers: the page, its state, the stream and the actions. tests/cpu/test_hy_nomas.py
+# fails when a handler answers a path that is not listed here (shell files are served under /<shell.ROUTE>).
+ROUTES = {"GET": ("/", "/index.html", "/api/state", "/ws", "/favicon.ico"),
+          "POST": ("/api/world", "/api/action", "/api/restart", "/api/pause", "/api/settings")}
 
 
 def ffmpeg_exe():
@@ -70,8 +52,43 @@ def ffmpeg_exe():
         return 'ffmpeg'
 
 
-def page_bytes():
-    return resources.files(__package__).joinpath('page.html').read_bytes()
+def page_bytes(token=None):
+    """The page with its shell config resolved; with a token, also <meta name="mbx-token">, which the page sends back on
+    every POST (X-Mashbox-Token) and on /ws (?token=)."""
+    b = shell.render(resources.files(__package__).joinpath('page.html').read_bytes())
+    if token:
+        if b.count(b'</head>') != 1:
+            raise RuntimeError('page.html must have exactly one </head> for the token')
+        b = b.replace(b'</head>', b'<meta name="mbx-token" content="%s"></head>' % token.encode())
+    return b
+
+
+def seed_of(v, default):
+    """A request's seed: the default when absent (None or ''), else a whole number 0..2**32-1; 0 is a seed. Fractions,
+    booleans and other types are a ValueError like any seed out of range (answered 400)."""
+    v = default if v is None or v == '' else v                    # 0 is a seed, not "no seed"
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    if isinstance(v, bool) or not isinstance(v, (int, str)):
+        raise ValueError('seed must be a whole number from 0 to %d' % SEED_MAX)
+    s = int(v)                                                   # a string that is not a whole number: ValueError
+    if not 0 <= s <= SEED_MAX:
+        raise ValueError('seed must be a whole number from 0 to %d' % SEED_MAX)
+    return s
+
+
+class WorldGuard(Guard):
+    """runtime/guard.py's checks, plus two origin rules: a page on this machine at another port may call (the MASHBOX
+    app shows this page from its own 127.0.0.1 port and passes the browser's Origin on), and so may a page whose host
+    name is listed in MASHBOX_ALLOW_HOSTS (your own tunnel or proxy). Such a page still needs this run's token for POST
+    and /ws, and only a page this server served has it."""
+
+    def origin_ok(self, origin, host):
+        if super().origin_ok(origin, host):
+            return True
+        o = (origin or '').strip().lower()
+        name = urllib.parse.urlsplit(o).hostname if '://' in o else None
+        return bool(_LOCAL_ORIGIN.fullmatch(o) or (name and name in self.hosts))   # names in MASHBOX_ALLOW_HOSTS
 
 
 def worlds():
@@ -327,6 +344,11 @@ class Clock:
         with self.lock:
             self.g0 = self.t0 = None
 
+    def shift(self, dt):
+        with self.lock:
+            if self.t0 is not None:
+                self.t0 += dt
+
     def play(self, g):
         with self.lock:
             return None if self.t0 is None else self.t0 + (g - self.g0) / FPS
@@ -345,6 +367,12 @@ def nals(buf):
     return out
 
 
+# binary frame header (32 bytes): type 1=H.264 2=JPEG, keyframe, session, frame number, play time, send time, held-key bits,
+# stream sequence number (the page acks it: {"t": "ack", "s": seq})
+HDR = struct.Struct('<BBHIddII')
+KEYBIT = {k: 1 << i for i, k in enumerate(('w', 'a', 's', 'd', 'left', 'right', 'up', 'down'))}
+
+
 class Stream:
     """Frames at play time -> x264 (zero latency, no B-frames) -> access units (AVCC) -> every client."""
 
@@ -360,23 +388,44 @@ class Stream:
         self.clients = set()
         self.cl = threading.Lock()
         self.config = None
-        self.sent = 0
+        self.sent, self.jseq = 0, 0
+        self.wl, self.closed = threading.Lock(), False
         threading.Thread(target=self._reader, daemon=True).start()
 
     def push(self, img, meta):
-        self.meta.put(meta)
-        self.p.stdin.write(np.ascontiguousarray(img).tobytes())
+        with self.wl:
+            if self.closed:
+                return
+            self.meta.put(meta)
+            self.p.stdin.write(np.ascontiguousarray(img).tobytes())
         if any(c.mode == 'jpeg' for c in list(self.clients)):
             jpg = to_jpeg(img)
             if jpg is not None:
-                hdr = struct.pack('<BBHIdd', 2, 1, meta['sess'] & 0xFFFF, meta['g'], meta['play'], time.time())
-                self._send(hdr + jpg, True, 'jpeg')
+                self.jseq += 1
+                hdr = HDR.pack(2, 1, meta['sess'] & 0xFFFF, meta['g'], meta['play'], time.time(), meta.get('keys', 0), self.jseq)
+                self._send(hdr + jpg, True, 'jpeg', self.jseq)
 
-    def _send(self, msg, key, mode):
+    def close(self, timeout=5.0):
+        """No more frames: the encoder gets the end of its input, writes out what it holds and exits (killed after timeout s)."""
+        with self.wl:
+            if self.closed:
+                return
+            self.closed = True
+            try:
+                self.p.stdin.close()
+            except OSError:
+                pass
+        try:
+            self.p.wait(timeout)
+        except subprocess.TimeoutExpired:
+            self.p.kill()
+            self.p.wait()
+
+    def _send(self, msg, key, mode, seq=0):
         with self.cl:
             cs = [c for c in self.clients if c.mode == mode]
         for c in cs:
-            c.offer(msg, key)
+            c.offer(msg, key, seq)
 
     def _reader(self):
         buf, au = b'', []
@@ -417,9 +466,9 @@ class Stream:
                 for c in cs:
                     c.send_text(cfg)
         body = b''.join(len(n).to_bytes(4, 'big') + n for n in nl if n[0] & 0x1F in (1, 5))
-        hdr = struct.pack('<BBHIdd', 1, int(key), meta['sess'] & 0xFFFF, meta['g'], meta['play'], time.time())
-        self._send(hdr + body, key, 'h264')
         self.sent += 1
+        hdr = HDR.pack(1, int(key), meta['sess'] & 0xFFFF, meta['g'], meta['play'], time.time(), meta.get('keys', 0), self.sent)
+        self._send(hdr + body, key, 'h264', self.sent)
 
 
 def to_jpeg(img):
@@ -434,10 +483,26 @@ def to_jpeg(img):
 
 
 class Client:
+    """One viewer. Video in flight is bounded end to end. The page acks every frame it receives. From the acks the server
+    knows the shortest ack time (over RTT_WIN s) and what the link delivers: bytes acked over the last RATE_WIN s, taken
+    only while video was in flight that whole time (so bunched acks average out and an idle link does not count). A frame
+    goes out only while the video sent and not yet acked drains within the shortest ack time + SLACK at that rate (before
+    a rate is known: while the oldest unacked frame is younger than that); otherwise it is dropped and video restarts from
+    the next key frame (newest frame wins). So tunnels, proxies and slow links never hold seconds of old video. A client
+    that never acks (an older page) gets the plain bounded queue. Text (stats, link numbers) goes ahead of video."""
+    VMAX, SLACK, RTT_WIN, RATE_WIN, START_BYTES, AGE_CAP, LEGACY_S = 96, 0.35, 30.0, 2.0, 524288, 1.0, 5.0
+    clock = staticmethod(time.time)
+
     def __init__(self, sock, mode):
         self.sock, self.mode = sock, mode
-        self.q = queue.Queue(maxsize=96)
+        self.cv = threading.Condition()
+        self.vq, self.tq = collections.deque(), collections.deque()
         self.need_key, self.alive, self.drops = True, True, 0
+        self.net_drops, self.acks, self.netwait, self.track, self.t0 = 0, 0, False, True, self.clock()
+        self.flight = collections.deque()      # (stream seq, time offered, bytes) sent and not acked yet
+        self.unacked, self.busy_since, self.rate = 0, None, None
+        self.rtts = collections.deque()        # (time, ack time) for the shortest ack time over RTT_WIN s
+        self.done = collections.deque()        # (time, bytes) acked over the last 2 s: the link rate
 
     @staticmethod
     def frame(op, data):
@@ -445,36 +510,117 @@ class Client:
         h = bytes([0x80 | op]) + (bytes([n]) if n < 126 else bytes([126]) + n.to_bytes(2, 'big') if n < 65536 else bytes([127]) + n.to_bytes(8, 'big'))
         return h + data
 
-    def offer(self, msg, key):
-        if self.need_key and not key:
-            return
-        self.need_key = False
-        try:
-            self.q.put_nowait(self.frame(2, msg))
-        except queue.Full:                    # slow viewer: drop to the next key frame
-            self.need_key = True
-            self.drops += 1
-            while not self.q.empty():
-                try:
-                    self.q.get_nowait()
-                except queue.Empty:
-                    break
+    def _push(self, m, text=False):
+        with self.cv:
+            (self.tq if text else self.vq).append(m)
+            self.cv.notify()
+
+    def on_ack(self, g):
+        now = self.clock()
+        with self.cv:
+            self.acks += 1
+            self.track = True                  # an ack after LEGACY_S: budget from the next frame on
+            last, n = None, 0
+            while self.flight and self.flight[0][0] <= g:
+                last = self.flight.popleft()
+                self.unacked -= last[2]
+                n += last[2]
+                self.done.append((now, last[2]))
+            for d, w in ((self.rtts, self.RTT_WIN), (self.done, 2.0)):
+                while d and now - d[0][0] > w:
+                    d.popleft()
+            if last is not None:
+                self.rtts.append((now, now - last[1]))
+                if self.busy_since is not None and now - self.busy_since >= self.RATE_WIN:
+                    self.rate = sum(b for t, b in self.done if now - t < self.RATE_WIN) / self.RATE_WIN
+                if not self.flight:
+                    self.busy_since = None
+
+    def _budget(self, now):
+        """bytes allowed in flight now; 0 = by the age of the oldest unacked frame; None = no limit (never acks)"""
+        if not self.acks:
+            if now - self.t0 > self.LEGACY_S:
+                if self.track:
+                    self.track = False
+                    self.flight.clear()
+                    self.unacked = 0
+                return None
+            return self.START_BYTES
+        if not self.rtts:
+            return self.START_BYTES
+        if self.rate is None:
+            return 0
+        return self.rate * (min(r for _, r in self.rtts) + self.SLACK)
+
+    def offer(self, msg, key, g=0):
+        now = self.clock()
+        m = self.frame(2, msg)
+        with self.cv:
+            budget = self._budget(now)
+            if budget is not None:
+                rmin = min(r for _, r in self.rtts) if self.rtts else None
+                age = now - self.flight[0][1] if self.flight else 0.0
+                stale = rmin is not None and age > rmin + self.SLACK + self.AGE_CAP
+                if budget == 0:
+                    fits = age <= rmin + self.SLACK
+                else:
+                    fits = self.unacked <= budget if key else self.unacked + len(m) <= budget
+                if stale or not fits:              # link behind: drop, video restarts from the next key frame
+                    self.need_key = self.netwait = True
+                    self.net_drops += 1
+                    return
+            if self.need_key and not key:
+                self.net_drops += self.netwait
+                return
+            self.need_key = self.netwait = False
+            if len(self.vq) >= self.VMAX:          # slow viewer that never acks: drop to the next key frame
+                self.need_key = True
+                self.drops += 1
+                if self.track:
+                    for _ in range(min(len(self.vq), len(self.flight))):
+                        self.unacked -= self.flight.pop()[2]
+                self.vq.clear()
+                return
+            if self.track:
+                if not self.flight:
+                    self.busy_since = now
+                self.flight.append((g, now, len(m)))
+                self.unacked += len(m)
+            self.vq.append(m)
+            self.cv.notify()
+
+    def net(self):
+        now = self.clock()
+        with self.cv:
+            span = max(0.5, now - self.done[0][0]) if self.done else 1.0
+            rate = sum(n for _, n in self.done) * 8 / span / 1000 if self.done else 0
+            b = min(r for _, r in self.rtts) if self.rtts else None
+            budget = self._budget(now)
+            fl, age, un = len(self.flight), (now - self.flight[0][1] if self.flight else 0.0), self.unacked
+        return json.dumps(dict(type='net', inflight_ms=round(age * 1000), base_ms=None if b is None else round(b * 1000),
+                               kbps=round(rate), frames_in_flight=fl, unacked_kb=round(un / 1000),
+                               budget_kb=None if budget is None else round(budget / 1000), dropped=self.net_drops + self.drops,
+                               acks=self.acks))
 
     def send_text(self, s):
-        try:
-            self.q.put_nowait(self.frame(1, s.encode()))
-        except queue.Full:
-            pass
+        self._push(self.frame(1, s.encode()), text=True)
 
     def writer(self):
         try:
             while self.alive:
-                m = self.q.get()
+                with self.cv:
+                    while not self.tq and not self.vq:
+                        self.cv.wait()
+                    m = self.tq.popleft() if self.tq else self.vq.popleft()
                 if m is None:
                     return
                 self.sock.sendall(m)
         except OSError:
             self.alive = False
+
+    def close(self):
+        self.alive = False
+        self._push(None, text=True)
 
 
 def read_ws(sock):
@@ -504,9 +650,12 @@ def read_ws(sock):
 # ------------------------------------------------------------------ the live session
 class Live:
     def __init__(self, engine, log, hw='', seed=2701, preset='quality', lead=5.6, slow_extra=0.9, buffer=3.0, idle_min=15.0,
-                 camera=None, tencent_cam=None, stub=False):
+                 camera=None, tencent_cam=None, stub=False, sync=True, sync_margin=0.25):
         self.eng, self.log, self.hw, self.seed, self.stub = engine, log, hw, seed, stub
         self.lead, self.slow_extra, self.buffer, self.idle_min = lead, slow_extra, buffer, idle_min
+        self.sync_margin = sync_margin                 # sync mode keeps each part at least this far ahead of its play time
+        self.sync_held = self.reanchors = 0            # sync_held = 1/24 s ticks sync added (the frame on screen stays one tick longer)
+        self.wkeys, self.margins = {}, []
         self.tencent_cam = tencent_cam
         c = camera or {}
         self.cv = threading.Condition()
@@ -514,7 +663,7 @@ class Live:
         self.cams, self.req = None, []
         self.settings = dict(rate=float(c.get('turn_deg_per_s', 25.0)), pitch_max=float(c.get('pitch_limit_deg', 60)), move=1.0,
                              gain=float(c.get('rotation_scale', 2.5)), preset=preset, steps=engine.steps,
-                             decoder=getattr(engine, 'decoder', 'full'))
+                             decoder=getattr(engine, 'decoder', 'full'), sync=bool(sync))
         self.actions, self.next_aid, self.win = [], 1, []
         self.late = self.frames = 0
         self.msg, self.loading, self.pending_world, self.load_est = '', None, None, None
@@ -535,13 +684,19 @@ class Live:
 
     # ---------------------------------------------------------- frames
     def on_part(self, sess, w, j, frames, info):
+        info = dict(info, t_arr=time.time())
         with self.pl:
             self.parts[(sess, w, j)] = (frames, info)
             self.pl.notify_all()
 
     def pacer(self):
-        """Parts in stream order -> each frame to the encoder at its play time; crossfade 4 frames at each part seam."""
-        cur, w, j, hold, gb = None, 0, 0, None, 0
+        """Parts in stream order -> each frame to the encoder at its play time; crossfade 4 frames at each part seam.
+
+        Sync mode (on by default): the stream stays on the 24 fps grid. When a part reaches the player with less than
+        ``sync_margin`` s to spare (compute above 1 s per s of video, a slow action window), the pacer holds the picture for
+        single 1/24 s ticks spread over the next window instead of sending frames late and jumping 0.5 s later. Every hold
+        is counted (``sync_held``, shown as held by sync); frames that still miss their play time are counted as late, as without sync."""
+        cur, w, j, hold, gb, wb, plan = None, 0, 0, None, 0, 0, []
         nch, ovn = self.eng.nch, 4 * self.eng.ov
         while True:
             with self.pl:
@@ -550,19 +705,40 @@ class Live:
                     if s != cur:
                         for k in [k for k in self.parts if k[0] != s]:
                             self.parts.pop(k)
-                        cur, w, j, hold, gb = s, 0, 0, None, 0
+                        cur, w, j, hold, gb, wb, plan = s, 0, 0, None, 0, 0, []
                         self.clock.clear()
                     if (cur, w, j) in self.parts:
-                        frames, _ = self.parts.pop((cur, w, j))
+                        frames, info = self.parts.pop((cur, w, j))
                         break
                     self.pl.wait(timeout=0.5)
             frames, hold = crossfade(frames, hold, ovn)
+            if j == 0:
+                wb = gb
+            keys = self.wkeys.get((cur, w))
+            p0 = self.clock.play(gb)
+            if p0 is not None:
+                m = p0 - info.get('t_arr', time.time())     # how far ahead of its play time this part arrived
+                self.margins = (self.margins + [dict(w=w, j=j, m=round(m, 3))])[-48:]
+                if self.settings.get('sync') and m < self.sync_margin:
+                    if m < 0:                               # already late: hold now, so no frame goes out late in a burst
+                        k = int(np.ceil(-m * FPS))
+                        self.clock.shift(k / FPS)
+                        self.sync_held += k
+                        self.event('sync_hold', g=gb, ticks=k, margin=round(m, 3))
+                    need = int(np.ceil((self.sync_margin - max(m, 0.0)) * FPS)) - len(plan)
+                    if need > 0:                            # single ticks spread over the next window
+                        need = min(need, 24)
+                        plan = sorted(plan + [gb + int((i + 1) * 120 / (need + 1)) for i in range(need)])
             for f in range(frames.shape[0]):
                 if self.sess != cur:
                     break
                 g = gb + f
                 if self.clock.play(g) is None:
                     self.clock.anchor(g, time.time() + self.buffer)
+                while plan and plan[0] <= g:
+                    plan.pop(0)
+                    self.clock.shift(1 / FPS)
+                    self.sync_held += 1
                 play = self.clock.play(g)
                 d = play - time.time()
                 if d > 0:
@@ -571,13 +747,19 @@ class Live:
                 late = now > play + 1 / FPS
                 if now > play + 0.5:                 # a stall: re-anchor so the stream does not stay behind
                     self.clock.anchor(g, now)
+                    self.reanchors += 1
                     self.event('reanchor', g=g, behind_s=round(now - play, 3))
                 self.late += int(late)
                 self.frames += 1
-                self.stream.push(frames[f], dict(sess=cur, g=g, play=play))
+                kb = 0
+                if keys:
+                    for k in keys[min(g - wb, len(keys) - 1)]:
+                        kb |= KEYBIT.get(k, 0)
+                self.stream.push(frames[f], dict(sess=cur, g=g, play=play, keys=kb))
             gb += frames.shape[0]
             j += 1
             if j == nch:
+                self.wkeys.pop((cur, w - 2), None)
                 j, w = 0, w + 1
 
     # ---------------------------------------------------------- keys
@@ -639,15 +821,15 @@ class Live:
                         break
                     self.cv.wait(timeout=0.5)
             if r is not None:
+                try:                                       # one bad request must never end this thread
+                    self.eng.reset(r['seed'] if 'seed' in r else self.world['seed'])
+                except Exception as e:
+                    self.log(json.dumps(dict(event='request_failed', kind=r.get('kind'), err=repr(e)[:400])))
+                    with self.cv:                          # paused with the reason, as 0.1.1: no windows from a failed start
+                        self.mode, self.msg = 'paused', 'Could not start that: ' + str(e)[:160]
+                    continue
                 if r['kind'] == 'world':
                     self.world = r['world']
-                try:
-                    self.eng.reset(r.get('seed', self.world['seed']))
-                except Exception as e:  # one bad request never ends this thread
-                    self.log(json.dumps(dict(event='reset_failed', err=repr(e)[:300])))
-                    with self.cv:
-                        self.mode, self.msg = 'paused', 'That start failed; pick a world or press Restart.'
-                    continue
                 with self.cv:
                     self.sess += 1
                     self.w, self.cams, self.mode, self.msg, ahead = 0, self.new_cams(), 'playing', '', None
@@ -667,6 +849,7 @@ class Live:
                 self.eng.set_decoder(self.settings['decoder'])
             nfr = 117 if w == 0 else 120
             keys = self.keys_lock(nfr)
+            self.wkeys[(sess, w)] = keys
             t_sub = time.time()
             it, act = self.world['items'][0 if w == 0 else 1], None
             if w > 0:
@@ -820,12 +1003,14 @@ class Live:
                         decoder=getattr(self.eng, 'decoder', 'full'), decoders=list(getattr(self.eng, 'decoders', ['full'])),
                         next_lock_in=round(self.next_lock - time.time(), 2) if self.next_lock and self.mode == 'playing' else None,
                         next_window_plays_in=round(p - time.time(), 2) if p else None,
-                        late=self.late, frames=self.frames, actions=acts, settings=dict(self.settings), msg=self.msg,
+                        late=self.late, frames=self.frames, held=self.sync_held, reanchors=self.reanchors, sync=bool(self.settings.get('sync')),
+                        lead=self.lead, margin=min([x['m'] for x in self.margins[-self.eng.nch:]]) if self.margins else None,
+                        actions=acts, settings=dict(self.settings), msg=self.msg,
                         loading=dict(title=self.loading['title'], status=self.loading['status'], s=round(time.time() - self.loading['t0'], 1),
                                      est=self.load_est) if self.loading else None,
                         queued_world=self.pending_world['title'] if self.pending_world else None, stub=self.stub)
 
-    def api(self, path, body):
+    def api(self, path, body):   # every path here is in ROUTES["POST"]
         if path == '/api/world':
             mode = body.get('mode', 'preset')
             seed = seed_of(body.get('seed'), self.seed)
@@ -861,7 +1046,7 @@ class Live:
             return dict(ok=True, id=x['id'], line=line, span=span, seg2=seg2)
         if path == '/api/restart':
             if not self.world:
-                raise ValueError('no world yet')
+                raise ValueError('no world has been made')
             with self.cv:
                 seed = seed_of(body.get('seed'), self.world['seed'])
                 self.world['seed'] = seed
@@ -891,6 +1076,8 @@ class Live:
                     s['preset'] = body['preset']
                 if body.get('decoder') in getattr(self.eng, 'decoders', ['full']):
                     s['decoder'] = body['decoder']
+                if 'sync' in body:
+                    s['sync'] = bool(body['sync'])
             return dict(ok=True, settings=dict(s))
         raise KeyError(path)
 
@@ -902,6 +1089,7 @@ class Live:
                 cs = list(self.stream.clients)
             for c in cs:
                 c.send_text(s)
+                c.send_text(c.net())
             with self.cv:
                 if self.clients == 0 and not self.idle_paused and self.mode == 'playing' and time.time() - self.t_last_client > self.idle_min * 60:
                     self.idle_paused = True
@@ -909,10 +1097,10 @@ class Live:
 
     def serve(self, port):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-        page = page_bytes()
+        G = WorldGuard(token=new_token())                  # a new token every run; never logged
+        page = page_bytes(G.token)
         live = self
         wl = [dict(id=w['id'], title=w['title'], seg1=w['seg1'], seg2=w['seg2']) for w in self.worlds.values()]
-        allow = LOOPBACK | {h.strip().lower() for h in os.environ.get('MASHBOX_ALLOW_HOSTS', '').split(',') if h.strip()}
 
         class Handler(BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -929,14 +1117,24 @@ class Live:
                 self.end_headers()
                 self.wfile.write(b)
 
-            def _refuse(self, code, err):
-                self.close_connection = True
-                self._json(code, dict(err=err))
+            def _refused(self, auth):
+                """Host, Origin and Content-Type on every request; the token too on POST and /ws (auth=True)."""
+                err = G.check(self.command, self.path, self.headers, auth=auth)
+                if err:
+                    try:                                       # read a small body first, so closing never resets the answer
+                        n = int(self.headers.get('Content-Length') or 0)
+                    except ValueError:
+                        n = 0
+                    if 0 < n <= 20000:
+                        self.rfile.read(n)
+                    self.close_connection = True
+                    self._json(err[0], dict(err=err[1]))
+                return err is not None
 
             def do_GET(self):
-                if not request_allowed(self.headers, allow):
-                    return self._refuse(403, 'host or origin not allowed: open the page through localhost (see the docs)')
                 path = self.path.split('?')[0]
+                if self._refused(auth=path == '/ws'):
+                    return
                 if path in ('/', '/index.html'):
                     self.send_response(200)
                     self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -952,16 +1150,26 @@ class Live:
                     self.send_response(204)
                     self.send_header('Content-Length', '0')
                     self.end_headers()
+                elif path.startswith('/' + shell.ROUTE):
+                    hit = shell.asset(path)
+                    if hit is None:
+                        self._json(404, dict(err='not found'))
+                        return
+                    body, ctype = hit
+                    self.send_response(200)
+                    self.send_header('Content-Type', ctype)
+                    self.send_header('Cache-Control', 'max-age=3600')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
                 else:
                     self._json(404, dict(err='not found'))
 
             def do_POST(self):
-                if not request_allowed(self.headers, allow):
-                    return self._refuse(403, 'host or origin not allowed: open the page through localhost (see the docs)')
-                if not (self.headers.get('Content-Type') or '').lower().startswith('application/json'):
-                    return self._refuse(415, 'send JSON (Content-Type: application/json)')
+                if self._refused(auth=True):
+                    return
                 n = int(self.headers.get('Content-Length', 0) or 0)
-                if n > 20000:
+                if n < 0 or n > 20000:
                     return self._json(413, dict(err='too big'))
                 try:
                     body = json.loads(self.rfile.read(n) or b'{}')
@@ -1003,17 +1211,18 @@ class Live:
                         if op == 8:
                             break
                         if op == 9:
-                            c.q.put(c.frame(10, d))
+                            c._push(c.frame(10, d), text=True)
                             continue
                         if op == 1:
                             j = json.loads(d.decode())
-                            if j.get('t') == 'keys':
+                            if j.get('t') == 'ack':
+                                c.on_ack(int(j.get('s', 0)))
+                            elif j.get('t') == 'keys':
                                 live.on_keys(j.get('held', []))
                 except (ConnectionError, OSError, ValueError):
                     pass
                 finally:
-                    c.alive = False
-                    c.q.put(None)
+                    c.close()
                     with live.stream.cl:
                         live.stream.clients.discard(c)
                     with live.cv:
@@ -1031,10 +1240,24 @@ class Live:
         self.stream = Stream(self.log)
         for f in (self.producer, self.pacer, self.ticker):
             threading.Thread(target=f, daemon=True).start()
-        srv = self.serve(port)
+        srv = self.srv = self.serve(port)
         if autostart:
             self.api('/api/world', dict(mode='preset', id=autostart, seed=self.seed))
         return srv
+
+    def stop(self):
+        """Stop serving: close the port, end every viewer's connection, end the video encoder. Work in flight on the chips
+        ends with the process."""
+        srv = getattr(self, 'srv', None)
+        if srv is not None:
+            srv.shutdown()
+            srv.server_close()
+        if self.stream is not None:
+            with self.stream.cl:
+                cs = list(self.stream.clients)
+            for c in cs:
+                c.close()
+            self.stream.close()
 
 
 def crossfade(frames, hold, ovn):

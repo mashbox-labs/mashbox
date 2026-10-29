@@ -60,7 +60,7 @@ def first_difference(a, b, path="models.json"):
 
 def test_models_json_copy():
     """The wheel ships src/mashbox/models.json. It must be a byte copy of models.json, or the package carries a stale
-    licence line and stale pins (it nearly shipped both on 2026-10-28)."""
+    licence line and stale pins (it nearly shipped both once)."""
     src, copy = ROOT / "models.json", ROOT / "src" / "mashbox" / "models.json"
     fix = "fix: cp models.json src/mashbox/models.json"
     where = first_difference(json.loads(src.read_text()), json.loads(copy.read_text()))
@@ -112,6 +112,233 @@ def test_views_match_models_json():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_sync_check_catches_typed_drift(tmp_path):
+    """The number guard, the prose checks, the link check and the measured-number guard fail on planted drift. A second NUM_RE once shadowed the guard's regex and
+    turned it off without a failure; this keeps it on."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    assert sc.unbacked("99.9 tok/s", ["38.1 tokens/s"]) == ["99.9"]
+    assert sc.unbacked("38.1 tok/s", ["38.12 tokens/s"]) == []
+    reg = json.loads((ROOT / "models.json").read_text())
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "x.md").write_text(
+        "One TPU v6e chip is $2.80 an hour (read 1 May 2026).\n\n```bash\npython3 -m uv tool install mashbox\n```\n")
+    problems = sc.Problems()
+    sc.check_prose(reg, tmp_path, problems)
+    text = " ".join(problems)
+    assert "$2.80" in text and "read date" in text and "install line" in text, text
+    (tmp_path / "docs" / "y.md").write_text("## Top\n\nSee [the old page](models/missing.md), [this](x.md#top), [here](#top), "
+                                            "[there](y.md#no-such-heading) and [the other][o].\n\n[o]: models/gone.md\n")
+    problems = sc.Problems()
+    sc.check_relative_links(tmp_path, problems)
+    text = " ".join(problems)
+    assert len(problems) == 4 and all(x in text for x in ("models/missing.md", "x.md#top", "y.md#no-such-heading", "models/gone.md")), problems
+    (tmp_path / "docs" / "guides" / "tpu").mkdir(parents=True)
+    (tmp_path / "docs" / "guides" / "tpu" / "z.md").write_text(
+        "Later starts took <!-- r:qwen3-8-27b/3 -->x<!-- /r --> and once 5.2 s, then `5.3 s`, 5.4 sec, 41 tokens/sec, "
+        "1.4\u00d7 and 6-7 s; 4 to <!-- r:qwen3-8-27b/3 -->y<!-- /r -->. A GIF sped up 10x. Ours is 10x faster.\n")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "numbers_allowed.txt").write_text("docs/guides/tpu/z.md | GIF sped up 10x | an edit\n* | 5.2 s | old form\n")
+    problems = sc.Problems()
+    sc.check_numbers(reg, tmp_path, problems)
+    hand = " ".join(p for p in problems if "typed by hand" in p)
+    for n in ("'5.2 s'", "'5.3 s'", "'5.4 sec'", "'41 tokens/sec'", "'1.4\u00d7'", "'6-7 s'", "'4 to \\x00'", "faster"):
+        assert n in hand, (n, problems)
+    assert "line 2" in " ".join(problems) and hand.count("'10x'") == 1, problems
+    (tmp_path / "docs" / "w.md").write_text("MASHBOX Labs builds its own models for games.\n")
+    problems = sc.Problems()
+    sc.check_prose(reg, tmp_path, problems)
+    assert any("other words" in p for p in problems), problems
+    # what a browser shows or follows besides Markdown: form values, ARIA and meta text, data-*,
+    # MDX and SVG pages; unquoted, root-relative, form, refresh, CSS and object targets; version metadata; docstrings
+    for f in ("x.md", "y.md", "w.md", "guides/tpu/z.md"):
+        (tmp_path / "docs" / f).unlink()
+    (tmp_path / "tools" / "numbers_allowed.txt").write_text("")
+    (tmp_path / "docs" / "v.md").write_text(
+        '---\nrelease: 9.9.9\n---\n<input value="11 tokens/s"> <input type="range" value="3"> <i aria-valuetext="12 tokens/s"></i>\n'
+        '<span data-speed="13 tokens/s"></span>\n<meta name="description" content="14 tokens/s">\n'
+        '<meta name="mashbox-version" content="9.9.8">\n<span title="MASHBOX Labs is a startup">x</span>\n'
+        '<input value="Qwen3.8-27B runs on TPU v5p-8">\n'
+        '<a href=gone-1.md>a</a> [b](/docs/gone-2) <form action="gone-3"></form>\n'
+        '<meta http-equiv="refresh" content="0; url=gone-4.html">\n<style>.h { background: url(\'gone-5.png\') }</style>\n'
+        '<object data="gone-6.svg"></object> <a href=v.md>here</a> [c](/docs/v)\n'
+        '<span aria-roledescription="17 tokens/s">x</span>\n<style>@import "gone-7.css";</style>\n')
+    (tmp_path / "docs" / "u.mdx").write_text("The server decodes at 15 tokens/s.\n\n<Stat value=\"18 tokens/s\" />\n")
+    (tmp_path / "docs" / "t.svg").write_text('<svg><text x="0" y="20">16 tokens/s</text></svg>\n')
+    pkg = tmp_path / "src" / "mashbox" / "models" / "qwen3_8_27b"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text('"""Runs on TPU v5p-8. MASHBOX Labs builds chips."""\n')
+    problems = sc.Problems()
+    sc.check_numbers(reg, tmp_path, problems)
+    text = " ".join(problems)
+    for n in ("'11 tokens/s'", "'12 tokens/s'", "'13 tokens/s'", "'14 tokens/s'", "'15 tokens/s'", "'16 tokens/s'",
+              "'17 tokens/s'", "'18 tokens/s'",
+              "runs on v5p-8 ('Qwen3.8-27B", "docstring says Qwen3.8-27B runs on v5p-8"):
+        assert n in text, (n, problems)
+    assert "'3'" not in text, problems   # a slider's value is not text on the page
+    problems = sc.Problems()
+    sc.check_relative_links(tmp_path, problems)
+    assert sorted(p.split("missing path: ")[-1] for p in problems) == \
+        ["docs/gone-2.md", "gone-1.md", "gone-3", "gone-4.html", "gone-5.png", "gone-6.svg", "gone-7.css"], problems
+    problems = sc.Problems()
+    sc.check_prose(reg, tmp_path, problems)
+    text = " ".join(problems)
+    assert "declares version 9.9.9" in text and "declares version 9.9.8" in text, problems
+    assert sum("other words" in p for p in problems) == 2, problems   # the title attribute and the docstring
+    for block, cmd in (("command: mashbox run x --slotz 8", "mashbox run x --slotz 8"),
+                       ('  "run": "mashbox tpu up x",', "mashbox tpu up x"), ("- exec: 'mashbox run x'", "mashbox run x")):
+        assert sc.KEYED_CMD_RE.sub(r"\2", block) == cmd, block
+    for block, cmd in (('command: ["mashbox", "run", "x", "--slotz", "8"]', "mashbox run x --slotz 8"),   # exec form
+                       ('ENTRYPOINT ["mashbox", "tpu", "up", "x"]', "mashbox tpu up x"), ("CMD mashbox run x", "mashbox run x")):
+        assert sc.code_block(block) == cmd, block
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "run-x").write_text("#!/bin/sh\nexec mashbox run x\n")
+    assert [f.name for f in sc.example_files(tmp_path)] == ["run-x"]
+    app = tmp_path / "src" / "mashbox" / "ui" / "app"
+    app.mkdir(parents=True)
+    for src in ('CATALOG_URL = "https://example.com/models.json"\n',
+                f'CATALOG_URL = "{sc.catalog_url(reg)}"\nCATALOG_URL = "https://example.com/models.json"\n'):
+        (app / "__init__.py").write_text(src)
+        problems = sc.Problems()
+        sc.check_app(reg, tmp_path, None, None, problems)
+        assert len(problems) == 1 and "CATALOG_URL" in problems[0], problems
+
+
+def test_public_text_is_clean():
+    """Public pages describe the release as plain facts (tools/docs_lint.py): no dates outside the changelog and licence
+    text, no run stories, status words, hidden notes, labels or internal ids. Each planted kind fails, so the lint stays on."""
+    import importlib.util
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "docs_lint.py"), "--repo", str(ROOT)],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    spec = importlib.util.spec_from_file_location("docs_lint", ROOT / "tools" / "docs_lint.py")
+    dl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl)
+    planted = ("Verified on 28 October 2026 in our run: v5e is not supported yet.\n"
+               '<!-- TODO source="run record" -->\n'
+               "Measured 2026-10-28 03:53 UTC, record RUN-7.\n"
+               "Coming soon: a new model. Price: ESTIMATE at list price.\n"
+               "Later starts: <!-- r:qwen3-8-27b/3 -->6.6 s<!-- /r -->.\n"
+               "It has happened twice. Its owners should switch it (skill example-guide section 4).\n"
+               '```text\n{"t": "2026-10-28T09:19:46Z"}\n```\n')
+    kinds = {p.split("[", 1)[1].split("]", 1)[0] for p in dl.lint_text("docs/x.md", planted, {}, set())}
+    for k in ("verified", "our-run", "yet", "long-date", "comment", "iso-date", "utc", "record-id", "coming-soon", "label",
+              "marker", "story", "owner-note", "skill"):
+        assert k in kinds, (k, kinds)
+    assert any("code block" in p for p in dl.lint_text("docs/x.md", planted, {}, set()))
+    assert dl.lint_text("CORE-CHANGES.md", "## 0.1.0 (2026-10-28)\n", {}, set()) == []
+    assert dl.lint_text("CORE-CHANGES.md", "1. Why: on 2026-10-28 the create failed.\n", {}, set())   # a date in an entry
+    assert dl.lint_text("docs/x.md", "Run `mashbox run qwen3-8-27b` and wait.\n\n```text\nnot supported yet\n```\n", {}, set()) == []
+    assert dl.lint_text("docs/x.md", "A test set of noisy, partly hidden tracks.\n<!-- resources:start -->\n<!-- resources:end -->\n",
+                        {}, set()) == []   # plain meaning and a generated block
+    assert dl.lint_text("docs/x.md", "It partly works on v5e.\n", {}, set())
+    kinds_of = lambda rel, text: {p.split("[", 1)[1].split("]", 1)[0] for p in dl.lint_text(rel, text, {}, set())}
+    # a page template is a public page: a hidden note to the writer fails like any other hidden comment
+    assert "comment" in kinds_of("docs/_templates/model.md", "<!--\nCopy to docs/models/<id>.md and keep the headings.\n-->\n# <Name>\n")
+    assert "comment" in kinds_of("docs/_templates/guide.md", "## 1. <Step>\n\n<!-- Media slot: one screenshot. -->\n")
+    # an MDX page is read like Markdown, with its own hidden-comment form; an SVG's text is read like an app page
+    assert "comment" in kinds_of("docs/x.mdx", "# Page\n\n{/* note to the writer */}\n")
+    assert "comment" in kinds_of("docs/x.mdx", "<!-- note -->\n") and kinds_of("docs/x.mdx", "Fast on v5e.\n") == set()
+    assert {"iso-date", "our-run"} <= kinds_of("docs/assets/x.svg", "<svg><text>Measured 2026-10-28 in our run</text></svg>")
+    # an internal id on its own, with no date or status word near it (Markdown, a CLI string, app text)
+    assert kinds_of("docs/x.md", "Internal run SYNC-77.\n") == {"internal-id"}
+    assert kinds_of("docs/x.md", "Finding R5-F01 is closed.\n") == {"internal-id"}
+    assert dl.lint_text("docs/x.md", "Qwen2.5-VL-7B, SHA-256, UTF-8, ISO-8601, BSD-3-Clause and CC-BY-4.0.\n", {}, set()) == []
+    py = 'HELP = "Verified in internal run SYNC-77; partly ready."\nFAST = "Faster decoding; not supported yet on v5e."\n'
+    assert {"verified", "internal-id", "staging", "yet"} <= kinds_of("src/mashbox/x.py", py), kinds_of("src/mashbox/x.py", py)
+    assert dl.lint_text("src/mashbox/x.py", 'STATE = "pending"\nSTAMP = "verified"\n', {}, set()) == []   # names in code
+    assert {"our-run", "internal-id"} <= kinds_of("src/mashbox/ui/x.js", "el.textContent = 'Seen in our run SYNC-77';\n")
+    # Codex's D04: visible text added to the app page fails the lint; the page as shipped passes
+    app = ROOT / "src" / "mashbox" / "ui" / "app" / "index.html"
+    lines = app.read_text().splitlines(keepends=True)
+    d04 = "".join(lines[:17] + ["<p>Verified on October 28, 2026 in our run SYNC-77; partly ready.</p>\n"] + lines[17:])
+    assert {"verified", "us-date", "our-run", "internal-id", "staging"} <= kinds_of("src/mashbox/ui/app/index.html", d04)
+    assert dl.lint_text("src/mashbox/ui/app/index.html", app.read_text(), {}, set()) == []
+    assert kinds_of("x.html", '<img alt="Measured 2026-10-28"><!-- record RUN-7 --><script>t("our run")</script>') >= {
+        "iso-date", "record-id", "our-run"}   # alt text, comment words and script strings are read
+    # the lint reads the same app pages as the number guard (hf_github_sync_check.ui_pages)
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    ui = [f.relative_to(ROOT).as_posix() for f in sc.ui_pages(ROOT)]
+    assert ui and sorted(ui) == sorted(r for r in dl.public_files(ROOT) if r.endswith(dl.UI_SUFFIXES)), ui
+    extra = [("private", re.compile(r"\bexample-host\b"), "no internal host names")]   # maintainers' rules file
+    assert dl.lint_text("docs/x.md", "Copied from example-host.\n", {}, set(), extra)
+    assert dl.lint_text("docs/x.md", "Copied from example-host.\n", {}, set()) == []
+
+
+def test_chip_status_keeps_its_condition():
+    """A chip status on a page carries the chips row's condition or reason ("Supported: a v5e-4 ...", "Not supported:
+    runs only on a v6e-4 ..."), so a page never prints a bare "Supported" for a model that needs a bigger host."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    reg = json.loads((ROOT / "models.json").read_text())
+    for m in reg["models"]:
+        for chip, row in m["chips"].items():
+            want = sc.chip_text(m, chip)
+            why = row.get("note") if row.get("status") == "passing" else (row.get("reason") or row.get("note"))
+            if why and row.get("status") != "pending":
+                assert want.endswith(": " + why), (m["id"], chip, want)
+            page = f"Status: <!-- r:{m['id']}/chip-{chip} -->x<!-- /r -->."
+            got = sc.fill_numbers(reg, page, "docs/x.md", sc.Problems())
+            assert want in got, (m["id"], chip, got)
+
+
+def test_number_map_puts_markers_back(tmp_path):
+    """The private number map: render takes the markers out of a page and records where each number sits; the checks put
+    them back exactly, an inline marker wins over the map, and a number whose words changed is reported, not lost."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    page = ("| Later starts | <!-- r:qwen3-8-27b/3 -->6.6 s<!-- /r --> |\n"
+            "From 4.0 to <!-- r:qwen3-8-27b/agents-n6 -->4.7 s<!-- /r -->; again 4.0 to <!-- r:cloud/x -->4.7 s<!-- /r -->.\n")
+    plain, spots = sc.unmark(page)
+    assert "<!--" not in plain and len(spots) == 3
+    assert sc.mark_up(plain, spots) == page
+    assert sc.mark_up(sc.mark_up(plain, spots[:1]), spots) == page
+    problems = sc.Problems()
+    sc.mark_up(plain.replace("Later starts", "Later runs"), spots, "docs/x.md", problems)
+    assert len(problems) == 1 and "r:qwen3-8-27b/3" in problems[0], problems
+
+
+def test_cloud_prices_check_catches_drift(tmp_path):
+    """docs/data/cloud-prices.json is the one dated source of the TPU vs GPU page: a price read more than max_age_days
+    ago fails, models.json prices.per_chip_hour that differs from it fails, and a hand edit inside a cloud block fails."""
+    import datetime
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    reg = json.loads((ROOT / "models.json").read_text())
+    data = json.loads((ROOT / sc.CLOUD).read_text())
+    newest = max(datetime.date.fromisoformat(p["read_utc"][:10]) for p in data["prices"])
+    (tmp_path / "docs" / "data").mkdir(parents=True)
+    (tmp_path / sc.CLOUD).write_text(json.dumps(data))
+    problems = sc.Problems()
+    sc.check_cloud(reg, tmp_path, problems, today=newest)
+    assert not problems, problems
+    problems = sc.Problems()
+    sc.check_cloud(reg, tmp_path, problems, today=newest + datetime.timedelta(days=data["max_age_days"] + 1))
+    assert any("days ago" in p for p in problems), problems
+    reg["prices"]["per_chip_hour"]["v6e"] = "2.80"
+    problems = sc.Problems()
+    sc.check_cloud(reg, tmp_path, problems, today=newest)
+    assert len(problems) == 1 and "2.80" in problems[0], problems
+    page = (ROOT / "docs" / "tpu-vs-gpu.md").read_text()
+    assert "| $11.06 |" in page
+    views = sc.docs_views(json.loads((ROOT / "models.json").read_text()), ROOT, sc.Problems())
+    assert views["docs/tpu-vs-gpu.md"] == page
+    assert views["docs/tpu-vs-gpu.md"] != page.replace("| $11.06 |", "| $3.00 |")
+    cost = sc.cloud_block("cost", data, json.loads((ROOT / "models.json").read_text()))
+    ceil = [line.split("|")[-2].strip() for line in cost.splitlines() if ", ceiling |" in line]
+    assert len(ceil) == 3 and ceil[0] == ceil[1], ceil  # one chip and a v6e-4 have the same GB/s per $: same ceiling cost
+
+
 def test_licence_check_catches_drift(tmp_path):
     """The licence check (report only, never edits) fails on each kind of mismatch with models.json: the package licence,
     an upstream LICENSE that is not the pinned file, and a page that says a licence is not chosen."""
@@ -135,6 +362,17 @@ def test_licence_check_catches_drift(tmp_path):
     sc.check_licences(reg, tmp_path, problems)
     text = " ".join(problems)
     assert "pyproject.toml" in text and f"licenses/{mid}/LICENSE" in text and "docs/x.md:1" in text, text
+
+
+def test_cli_dispatches_only_parsed_commands():
+    """mashbox main() reads argv before argparse only for `tpu` and a MODEL_CLI model's run/download, so every other
+    command is in build_parser() and so in docs/cli.md (a command handled outside it would be undocumented)."""
+    fn = next(n for n in ast.parse((ROOT / "src" / "mashbox" / "cli.py").read_text()).body
+              if isinstance(n, ast.FunctionDef) and n.name == "main")
+    words = {c.value for n in ast.walk(fn) if isinstance(n, ast.Compare)
+             and any(isinstance(x, ast.Name) and x.id == "argv" for x in ast.walk(n))
+             for c in ast.walk(n) if isinstance(c, ast.Constant) and isinstance(c.value, str)}
+    assert words <= {"tpu", "run", "download", ".", "-"}, f"main() dispatches {sorted(words - {'tpu', 'run', 'download', '.', '-'})} before argparse"
 
 
 def test_run_stops_cleanly_for_a_model_without_its_runtime(capsys):
@@ -182,13 +420,18 @@ def test_path_filter_runs_what_a_change_can_break():
 
 def test_sync_online_coming_soon_model():
     """The nightly --online check passes a coming-soon model whose HF repo is private (401/403) or absent (404), and
-    fails one that is public before its launch or whose state cannot be read (fixtures, no network)."""
+    fails one that is public before its launch or whose state cannot be read (fixtures, no network). The fixture also
+    answers the release-wide checks (tag, PyPI's newest version, the org profile's rendered block), so any problem
+    left is the coming-soon model's own."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
     sc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(sc)
     reg = {"hf": {"org": "mashbox-labs"}, "github": {"org": "mashbox-labs", "repo": "mashbox"}, "version": "0.1.1",
-           "models": [{"id": "soon", "hf_repo": "mashbox-labs/Soon-TPU", "hf_revision": "", "launch": "coming soon"}]}
+           "models": [{"id": "soon", "name": "Soon", "kind": "world", "in": "text", "out": "video",
+                       "upstream": {"maker": "Someone"}, "hf_repo": "mashbox-labs/Soon-TPU", "hf_revision": "",
+                       "launch": "coming soon"}]}
+    profile = f"# Org\n\n{sc.MARK_START}\n{sc.profile_table(reg)}\n{sc.MARK_END}\n"
 
     class Fetch:
         def __init__(self, repo_state):
@@ -201,6 +444,10 @@ def test_sync_online_coming_soon_model():
                 return self.repo_state
             if url == "https://api.github.com/repos/mashbox-labs/mashbox/git/ref/tags/v0.1.1":
                 return 200, "{}"
+            if url == "https://pypi.org/pypi/mashbox/json":
+                return 200, json.dumps({"info": {"version": "0.1.1"}})
+            if url == "https://raw.githubusercontent.com/mashbox-labs/.github/main/profile/README.md":
+                return 200, profile
             return 404, ""
 
     def problems(repo_state):
@@ -214,3 +461,49 @@ def test_sync_online_coming_soon_model():
     assert problems((200, json.dumps({"private": True}))) == []
     assert any("public before its launch" in x for x in problems((200, json.dumps({"private": False}))))
     assert any("cannot read the repo state" in x for x in problems((500, "")))
+
+
+def test_world_card_licence_lines(tmp_path):
+    """The world card says where the upstream LICENSE file comes from and states the licence people chose for our own
+    files (the file's row in upstream.json); an own file without one fails the licence check. The LLM cards keep their words."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    reg = json.loads((ROOT / "models.json").read_text())
+    m = next(x for x in reg["models"] if x["id"] == "hy-nomas")
+    v = sc.card_vars(reg, m, ROOT)
+    assert "licence file from [tencent/Hy-Nomas](https://huggingface.co/tencent/Hy-Nomas) on Hugging Face, unchanged" \
+        in v["upstream_licence_source"]
+    assert v["own_files_licence"] == ("Our own weights in this repo: `decoders/hy-nomas-fast-decoder-v1.safetensors` "
+                                      "(the MASHBOX Fast Decoder): Apache-2.0. ")
+    assert "${upstream_licence_source}${own_files_licence}" in (ROOT / "templates/hf/card-world.md").read_text()
+    for t in ("card-llm-tpu.md", "card-llm-gguf.md", "card-image.md", "card-video.md", "card-voice.md"):
+        assert "own_files_licence" not in (ROOT / "templates/hf" / t).read_text(), t
+    # a model whose only file is its compile cache still says where its weights come from
+    assert sc.files_table(m).startswith("This port loads the original weights unchanged from [tencent/Hy-Nomas]")
+    # our own file without a recorded licence: no licence line, and the licence check fails
+    up = json.loads((ROOT / m["path"] / "upstream.json").read_text())
+    for r in up["repos"].values():
+        for f in r["files"]:
+            f.pop("license", None)
+    (tmp_path / m["path"]).mkdir(parents=True)
+    (tmp_path / m["path"] / "upstream.json").write_text(json.dumps(up))
+    assert sc.own_files_licence(tmp_path, m) == ""
+    problems = sc.Problems()
+    sc.check_licences(reg, tmp_path, problems)
+    assert any("decoders/hy-nomas-fast-decoder-v1.safetensors: our own file" in p for p in problems), problems
+
+
+def test_version_has_one_source():
+    """The release version is written once, in models.json: mashbox.__version__ reads the packaged copy, pyproject.toml
+    takes it from mashbox.__version__ (dynamic), and pyproject.toml writes no version of its own."""
+    import tomllib
+    import mashbox
+    reg = json.loads((ROOT / "models.json").read_text())
+    assert mashbox.__version__ == reg["version"] == json.loads((ROOT / "src/mashbox/models.json").read_text())["version"]
+    pp = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert "version" not in pp["project"] and "version" in pp["project"]["dynamic"], pp["project"]
+    assert pp["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "mashbox.__version__"}
+    init = (ROOT / "src/mashbox/__init__.py").read_text()
+    assert not re.search(r"__version__\s*=\s*[\"']", init), "src/mashbox/__init__.py writes a version literal"

@@ -60,7 +60,7 @@ def display_name(seg1):
 
 
 def action_text(seg1, text, subject=True):
-    """Typed action -> the line that goes in the prompt ('the frog leaps' -> 'leaps': the subject token stands for it)."""
+    """Typed action -> the line that goes in the prompt ('the eagle dives' -> 'dives': the subject token stands for it)."""
     t = clean_text(text, 160)
     if not t:
         raise ValueError('empty action')

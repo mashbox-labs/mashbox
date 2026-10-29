@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MASHBOX</title>
+<!-- The window frame, not a module page: it holds the module sidebar and shows one module shell page at a time. -->
+<link rel="icon" href="/ui/shell/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/ui/shell/shell.css">
+<script type="application/json" id="mbx-module">{}</script>
+<script src="/ui/shell/shell.js"></script>
+<link rel="stylesheet" href="/ui/app/app.css">
+</head>
+<body class="mbx-ui app-frame">
+<aside class="app-side">
+  <div class="app-brand"><img src="/ui/shell/favicon.svg" alt=""><span>MASHBOX</span></div>
+  <h4>Modules</h4>
+  <nav class="app-nav" id="mods" aria-label="Modules"></nav>
+  <h4>App</h4>
+  <nav class="app-nav" id="tools" aria-label="App"></nav>
+  <div class="app-srv" id="srv" role="button" tabindex="0"><span><span class="app-dot" id="srv-dot"></span>Server</span><b id="srv-name">None</b><small id="srv-model"></small></div>
+</aside>
+<iframe id="view" title="MASHBOX"></iframe>
+<script src="/window/frame.js"></script>
+</body>
+</html>

@@ -101,6 +101,8 @@
    "files": [
     {
      "name": "decoders/hy-nomas-fast-decoder-v1.safetensors",
+     "title": "the MASHBOX Fast Decoder",
+     "license": "apache-2.0",
      "bytes": 41845008,
      "sha256": "2f19309bce5eb04d20c26a7762ea084ff27ad14e6f203b5975263954a6340baa"
     }

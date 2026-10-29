@@ -1,6 +1,6 @@
 # hy_nomas
 
-Port of Tencent Hunyuan's Hy-Nomas world model. How to run it, chips and numbers: [docs/models/hy-nomas.md](../../../../docs/models/hy-nomas.md). The browser app is in [apps/hy-nomas](../../../../apps/hy-nomas); `page.html` here is a copy of it, so the installed package can serve it.
+Port of Tencent Hunyuan's Hy-Nomas world model. How to run it, chips and numbers: [docs/models/hy-nomas.md](../../../../docs/models/hy-nomas.md). The browser app is `page.html` here (its one source), so the installed package serves it; [apps/hy-nomas](../../../../apps/hy-nomas) holds the cloud setup.
 
 | File | What it does |
 |---|---|
@@ -21,4 +21,4 @@ Port of Tencent Hunyuan's Hy-Nomas world model. How to run it, chips and numbers
 | `defaults.json` | chip layout, presets, decoder overlap, camera rates, text lengths, port |
 | `worlds.json` | the preset worlds |
 | `upstream.json` | pinned upstream files: Tencent's code commit and tree hash, Hugging Face revisions, sizes and sha256 |
-| `page.html` | the browser app (copy of `apps/hy-nomas/page.html`; a test checks they match) |
+| `page.html` | the browser app (its only copy; a test checks there is no second one) |

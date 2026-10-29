@@ -16,7 +16,7 @@ tags:
 <p>
   <a href="https://github.com/mashbox-labs/mashbox"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-mashbox--labs%2Fmashbox-181717?logo=github"></a>
   <a href="https://mashbox.gg/docs/models/qwen3-8-27b"><img alt="Docs" src="https://img.shields.io/badge/Docs-mashbox.gg-ff5a1f"></a>
-  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.1/AGENTS.md"><img alt="AGENTS.md" src="https://img.shields.io/badge/For%20coding%20agents-AGENTS.md-555555"></a>
+  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.2/AGENTS.md"><img alt="AGENTS.md" src="https://img.shields.io/badge/For%20coding%20agents-AGENTS.md-555555"></a>
   <a href="https://x.com/mashboxgg"><img alt="X" src="https://img.shields.io/badge/X-%40mashboxgg-000000?logo=x"></a>
 </p>
 
@@ -26,16 +26,16 @@ Qwen's 27B hybrid-attention language model on one Google Cloud TPU v6e chip, wit
 
 <table>
 <tr>
-<td width="50%"><b>38.1 vs 31.4 tok/s</b><br>vs vLLM on the same chip, 1 request at a time<br><sub>TPU v6e-1, 2026-10-28</sub></td>
-<td width="50%"><b>130.1 vs 1,606.7 s</b><br>first start to ready, weights on disk, vs vLLM on the same chip<br><sub>TPU v6e-1, 2026-10-28</sub></td>
+<td width="50%"><b>38.1 vs 31.4 tok/s</b><br>vs vLLM on the same chip, 1 request at a time<br><sub>TPU v6e-1</sub></td>
+<td width="50%"><b>326.6 vs 1,606.7 s</b><br>first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type<br><sub>TPU v6e-1</sub></td>
 </tr>
 <tr>
-<td width="50%"><b>258 tok/s total</b><br>8 users at once on one chip (37.45 for 1 user)<br><sub>TPU v6e-1, 2026-10-28</sub></td>
-<td width="50%"><b>9.8 s</b><br>to ready after the download, with the shipped compile cache (25.7 s without)<br><sub>TPU v6e-1, 2026-10-28</sub></td>
+<td width="50%"><b>258 tok/s total</b><br>8 users at once on one chip (37.45 for 1 user)<br><sub>TPU v6e-1</sub></td>
+<td width="50%"><b>69.6 s</b><br>to ready with the shipped compile cache, weights on disk (326.6 s without)<br><sub>TPU v6e-1</sub></td>
 </tr>
 </table>
 
-<sub>vLLM comparisons ran both sides on the same Google Cloud TPU v6e-1: ours with Qwen3.8-27B-BQ8_R.bshj (26.94 GB, 8.01 bits per weight), vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8), since Qwen's bf16 weights do not fit one chip. Measured 2026-10-28 (UTC). Every measurement and its method: [Results](#results).</sub>
+<sub>vLLM comparisons ran both sides on Google Cloud TPU v6e-1: ours with Qwen3.8-27B-BQ8_R.bshj (26.94 GB, 8.01 bits per weight), vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8), since Qwen's bf16 weights do not fit one chip. Every measurement and its method: [Results](#results).</sub>
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/top/01-qwen38-27b-vs-vllm-at-a-glance-dark.png"><img alt="Qwen3.8-27B vs vLLM-TPU on the same TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/top/01-qwen38-27b-vs-vllm-at-a-glance-light.png" width="100%"></picture>
 
@@ -45,7 +45,7 @@ Qwen's 27B hybrid-attention language model on one Google Cloud TPU v6e chip, wit
 
 ## Quickstart
 
-On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.1/AGENTS.md)):
+On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.2/AGENTS.md)):
 
 ```bash
 python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"
@@ -59,40 +59,40 @@ The `mashbox` server speaks the Anthropic Messages, OpenAI Responses and OpenAI 
 ## Results
 
 <details>
-<summary>All 10 measurements, all on TPU v6e-1, 2026-10-28</summary>
+<summary>All 10 measurements, all on TPU v6e-1</summary>
 
 | Measure | Ours | Compared with |
 |---|---|---|
 | Decode speed, 1 request<sup>1</sup> | **38.6 tok/s** | n/a<sup>2</sup> |
 | Decode speed, 8 requests at once<sup>3</sup> | **269 tok/s total (33.6 each)** | n/a<sup>2</sup> |
-| Start to ready, first run<sup>4</sup> | **44.0 s** | n/a |
-| Start to ready, later runs | **6.6 s** | n/a |
-| Start to ready on a new chip, first run<sup>5</sup> | **138 s (9.8 s after the download)** | 166.6 s (25.7 s) without the compile cache |
-| Server speed, 1 request at a time<sup>6</sup> | **38.1 tok/s** | vLLM: 31.4 tok/s<sup>7</sup> |
-| Server speed, 1 request at a time, long prompts<sup>8</sup> | **37.0 tok/s** | vLLM: 31.0 tok/s<sup>7</sup> |
-| Server speed, 1 request at a time, sampled<sup>9</sup> | **33.0 tok/s** | vLLM: 23.7 tok/s<sup>7</sup> |
-| Start to ready, empty compile caches<sup>10</sup> | **130.1 s** | vLLM: 1,606.7 s<sup>7,11</sup> |
+| Start to ready, first run<sup>4</sup> | **326.6 s** | n/a |
+| Start to ready, shipped compile cache | **69.6 s** | 326.6 s without it |
+| Start to ready, shipped compile cache, 32k context, 1 slot | **32.6 s** | n/a |
+| Server speed, 1 request at a time<sup>5</sup> | **38.1 tok/s** | vLLM: 31.4 tok/s<sup>6</sup> |
+| Server speed, 1 request at a time, long prompts<sup>7</sup> | **37.0 tok/s** | vLLM: 31.0 tok/s<sup>6</sup> |
+| Server speed, 1 request at a time, sampled<sup>8</sup> | **33.0 tok/s** | vLLM: 23.7 tok/s<sup>6</sup> |
+| Start to ready, empty compile caches<sup>9</sup> | **326.6 s** | vLLM: 1,606.7 s<sup>10,11</sup> |
 | Server speed, 8 users at once<sup>12</sup> | **258.0 tok/s total** | 1 user: 37.45 tok/s<sup>13</sup> |
 
 <sub><sup>1</sup> 64-token prompt, 128 new tokens, greedy.</sub><br>
 <sub><sup>2</sup> Qwen's bf16 weights (55.6 GB) do not fit one v6e chip (32 GB).</sub><br>
 <sub><sup>3</sup> Same prompt length and output for every request.</sub><br>
-<sub><sup>4</sup> Weights file already on disk; sha256 check and compiling included.</sub><br>
-<sub><sup>5</sup> Includes the 26.94 GB download from Hugging Face and its sha256 check; the number in brackets counts from the end of the download and check. Same chip and day for both.</sub><br>
-<sub><sup>6</sup> Short chat prompts, 256 new tokens, greedy.</sub><br>
-<sub><sup>7</sup> vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1.</sub><br>
-<sub><sup>8</sup> 790-token prompts, 256 new tokens, greedy.</sub><br>
-<sub><sup>9</sup> Temperature 0.7, top_p 0.8, top_k 20.</sub><br>
-<sub><sup>10</sup> Weights already on disk.</sub><br>
+<sub><sup>4</sup> Weights file already on disk, no compile cache; every prefill and decode program compiles before the server says ready.</sub><br>
+<sub><sup>5</sup> Short chat prompts, 256 new tokens, greedy.</sub><br>
+<sub><sup>6</sup> vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on the same TPU v6e-1.</sub><br>
+<sub><sup>7</sup> 790-token prompts, 256 new tokens, greedy.</sub><br>
+<sub><sup>8</sup> Temperature 0.7, top_p 0.8, top_k 20.</sub><br>
+<sub><sup>9</sup> Weights already on disk.</sub><br>
+<sub><sup>10</sup> vLLM TPU 0.32.0 with Qwen's FP8 weights (Qwen/Qwen3.8-27B-FP8) on a TPU v6e-1 (the same chip type).</sub><br>
 <sub><sup>11</sup> vLLM starts this model only with 3 memory flags, and Qwen's bf16 weights do not fit.</sub><br>
 <sub><sup>12</sup> Closed loop for 60 s through the OpenAI-compatible server, chat prompts of 29 to 33 tokens, 128 new tokens, greedy.</sub><br>
 <sub><sup>13</sup> Same server and chip.</sub><br>
 
 </details>
 
-Each chart names its measurement date (UTC) and the hardware on both sides.
+Each chart names the hardware on both sides.
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/01-qwen38-27b-time-to-ready-dark.png"><img alt="Qwen3.8-27B: time to ready on one TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/01-qwen38-27b-time-to-ready-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/01-qwen38-27b-time-to-ready-dark.png"><img alt="Qwen3.8-27B: time to ready on one TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, asia-northeast1-b, on demand) vs one TPU v6e-1 (Google Cloud, us-east5-b)." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/01-qwen38-27b-time-to-ready-light.png" width="100%"></picture>
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/02-qwen38-27b-one-request-speed-dark.png"><img alt="Qwen3.8-27B: one request at a time, same TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, us-east5-b) vs the same TPU v6e-1." src="https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/resolve/main/assets/charts/02-qwen38-27b-one-request-speed-light.png" width="100%"></picture>
 
@@ -100,17 +100,19 @@ Each chart names its measurement date (UTC) and the hardware on both sides.
 
 ## Files
 
-| File | Format | Size (GB) | Bits per weight | Quality vs full precision | Speed | Measured |
-|---|---|---|---|---|---|---|
-| `Qwen3.8-27B-BQ8_R.bshj` | BSHJ | 26.94 | 8.01 | mean KL 0.00065, top-1 agreement 99.72% vs bf16 (8 prompts x 32 tokens, measured 2026-10-27) | 38.6 tokens/s for 1 request, 269 tokens/s for 8 (TPU v6e-1) | 2026-10-28 |
-| `xla-cache/v6e-jax0.11.2-libtpu0.0.48.1.tar` | XLA compile cache (tar) | 0.05 | n/a | n/a (compiled programs, not weights) | first start on TPU v6e-1: ready 9.8 s after the weights download, 25.7 s without it | 2026-10-28 |
+| File | Format | Size (GB) | Bits per weight | Quality vs full precision | Speed |
+|---|---|---|---|---|---|
+| `Qwen3.8-27B-BQ8_R.bshj` | BSHJ | 26.94 | 8.01 | mean KL 0.00065, top-1 agreement 99.72% vs bf16 (8 prompts x 32 tokens) | 38.6 tokens/s for 1 request, 269 tokens/s for 8 (TPU v6e-1) |
+| `xla-cache/v6e-jax0.11.2-libtpu0.0.48.1.tar` | XLA compile cache (tar) | 0.89 | n/a | n/a (compiled programs, not weights) | first start on TPU v6e-1, weights on disk: ready in 69.6 s with it, 326.6 s without it |
 
 ## Chips
 
 | Chip | Status | Note |
 |---|---|---|
-| TPU v6e | passing, 2026-10-28 |  |
-| TPU v5e | not supported | the weights alone are about 27 GB and a v5e chip has 16 GB |
+| TPU v5e | Supported | a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB |
+| TPU v6e | Supported | one chip (v6e-1) |
+| TPU v5p slice (v5p-8) | Not supported |  |
+| TPU v6e slice (v6e-4) | Supported | 4 chips, split across them automatically |
 
 ## Kernels
 
@@ -124,7 +126,7 @@ Compiled TPU kernels for this model only. `mashbox run` picks the file that matc
 
 |  |  |
 |---|---|
-| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.1/src/mashbox/models/qwen3_8_27b) |
+| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.2/src/mashbox/models/qwen3_8_27b) |
 | Guide | [mashbox.gg/docs/models/qwen3-8-27b](https://mashbox.gg/docs/models/qwen3-8-27b) |
 | Original model | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) by Qwen |
 | Setup from a new Google account | [mashbox.gg/docs/google-cloud](https://mashbox.gg/docs/google-cloud) |
@@ -132,4 +134,4 @@ Compiled TPU kernels for this model only. `mashbox run` picks the file that matc
 
 ## Licence
 
-Weights: Apache-2.0 licence, from [Qwen/Qwen3.8-27B@1d4bf0f2](https://huggingface.co/Qwen/Qwen3.8-27B/tree/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0); code: Apache-2.0 (MASHBOX Labs). Qwen's LICENSE file is in this repo, unchanged: [LICENSE](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/blob/main/LICENSE). The compiled kernels in `kernels/` are under their own licence: [LICENSE-KERNELS](https://github.com/mashbox-labs/mashbox/blob/v0.1.1/LICENSE-KERNELS).
+Weights: Apache-2.0 licence, from [Qwen/Qwen3.8-27B@1d4bf0f2](https://huggingface.co/Qwen/Qwen3.8-27B/tree/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0); code: Apache-2.0 (MASHBOX Labs). Qwen's LICENSE file is in this repo, unchanged: [LICENSE](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/blob/main/LICENSE). The compiled kernels in `kernels/` are under their own licence: [LICENSE-KERNELS](https://github.com/mashbox-labs/mashbox/blob/v0.1.2/LICENSE-KERNELS). The compile cache in `xla-cache/` is under the same licence.

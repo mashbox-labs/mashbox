@@ -146,15 +146,64 @@ def gated_delta_chunk(q, k, v, g, beta, s0, CH=CHUNK):
     return tr(o), s1
 
 
-def gated_delta_step(q, k, v, g, beta, s):
-    """One recurrent step: q, k (B,H,Dk), v (B,H,Dv), g / beta (B,H), s (B,H,Dk,Dv) f32."""
-    q = q / (q.shape[-1] ** 0.5)
+def gated_delta_state(k, v, g, beta, s):
+    """The state update of one recurrent step (k (B,H,Dk), v (B,H,Dv), g / beta (B,H), s (B,H,Dk,Dv) f32). With g = 0 and
+    beta = 0 it returns s bit for bit (s * 1, + k * 0): speculative decoding masks rejected steps that way."""
     s = s * jnp.exp(g)[..., None, None]
     kv = jnp.einsum("bhkv,bhk->bhv", s, k, precision=HI, preferred_element_type=f32)
     u = (v - kv) * beta[..., None]
-    s = s + k[..., :, None] * u[..., None, :]
+    return s + k[..., :, None] * u[..., None, :]
+
+
+def gated_delta_step(q, k, v, g, beta, s):
+    """One recurrent step: q, k (B,H,Dk), v (B,H,Dv), g / beta (B,H), s (B,H,Dk,Dv) f32."""
+    q = q / (q.shape[-1] ** 0.5)
+    s = gated_delta_state(k, v, g, beta, s)
     o = jnp.einsum("bhkv,bhk->bhv", s, q, precision=HI, preferred_element_type=f32)
     return o, s
+
+
+def gated_delta_steps(qr, kr, v, g, beta, s0):
+    """Speculative verify: T tokens as T one-token steps (the decode math, so the outputs equal T decode steps), state not
+    returned. qr, kr (B,T,Hk,Dk) before l2norm, v (B,T,Hv,Dv), g / beta (B,T,Hv) f32 -> o (B,T,Hv,Dv) f32, kn = l2norm(kr) f32."""
+    rep = v.shape[2] // qr.shape[2]
+    qn, kn = l2norm(qr.astype(f32)), l2norm(kr.astype(f32))
+    q, k = jnp.repeat(qn, rep, axis=2), jnp.repeat(kn, rep, axis=2)
+    mv = lambda x: jnp.moveaxis(x, 1, 0)
+
+    def st(s, xs):
+        o, s = gated_delta_step(*xs, s)
+        return s, o
+    _, o = lax.scan(st, s0, (mv(q), mv(k), mv(v.astype(f32)), mv(g), mv(beta)))
+    return jnp.moveaxis(o, 0, 1), kn
+
+
+def gated_delta_commit(R, rec, n, rep):
+    """Speculative commit: replay the first n[b] accepted steps of every linear-attention layer from the state before the
+    verify pass; steps past n[b] get g = beta = 0 and leave the state as it is. R (NG, FI - 1, S + 1, Hv, Dk, Dv) f32, rows
+    0..B-1; rec["k"] (NG, FI - 1, B, T, Hk, Dk), rec["v"] (.., Hv, Dv), rec["g"] / rec["b"] (NG, FI - 1, B, T, Hv); n (B,) in
+    1..T."""
+    NG, FI1, B, T = rec["g"].shape[:4]
+    m = (jnp.arange(T)[None] < n[:, None])[..., None]
+
+    def layer(l, R):
+        g_, i_ = l // FI1, l % FI1
+        s = lax.dynamic_slice(R, (g_, i_, 0, 0, 0, 0), (1, 1, B) + R.shape[3:])[0, 0]
+        k = jnp.repeat(rec["k"][g_, i_], rep, axis=2)
+        v, g, b = rec["v"][g_, i_], jnp.where(m, rec["g"][g_, i_], 0.0), jnp.where(m, rec["b"][g_, i_], 0.0)
+        for t in range(T):
+            s = gated_delta_state(k[:, t], v[:, t], g[:, t], b[:, t], s)
+        return lax.dynamic_update_slice(R, s[None, None], (g_, i_, 0, 0, 0, 0))
+    return lax.fori_loop(0, NG * FI1, layer, R)
+
+
+def conv_commit(C, x, n):
+    """Conv tail after n[b] accepted tokens: the last K - 1 rows of [old tail, x[:, :n]]. C (NG, FI - 1, S + 1, K - 1, CONV)
+    rows 0..B-1, x (NG, FI - 1, B, T, CONV) the verify pass's conv inputs."""
+    B, K1 = x.shape[2], C.shape[3]
+    xe = jnp.concatenate([C[:, :, :B], x.astype(C.dtype)], 3)
+    idx = (n[:, None] + jnp.arange(K1)[None])[None, None, :, :, None]
+    return C.at[:, :, :B].set(jnp.take_along_axis(xe, jnp.broadcast_to(idx, xe.shape[:3] + (K1, 1)), 3))
 
 
 def gated_delta(qr, kr, v, g, beta, s0):
@@ -171,23 +220,53 @@ def gated_delta(qr, kr, v, g, beta, s0):
 
 
 # ---------------------------------------------------------------------------------------------------------------- state
-def new_state(c, S, CTX):
-    """Zeroed per-slot state for S slots (+1 scratch slot)."""
-    kv = (c.NG, S + 1, CTX, c.KV, c.HD)
+def new_state(c, S, CTX, extra_groups=0):
+    """Zeroed per-slot state for S slots (+1 scratch slot). extra_groups: K/V groups after the model's NG (speculative
+    decoding keeps the MTP layer's K/V in group NG)."""
+    kv = (c.NG + extra_groups, S + 1, CTX, c.KV, c.HD)
     return ((jnp.zeros(kv, bf16), jnp.zeros(kv, bf16)),
             (jnp.zeros((c.NG, c.FI - 1, S + 1, c.HV, c.DK, c.DV), f32),
              jnp.zeros((c.NG, c.FI - 1, S + 1, c.CK - 1, c.CONV), bf16)))
 
 
 # ---------------------------------------------------------------------------------------------------------------- forward
-def make_forward(c, decode_kernels=None):
+def attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale):
+    """Full-attention core on one chip: read slot rows of group g's K/V cache (positions < Tc), append this call's k, v,
+    masked softmax. q (B,T,KV,G,HD), k / v (B,T,KV,HD), mask (B,T,Tc+T) -> o (B,T,KV,G,HD) bf16."""
+    if Tc:
+        kk, vv = jnp.concatenate([Kc[g][slots, :Tc], k], 1), jnp.concatenate([Vc[g][slots, :Tc], v], 1)
+    else:
+        kk, vv = k, v
+    s = jnp.einsum("btkgd,bskd->bkgts", q, kk, preferred_element_type=f32) * scale
+    p = jax.nn.softmax(jnp.where(mask[:, None, None], s, NEG), -1).astype(bf16)
+    return jnp.einsum("bkgts,bskd->btkgd", p, vv, preferred_element_type=f32).astype(bf16)
+
+
+def kv_write_one(Kc, Vc, slots, pos, ks, vs):
+    """Write this call's K/V (NG,B,T,KV,HD) at (slot, position); positions past the cache are dropped."""
+    n = ks.shape[0]           # the model's groups; an MTP group after them is written by its own layer
+    return (Kc.at[:n, slots[:, None], pos].set(ks, mode="drop"), Vc.at[:n, slots[:, None], pos].set(vs, mode="drop"))
+
+
+def kv_write_group(Kc, Vc, g, slots, pos, k, v):
+    """Write group g's K/V (B,T,KV,HD) at (slot, position) inside the layer loop; positions past the cache are dropped."""
+    return (Kc.at[g, slots[:, None], pos].set(k, mode="drop"), Vc.at[g, slots[:, None], pos].set(v, mode="drop"))
+
+
+def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_one, kv_in_loop=False, kv_write_g=kv_write_group):
     """-> forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False) -> dict(ck, cv, nxt, lg).
 
     toks (B, T) int32 at positions p0 + 0..T-1 (lens = valid tokens per row, rows padded on the right), slots (B,) = state
     slot per row. Tc (static) = how many cached positions full attention reads. contig (static) = slots are arange(B).
     nxt = greedy next token per row, lg = its logits as f32 (all positions when all_logits).
     decode_kernels: optional {B: fn(q, k, v, g, beta, pool, slots, layer) -> (o, pool)} compiled linear-attention decode
-    for a batch of B rows; used only for one-token steps with contig slots. Without it, decode runs on plain JAX."""
+    for a batch of B rows; used only for one-token steps with contig slots. Without it, decode runs on plain JAX.
+    attend / kv_write: the K/V cache read + attention core and the cache write (defaults: one chip). The tensor-parallel
+    model (shard.py) passes shard_map versions so each chip reads and writes only its own KV heads.
+    kv_in_loop (tensor parallel): the K/V cache rides in the layer-loop carry and each group writes its K/V in place inside
+    the loop (kv_write_g), the JetStream / MaxText decode layout. Off (one chip): the cache is read inside the loop and
+    written once after it, as before. With the cache read-only inside the loop and updated after it, XLA on TPU copies the
+    whole cache twice per decode program (v5e-4, ctx 32768 x 8 slots: 9.02 GiB temp per chip)."""
     L, D, H, KV, HD, V = c.L, c.D, c.H, c.KV, c.HD, c.V
     FI, NG, RD = c.FI, c.NG, c.RD
     HK, HV, DK, DV, CK = c.HK, c.HV, c.DK, c.DV, c.CK
@@ -203,11 +282,13 @@ def make_forward(c, decode_kernels=None):
             return {k: at(v, i) for k, v in t.items()}
         return jax.tree_util.tree_map(lambda a: a[i], t)
 
-    def forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False):
+    def forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, verify=False, hidden=False):
         B, T = toks.shape
+        assert not verify or (contig and not kv_in_loop), "verify runs on contig rows, one chip"
         Kc, Vc = ck
         R0, C0 = cv
-        kern = decode_kernels.get(B) if (decode_kernels and contig and T == 1) else None
+        kern = decode_kernels.get(B) if (decode_kernels and contig and T == 1 and not verify) else None
+        assert not (kern is not None and kv_in_loop), "kv_in_loop is the plain JAX decode path"
         pos = p0[:, None] + jnp.arange(T, dtype=jnp.int32)[None]
         valid = jnp.arange(T)[None] < lens[:, None]
         fr = pos.astype(f32)[..., None] * jnp.asarray(inv)
@@ -242,24 +323,22 @@ def make_forward(c, decode_kernels=None):
             if pool is not None:
                 o, r1 = kern(qr[:, 0], kr[:, 0], v[:, 0], gg[:, 0], beta[:, 0], pool, jnp.arange(B, dtype=jnp.int32), layer)
                 o = o[:, None]
+            elif verify:              # state not committed: keep what the commit replays (k, v, g, beta, conv input)
+                o, kn = gated_delta_steps(qr, kr, v, gg, beta, r0)
+                r1, c1 = dict(k=kn, v=v.astype(f32), g=gg, b=beta), qkv
             else:
                 o, r1 = gated_delta(qr, kr, v, gg, beta, r0)
             o = rms_norm_gated(o.astype(bf16), z, w["nw"], eps).reshape(B, T, VD)
             return linear(o, w["out"]), r1, c1
 
-        def full_attn(h, w, g):
+        def full_attn(h, w, g, Kl=None, Vl=None):
             qg = linear(h, w["wq"]).reshape(B, T, H, 2 * HD)
             q, gate = qg[..., :HD], qg[..., HD:].reshape(B, T, H * HD)
             k, v = linear(h, w["wk"]).reshape(B, T, KV, HD), linear(h, w["wv"]).reshape(B, T, KV, HD)
             q, k = rms_norm(q, w["qn"], eps), rms_norm(k, w["kn"], eps)
             q, k = rope_partial(q, cos, sin, RD), rope_partial(k, cos, sin, RD)
-            if Tc:
-                kk, vv = jnp.concatenate([Kc[g][slots, :Tc], k], 1), jnp.concatenate([Vc[g][slots, :Tc], v], 1)
-            else:
-                kk, vv = k, v
-            s = jnp.einsum("btkgd,bskd->bkgts", q.reshape(B, T, KV, G, HD), kk, preferred_element_type=f32) * scale
-            p = jax.nn.softmax(jnp.where(mask[:, None, None], s, NEG), -1).astype(bf16)
-            o = jnp.einsum("bkgts,bskd->btkgd", p, vv, preferred_element_type=f32).astype(bf16).reshape(B, T, H * HD)
+            o = attend(Kc if Kl is None else Kl, Vc if Vl is None else Vl, g, q.reshape(B, T, KV, G, HD), k, v, mask, slots, Tc,
+                       scale).reshape(B, T, H * HD)
             o = o * jax.nn.sigmoid(gate.astype(f32)).astype(bf16)
             return linear(o, w["wo"]), k, v
 
@@ -269,7 +348,10 @@ def make_forward(c, decode_kernels=None):
             return x + linear(a, at(wm["wd"], i))
 
         def group(carry, xg):
-            x, R, C = carry
+            if kv_in_loop:
+                x, R, C, Kl, Vl = carry
+            else:
+                x, R, C = carry
             g, w = xg["g"], xg["w"]
             rl, cl = [], []
             if contig:
@@ -296,31 +378,49 @@ def make_forward(c, decode_kernels=None):
                         o, R, c1 = lin_attn(h, at(w["lin"], i), None, Cg[i], pool=R, layer=g * (FI - 1) + i)
                     else:
                         o, r1, c1 = lin_attn(h, at(w["lin"], i), Rg[i], Cg[i])
-                        rl.append(r1.astype(R0.dtype))
-                    cl.append(c1.astype(C0.dtype))
+                        rl.append(r1 if verify else r1.astype(R0.dtype))
+                    cl.append(c1 if verify else c1.astype(C0.dtype))
+                elif kv_in_loop:
+                    o, k, v = full_attn(h, w["full"], g, Kl, Vl)
+                    Kl, Vl = kv_write_g(Kl, Vl, g, slots, pos, k, v)
                 else:
                     o, k, v = full_attn(h, w["full"], g)
                 x = mlp(x + o, w["mlp"], i)
             if kern is not None:
                 C = lax.dynamic_update_slice(C, lax.optimization_barrier(jnp.stack(cl))[None], (g, 0, 0, 0, 0))
                 return (x, R, C), dict(k=k, v=v)
+            if verify:
+                rec = jax.tree.map(lambda *a: jnp.stack(a), *rl)
+                rec["x"] = jnp.stack(cl)
+                return (x, R, C), dict(k=k, v=v, rec=rec)
             Rn, Cn = lax.optimization_barrier((jnp.stack(rl), jnp.stack(cl)))
             if contig:
                 R = lax.dynamic_update_slice(R, Rn[None], (g, 0, 0, 0, 0, 0))
                 C = lax.dynamic_update_slice(C, Cn[None], (g, 0, 0, 0, 0))
             else:
                 R, C = R.at[gi, ii, si].set(Rn), C.at[gi, ii, si].set(Cn)
+            if kv_in_loop:
+                return (x, R, C, Kl, Vl), None
             return (x, R, C), dict(k=k, v=v)
 
         xs = dict(w=W["g"], g=jnp.arange(NG, dtype=jnp.int32))
         if kern is not None:
             (x, R1, C1), ys = lax.scan(group, (x, R0.reshape((NG * (FI - 1),) + R0.shape[2:]), C0), xs)
             R1 = R1.reshape(R0.shape)
+        elif kv_in_loop:
+            (x, R1, C1, Kc, Vc), _ = lax.scan(group, (x, R0, C0, Kc, Vc), xs)
         else:
             (x, R1, C1), ys = lax.scan(group, (x, R0, C0), xs)
-        Kc = Kc.at[:, slots[:, None], pos].set(ys["k"], mode="drop")
-        Vc = Vc.at[:, slots[:, None], pos].set(ys["v"], mode="drop")
+        if not kv_in_loop:
+            Kc, Vc = kv_write(Kc, Vc, slots, pos, ys["k"], ys["v"])
         out = dict(ck=(Kc, Vc), cv=(R1, C1))
+        if verify:                # bf16 logits at every position, as one-token decode computes them for its argmax
+            xn = rms_norm(x, W["norm"], eps)
+            lg = linear(xn, W["head"])
+            out.update(rec=ys["rec"], hid=xn, tgt=jnp.argmax(lg, -1).astype(jnp.int32), lg=lg.astype(f32))
+            return out
+        if hidden:                # post-norm hidden at every position (the MTP head's input)
+            out["hid"] = rms_norm(x, W["norm"], eps)
         if all_logits:
             out["lg"] = linear(rms_norm(x, W["norm"], eps), W["head"]).astype(f32)
             return out

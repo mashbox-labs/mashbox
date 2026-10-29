@@ -1,0 +1,531 @@
+<!-- Generated from src/mashbox/runtime/openapi.py by tools/hf_github_sync_check.py render --write. Do not edit. -->
+# Server API
+
+The HTTP server `mashbox run <model>` starts on 127.0.0.1 (reach it from your machine with an SSH tunnel). It speaks the OpenAI Chat Completions, Completions and Responses APIs and the Anthropic Messages API, so OpenAI and Anthropic clients and coding agents work against it unchanged. On 127.0.0.1 no API key is checked and any key a client sends is ignored; with `--api-key-file` or `MASHBOX_API_KEY`, and always when `--host` is not loopback, `/v1` routes and `/openapi.json` need a key (`Authorization: Bearer <key>` or `x-api-key: <key>`; 401 without). POST bodies must be `Content-Type: application/json` (415 otherwise), and a request from a web page of another origin, or naming the server by a host name it does not answer to, gets 403. Fields a route does not list are accepted and ignored.
+
+The same description as an OpenAPI 3.1 file: [openapi.json](openapi.json) in these docs, or `GET /openapi.json` on a running server.
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/v1/health` | [Health](#health) |
+| GET | `/health` | [Health (short path)](#healthshort) |
+| GET | `/` | [Health, or the chat page](#root) |
+| HEAD | `/v1/health` | [Ready check without a body](#healthhead) |
+| GET | `/v1/models` | [List models](#listmodels) |
+| GET | `/v1/models/{model}` | [Get a model](#getmodel) |
+| POST | `/v1/chat/completions` | [Chat completion](#createchatcompletion) |
+| POST | `/v1/completions` | [Text completion](#createcompletion) |
+| POST | `/v1/messages` | [Messages (Anthropic)](#createmessage) |
+| POST | `/v1/messages/count_tokens` | [Count tokens](#counttokens) |
+| POST | `/v1/responses` | [Responses (OpenAI)](#createresponse) |
+| GET | `/openapi.json` | [This description](#openapi) |
+
+<a id="health"></a>
+
+## GET /v1/health
+
+200 when the model is loaded and the server takes requests, 503 while it loads. GET /health is the same.
+
+**Responses:**
+
+- 200: OK `application/json` Health
+- 503: The model is still loading. `application/json` Health
+
+<a id="healthshort"></a>
+
+## GET /health
+
+Same as GET /v1/health.
+
+**Responses:**
+
+- 200: OK `application/json` Health
+- 503: The model is still loading. `application/json` Health
+
+<a id="root"></a>
+
+## GET /
+
+Same as GET /v1/health. With `mashbox run <model> --ui` it is the MASHBOX Chat page instead.
+
+**Responses:**
+
+- 200: OK `application/json` Health
+- 503: The model is still loading. `application/json` Health
+
+<a id="healthhead"></a>
+
+## HEAD /v1/health
+
+200 when ready, 503 while loading, no body. The server answers HEAD the same way on every path.
+
+**Responses:**
+
+- 200: Ready.
+- 503: Loading.
+
+<a id="listmodels"></a>
+
+## GET /v1/models
+
+The one model this server runs.
+
+**Responses:**
+
+- 200: OK `application/json` ModelList
+
+<a id="getmodel"></a>
+
+## GET /v1/models/{model}
+
+The model, when {model} is its id; 404 otherwise.
+
+**Responses:**
+
+- 200: OK `application/json` Model
+- 404: Another model id. `application/json` Error
+
+<a id="createchatcompletion"></a>
+
+## POST /v1/chat/completions
+
+OpenAI Chat Completions with function tools, thinking and streaming. Coding agents such as Pi use it.
+
+**Request body** (JSON):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string |  | Accepted for compatibility; the server answers with the one model it runs. |
+| `messages` (required) | array of ChatMessage |  | The conversation. |
+| `tools` | array of object |  | Function tools the model may call. |
+| `tool_choice` | string or object |  | auto (default), none, required, or {"type": "function", "function": {"name": ...}}. |
+| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). |
+| `stream_options` | object |  |  Fields: `include_usage`. |
+| `chat_template_kwargs` | object |  | Chat template options. Fields: `enable_thinking`. |
+| `enable_thinking` | boolean |  | Same as chat_template_kwargs.enable_thinking. |
+| `merge` | boolean | true | false runs the request alone instead of sharing a batch with requests sent at the same time. |
+| `prompt_cache_key` | string |  | Tags the request's session in the server log (as the X-Session-Id header does). |
+| `store` | boolean |  | Accepted and ignored. |
+| `max_tokens` | integer |  | Most new tokens (>= 1). |
+| `max_completion_tokens` | integer |  | Most new tokens (>= 1); max_tokens is the same. Default: up to the end of the context (--ctx). |
+| `temperature` | number | 0.0 | 0 = greedy (default). Up to 4. |
+| `top_p` | number | 1.0 | Nucleus sampling, in (0, 1]. |
+| `top_k` | integer | 0 | Keep the k most likely tokens; 0 = off. |
+| `min_p` | number | 0.0 | Drop tokens below min_p times the top probability, in [0, 1). |
+| `seed` | integer |  | Sampling seed; a random one when absent. |
+| `stop` | string or array |  | A string or a list of non-empty strings; the text ends before the first one. |
+| `stop_sequences` | array of string |  | Same as stop (Anthropic's name), used when stop is absent. |
+| `repetition_penalty` | number | 1.0 | > 0; 1 = off. |
+| `frequency_penalty` | number | 0.0 | -2 to 2; 0 = off. |
+| `presence_penalty` | number | 0.0 | -2 to 2; 0 = off. |
+| `n` | integer |  | Must be 1. |
+
+```bash
+curl -s http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model": "qwen3-8-27b", "messages": [{"role": "user", "content": "Name three planets."}], "max_tokens": 64}'
+```
+
+**Responses:**
+
+- 200: OK `application/json` ChatCompletion, `text/event-stream` ChatCompletionChunk
+- 400: Bad request. `application/json` Error
+- 503: The model is still loading. `application/json` Error
+
+<a id="createcompletion"></a>
+
+## POST /v1/completions
+
+Continue a plain prompt, no chat template.
+
+**Request body** (JSON):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string |  | Accepted for compatibility; the server answers with the one model it runs. |
+| `prompt` (required) | string or array |  | The text to continue (a string, or a list of one string). |
+| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). |
+| `merge` | boolean | true | false runs the request alone instead of sharing a batch with requests sent at the same time. |
+| `prompt_cache_key` | string |  | Tags the request's session in the server log (as the X-Session-Id header does). |
+| `max_tokens` | integer |  | Most new tokens (>= 1). |
+| `max_completion_tokens` | integer |  | Same as max_tokens (OpenAI's newer name); wins when both are set. |
+| `temperature` | number | 0.0 | 0 = greedy (default). Up to 4. |
+| `top_p` | number | 1.0 | Nucleus sampling, in (0, 1]. |
+| `top_k` | integer | 0 | Keep the k most likely tokens; 0 = off. |
+| `min_p` | number | 0.0 | Drop tokens below min_p times the top probability, in [0, 1). |
+| `seed` | integer |  | Sampling seed; a random one when absent. |
+| `stop` | string or array |  | A string or a list of non-empty strings; the text ends before the first one. |
+| `stop_sequences` | array of string |  | Same as stop (Anthropic's name), used when stop is absent. |
+| `repetition_penalty` | number | 1.0 | > 0; 1 = off. |
+| `frequency_penalty` | number | 0.0 | -2 to 2; 0 = off. |
+| `presence_penalty` | number | 0.0 | -2 to 2; 0 = off. |
+| `n` | integer |  | Must be 1. |
+
+```bash
+curl -s http://127.0.0.1:8000/v1/completions -H 'Content-Type: application/json' \
+  -d '{"prompt": "The three largest planets are", "max_tokens": 32}'
+```
+
+**Responses:**
+
+- 200: OK `application/json` Completion, `text/event-stream` Completion
+- 400: Bad request. `application/json` Error
+- 503: The model is still loading. `application/json` Error
+
+<a id="createmessage"></a>
+
+## POST /v1/messages
+
+Anthropic Messages with client tools, thinking and streaming, for Claude Code. The ?beta=true query Claude Code adds is accepted.
+
+**Request body** (JSON):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string |  | Accepted for compatibility; the server answers with the one model it runs. |
+| `messages` (required) | array of object |  | The conversation. |
+| `system` | string or array |  | System prompt: a string or text blocks. |
+| `tools` | array of object |  | Client tools the model may call. |
+| `tool_choice` | object |  | {"type": "auto" \| "any" \| "tool" \| "none", "name": ...}. |
+| `thinking` | object |  |  Fields: `type`, `budget_tokens`. |
+| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). |
+| `prompt_cache_key` | string |  | Tags the request's session in the server log (as the X-Session-Id header does). |
+| `metadata` | object |  | Accepted and ignored. |
+| `output_config` | object |  | Accepted and ignored. |
+| `max_tokens` | integer |  | Most new tokens; default: up to the end of the context (--ctx). |
+| `max_completion_tokens` | integer |  | Same as max_tokens (OpenAI's newer name); wins when both are set. |
+| `temperature` | number | 0.0 | 0 = greedy (default). Up to 4. |
+| `top_p` | number | 1.0 | Nucleus sampling, in (0, 1]. |
+| `top_k` | integer | 0 | Keep the k most likely tokens; 0 = off. |
+| `min_p` | number | 0.0 | Drop tokens below min_p times the top probability, in [0, 1). |
+| `seed` | integer |  | Sampling seed; a random one when absent. |
+| `stop` | string or array |  | A string or a list of non-empty strings; the text ends before the first one. |
+| `stop_sequences` | array of string |  | Same as stop (Anthropic's name), used when stop is absent. |
+| `repetition_penalty` | number | 1.0 | > 0; 1 = off. |
+| `frequency_penalty` | number | 0.0 | -2 to 2; 0 = off. |
+| `presence_penalty` | number | 0.0 | -2 to 2; 0 = off. |
+| `n` | integer |  | Must be 1. |
+
+```bash
+curl -s http://127.0.0.1:8000/v1/messages -H 'Content-Type: application/json' \
+  -d '{"model": "qwen3-8-27b", "max_tokens": 64, "messages": [{"role": "user", "content": "Name three planets."}]}'
+```
+
+**Responses:**
+
+- 200: OK `application/json` Message, `text/event-stream` MessageStreamEvent
+- 400: Bad request. `application/json` AnthropicError
+- 503: The model is still loading. `application/json` AnthropicError
+
+<a id="counttokens"></a>
+
+## POST /v1/messages/count_tokens
+
+Prompt tokens a Messages request would use, after the chat template.
+
+**Request body** (JSON):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string |  | Accepted for compatibility; the server answers with the one model it runs. |
+| `messages` (required) | array of object |  |  |
+| `system` | string or array |  | As in MessagesRequest. |
+| `tools` | array of object |  |  |
+| `tool_choice` | object |  | As in MessagesRequest. |
+| `thinking` | object |  | As in MessagesRequest. |
+
+```bash
+curl -s http://127.0.0.1:8000/v1/messages/count_tokens -H 'Content-Type: application/json' \
+  -d '{"model": "qwen3-8-27b", "messages": [{"role": "user", "content": "Name three planets."}]}'
+```
+
+**Responses:**
+
+- 200: OK `application/json` TokenCount
+- 400: Bad request. `application/json` AnthropicError
+- 503: The model is still loading. `application/json` AnthropicError
+
+<a id="createresponse"></a>
+
+## POST /v1/responses
+
+OpenAI Responses with function, custom and namespace tools, reasoning and streaming, for Codex.
+
+**Request body** (JSON):
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string |  | Accepted for compatibility; the server answers with the one model it runs. |
+| `input` (required) | string or array |  | A string, or items: message (system, developer, user, assistant), function_call, function_call_output, custom_tool_call, custom_tool_call_output, local_shell_call, local_shell_call_output, reasoning. Text parts only: image, audio and file parts are refused with 400 (text-only model). |
+| `instructions` | string |  | System prompt. |
+| `tools` | array of object |  |  |
+| `tool_choice` | string or object |  | auto (default), none, required, or {"type": "function", "function": {"name": ...}}. |
+| `parallel_tool_calls` | boolean | false | Echoed in the response. |
+| `reasoning` | object |  |  Fields: `effort`. |
+| `stream` | boolean | false | Stream the answer as server-sent events (see the 200 text/event-stream response). |
+| `prompt_cache_key` | string |  | Tags the request's session in the server log (as the X-Session-Id header does). |
+| `store` | boolean |  | Accepted and ignored. |
+| `include` | array |  | Accepted and ignored. |
+| `client_metadata` | object |  | Accepted and ignored. |
+| `max_output_tokens` | integer |  | Most new tokens; default: up to the end of the context (--ctx). |
+| `max_tokens` | integer |  | Most new tokens (>= 1). |
+| `max_completion_tokens` | integer |  | Same as max_tokens (OpenAI's newer name); wins when both are set. |
+| `temperature` | number | 0.0 | 0 = greedy (default). Up to 4. |
+| `top_p` | number | 1.0 | Nucleus sampling, in (0, 1]. |
+| `top_k` | integer | 0 | Keep the k most likely tokens; 0 = off. |
+| `min_p` | number | 0.0 | Drop tokens below min_p times the top probability, in [0, 1). |
+| `seed` | integer |  | Sampling seed; a random one when absent. |
+| `stop` | string or array |  | A string or a list of non-empty strings; the text ends before the first one. |
+| `stop_sequences` | array of string |  | Same as stop (Anthropic's name), used when stop is absent. |
+| `repetition_penalty` | number | 1.0 | > 0; 1 = off. |
+| `frequency_penalty` | number | 0.0 | -2 to 2; 0 = off. |
+| `presence_penalty` | number | 0.0 | -2 to 2; 0 = off. |
+| `n` | integer |  | Must be 1. |
+
+```bash
+curl -s http://127.0.0.1:8000/v1/responses -H 'Content-Type: application/json' \
+  -d '{"model": "qwen3-8-27b", "input": "Name three planets.", "max_output_tokens": 64}'
+```
+
+**Responses:**
+
+- 200: OK `application/json` Response, `text/event-stream` ResponseStreamEvent
+- 400: Bad request. `application/json` Error
+- 503: The model is still loading. `application/json` Error
+
+<a id="openapi"></a>
+
+## GET /openapi.json
+
+The OpenAPI 3.1 description of this server, with the running model's id.
+
+**Responses:**
+
+- 200: OpenAPI 3.1 document. `application/json`
+
+## Schemas
+
+### Health
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `status` (required) | string |  | ok when the model is loaded, loading before. |
+
+### Model
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` (required) | string |  | Model id, as in models.json. |
+| `object` (required) | string |  | model |
+| `owned_by` (required) | string |  | mashbox-labs |
+| `created` (required) | integer |  | Always 0. |
+| `max_model_len` (required) | integer |  | Context length the server runs (--ctx). |
+| `weights` | string |  | Weights file loaded. |
+| `gb` | number |  | Weights in device memory, GB. |
+| `bpw` | number |  | Bits per weight of the weights file. |
+| `prefix_cache` | boolean |  | Whether the server reuses cached prompt starts. |
+| `slots` | integer |  | Requests decoded together (--slots). |
+| `cache_ram_mib` | integer |  | Host memory for saved prompt states (--cache-ram). |
+
+### ModelList
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `object` (required) | string |  | list |
+| `data` (required) | array of Model |  |  |
+
+### Error
+
+OpenAI error shape (all routes except /v1/messages*).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `error` (required) | object |  |  Fields: `message`, `type`. |
+
+### AnthropicError
+
+Anthropic error shape (/v1/messages and /v1/messages/count_tokens).
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `type` (required) | string |  | error |
+| `error` (required) | object |  |  Fields: `type`, `message`. |
+
+### ChatMessage
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `role` (required) | string |  | system and developer join the system prompt. |
+| `content` | string or array or null |  | Text, or a list of text parts. Text parts only: image, audio and file parts are refused with 400 (text-only model). |
+| `tool_calls` | array of object |  | assistant: the calls it made. |
+| `tool_call_id` | string |  | tool: the call this answers. |
+| `reasoning_content` | string |  | assistant: its earlier thinking. |
+| `name` | string |  | Accepted and ignored. |
+
+### ChatCompletion
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` (required) | string |  | chatcmpl-... |
+| `object` (required) | string |  | chat.completion |
+| `created` (required) | integer |  | Unix time. |
+| `model` (required) | string |  | Model id. |
+| `choices` (required) | array of object |  |  |
+| `usage` (required) | ChatUsage |  |  |
+| `timings` | ChatTimings |  |  |
+
+### ChatTimings
+
+Server timings, the fields of llama-server's timings block.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `prompt_n` (required) | integer |  | Prompt tokens prefilled (not served from the prefix cache). |
+| `prompt_ms` (required) | number |  | Milliseconds from the start of the run to the first new token. |
+| `prompt_per_second` | number or null |  | prompt_n per second of prompt_ms. |
+| `predicted_n` (required) | integer |  | New tokens. |
+| `predicted_ms` (required) | number |  | Milliseconds from the first to the last new token. |
+| `predicted_per_second` | number or null |  | Decode speed: new tokens after the first, per second of predicted_ms. |
+| `cache_n` (required) | integer |  | Prompt tokens served from the prefix cache. |
+| `queue_ms` (required) | number |  | Milliseconds the request waited before it ran. |
+
+### ChatUsage
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `prompt_tokens` (required) | integer |  | Prompt tokens. |
+| `completion_tokens` (required) | integer |  | New tokens. |
+| `total_tokens` (required) | integer |  | Sum. |
+| `prompt_tokens_details` | object |  |  Fields: `cached_tokens`. |
+
+### ChatCompletionChunk
+
+One `data:` line. The stream ends with `data: [DONE]`. With stream_options.include_usage the last chunk has empty choices and usage. The chunk with the finish_reason, and the usage chunk, carry timings.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` (required) | string |  | Same id on every chunk. |
+| `object` (required) | string |  | chat.completion.chunk |
+| `created` (required) | integer |  | Unix time. |
+| `model` (required) | string |  | Model id. |
+| `choices` (required) | array of object |  |  |
+| `usage` | ChatUsage |  |  |
+| `timings` | ChatTimings |  |  |
+
+### Completion
+
+Whole answer, or one `data:` line of a stream (no usage); the stream ends with `data: [DONE]`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` (required) | string |  | cmpl-... |
+| `object` (required) | string |  | text_completion |
+| `created` (required) | integer |  | Unix time. |
+| `model` (required) | string |  | Model id. |
+| `choices` (required) | array of object |  |  |
+| `usage` | object |  |  Fields: `prompt_tokens`, `completion_tokens`, `total_tokens`. |
+| `system_fingerprint` | string |  | seed-<seed used>. |
+
+### Message
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` (required) | string |  | msg_... |
+| `type` (required) | string |  | message |
+| `role` (required) | string |  | assistant |
+| `model` (required) | string |  | The model field of the request, else the model id. |
+| `content` (required) | array of ContentBlock |  |  |
+| `stop_reason` (required) | string or null |  | end_turn, max_tokens, stop_sequence or tool_use; null in message_start. |
+| `stop_sequence` (required) | string or null |  | The stop sequence that ended the text. |
+| `usage` (required) | MessageUsage |  |  |
+
+### ContentBlock
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `type` (required) | string |  | text, thinking or tool_use. |
+| `text` | string |  | text block. |
+| `thinking` | string |  | thinking block. |
+| `signature` | string |  | thinking block: mashbox-local. |
+| `id` | string |  | tool_use: toolu_... |
+| `name` | string |  | tool_use: tool name. |
+| `input` | object |  | tool_use: arguments. |
+
+### MessageUsage
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `input_tokens` | integer |  | Prompt tokens not served from the prefix cache. |
+| `cache_read_input_tokens` | integer |  | Prompt tokens served from the prefix cache. |
+| `cache_creation_input_tokens` | integer |  | Always 0. |
+| `output_tokens` | integer |  | New tokens. |
+
+### MessageStreamEvent
+
+One `event:` + `data:` pair: message_start, ping, then per block content_block_start / _delta / _stop, then message_delta and message_stop.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `type` (required) | string |  | Same as the SSE event name. |
+| `message` | Message |  |  |
+| `index` | integer |  | Content block number. |
+| `content_block` | ContentBlock |  |  |
+| `delta` | object |  | text_delta, thinking_delta, signature_delta, input_json_delta; on message_delta: stop_reason and stop_sequence. |
+| `usage` | MessageUsage |  |  |
+| `error` | object |  | On error: type and message. |
+
+### TokenCount
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `input_tokens` (required) | integer |  | Prompt tokens after the chat template. |
+
+### Response
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` (required) | string |  | resp_... |
+| `object` (required) | string |  | response |
+| `created_at` (required) | integer |  | Unix time. |
+| `status` (required) | string |  | completed, or incomplete when max_output_tokens ran out. |
+| `model` (required) | string |  | The model field of the request, else the model id. |
+| `output` (required) | array of ResponseItem |  |  |
+| `parallel_tool_calls` | boolean |  | From the request. |
+| `tool_choice` | string or object |  | From the request. |
+| `tools` | array |  | From the request. |
+| `usage` (required) | object or null |  | input_tokens, input_tokens_details.cached_tokens, output_tokens, output_tokens_details.reasoning_tokens, total_tokens; null while in progress. |
+| `incomplete_details` | object |  |  Fields: `reason`. |
+
+### ResponseItem
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `type` (required) | string |  | message, reasoning, function_call or custom_tool_call. |
+| `id` (required) | string |  | Item id. |
+| `status` | string |  | in_progress or completed. |
+| `role` | string |  | message: assistant. |
+| `content` | array |  | message: output_text parts; reasoning: reasoning_text parts. |
+| `summary` | array |  | reasoning: empty. |
+| `call_id` | string |  | Call id to answer with an *_output item. |
+| `name` | string |  | Tool name. |
+| `arguments` | string |  | function_call: arguments, JSON. |
+| `input` | string |  | custom_tool_call: raw input. |
+| `namespace` | string |  | function_call: the namespace tool it came from. |
+
+### ResponseStreamEvent
+
+One `event:` + `data:` pair. An error mid-stream is sent as `data: {"error": ...}` then `data: [DONE]`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `type` (required) | string |  | Same as the SSE event name. |
+| `sequence_number` (required) | integer |  | 1, 2, 3, ... |
+| `response` | Response |  |  |
+| `item` | ResponseItem |  |  |
+| `item_id` | string |  | Item the event belongs to. |
+| `output_index` | integer |  | Item number. |
+| `content_index` | integer |  | Part number. |
+| `delta` | string |  | New text or arguments. |
+| `text` | string |  | Whole text (done events). |
+| `part` | object |  | Content part. |
+| `arguments` | string |  | Whole arguments (done event). |
+| `input` | string |  | Whole input (done event). |

@@ -1,5 +1,5 @@
-"""Request checks for the package's local HTTP servers (the inference server, runtime/server.py, uses them). Stdlib
-only.
+"""Request checks shared by the package's three local HTTP servers: the inference server (runtime/server.py), the
+desktop app server (ui/app) and the world model server (models/hy_nomas/server.py). Stdlib only.
 
 A browser lets any web page send requests to 127.0.0.1, and a page whose own domain is re-pointed at 127.0.0.1 (DNS
 rebinding) can also read the answers. These checks stop both, while clients that are not browsers (curl, coding

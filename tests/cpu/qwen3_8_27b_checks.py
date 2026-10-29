@@ -8,6 +8,8 @@ Needs: jax (CPU), torch (CPU), transformers with qwen3_5 support, tokenizers, ji
   T5 a batch of 3 == each prompt alone                             T6 int8-per-row .bshj loads and stays close to bf16
   T7 sampler: seeded draws repeat, top_k / top_p / min_p cuts      T8 chat template ids == transformers apply_chat_template
   T9 server: chat completion, stream and non-stream, on the tiny model
+  T10 tensor parallel over 2 CPU devices (--tensor-parallel-size 2) == one device
+  T11 tensor parallel over 4 CPU devices (the v5e-4 / v6e-4 / v5p-8 layout: one KV head per chip) == one device
 """
 import json
 import os
@@ -17,6 +19,8 @@ import threading
 import time
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
+if "xla_force_host_platform_device_count" not in os.environ.get("XLA_FLAGS", ""):      # T10: 2 CPU devices, T11: 4
+    os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " --xla_force_host_platform_device_count=4").strip()
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
 
@@ -39,14 +43,16 @@ os.makedirs(WD, exist_ok=True)
 R = {}
 
 
-def build():
+def build(md=MD, **over):
     from transformers import Qwen3_5TextConfig, Qwen3_5ForCausalLM
-    cfg = Qwen3_5TextConfig(vocab_size=512, hidden_size=64, intermediate_size=96, num_hidden_layers=8, num_attention_heads=4,
-                            num_key_value_heads=2, head_dim=32, linear_num_key_heads=2, linear_num_value_heads=6, linear_key_head_dim=16,
-                            linear_value_head_dim=16, linear_conv_kernel_dim=4, full_attention_interval=4, rms_norm_eps=1e-6,
-                            rope_parameters=dict(rope_type="default", rope_theta=10000000, partial_rotary_factor=0.25,
-                                                 mrope_section=[2, 1, 1], mrope_interleaved=True),
-                            tie_word_embeddings=False, attn_output_gate=True, pad_token_id=0)
+    kw = dict(vocab_size=512, hidden_size=64, intermediate_size=96, num_hidden_layers=8, num_attention_heads=4,
+              num_key_value_heads=2, head_dim=32, linear_num_key_heads=2, linear_num_value_heads=6, linear_key_head_dim=16,
+              linear_value_head_dim=16, linear_conv_kernel_dim=4, full_attention_interval=4, rms_norm_eps=1e-6,
+              rope_parameters=dict(rope_type="default", rope_theta=10000000, partial_rotary_factor=0.25,
+                                   mrope_section=[2, 1, 1], mrope_interleaved=True),
+              tie_word_embeddings=False, attn_output_gate=True, pad_token_id=0)
+    kw.update(over)
+    cfg = Qwen3_5TextConfig(**kw)
     torch.manual_seed(0)
     m = Qwen3_5ForCausalLM(cfg)
     with torch.no_grad():
@@ -62,7 +68,7 @@ def build():
             else:
                 p.normal_(0, 0.08)
     m = m.to(torch.bfloat16).eval()
-    m.save_pretrained(MD)
+    m.save_pretrained(md)
     return m
 
 
@@ -125,14 +131,20 @@ def kl_top1(a, b):
 m = build()
 T = hf_tensors(MD)
 write_bshj(os.path.join(WD, "tiny-bf16.bshj"), T, {})
-T8 = {}
-for k, v in T.items():
-    if k.endswith(BIG) or k.endswith("embed_tokens.weight") or k == "lm_head.weight":
-        q, s = int8_rows(v)
-        T8[k], T8[k + "_scale"] = q, s
-    else:
-        T8[k] = v
-write_bshj(os.path.join(WD, "tiny-int8.bshj"), T8, {"bshj": {"quant": {"type": "TEST"}}})
+
+
+def int8_tree(T):
+    T8 = {}
+    for k, v in T.items():
+        if k.endswith(BIG) or k.endswith("embed_tokens.weight") or k == "lm_head.weight":
+            q, s = int8_rows(v)
+            T8[k], T8[k + "_scale"] = q, s
+        else:
+            T8[k] = v
+    return T8
+
+
+write_bshj(os.path.join(WD, "tiny-int8.bshj"), int8_tree(T), {"bshj": {"quant": {"type": "TEST"}}})
 
 cfg = Q.Config(MD)
 W, info = QW.load(os.path.join(WD, "tiny-bf16.bshj"), cfg)
@@ -204,6 +216,40 @@ eng8 = Engine(cfg, W8, Q, CTX=512, S=4, K=4)
 l8 = eng8.logits(seqs[1])
 R["T6"] = dict(kl_vs_bf16=kl_top1(ol[1], l8), bpw=info8["bpw"], quant=info8["quant"])
 R["T6_pass"] = bool(np.isfinite(l8).all()) and info8["quant"] == "TEST"   # load path check; quality on a random tiny model is information only
+
+from mashbox.models.qwen3_8_27b import shard as QS   # noqa: E402
+mesh = QS.mesh_for(2)
+Wt, infot = QS.load(os.path.join(WD, "tiny-int8.bshj"), cfg, mesh)
+engt = Engine(cfg, Wt, QS.TPModel(Q, mesh), CTX=512, S=4, K=4)
+lt = engt.logits(seqs[1])
+g8, gt = eng8.generate(prompts, max_new=16)["ids"], engt.generate(prompts, max_new=16)["ids"]
+R["T10"] = dict(kl_vs_one_device=kl_top1(l8, lt), greedy_equal=[a == b for a, b in zip(g8, gt)],
+                device_bytes=infot["device_bytes"], one_device_bytes=info8["device_bytes"], devices=len(jax.devices()))
+R["T10_pass"] = R["T10"]["kl_vs_one_device"]["kl_mean"] < 1e-4 and infot["device_bytes"] == info8["device_bytes"]
+
+# T11: 4 devices, as on a v5e-4, v6e-4 or v5p-8 host (the CLI default there). The real model has 4 KV heads, so each chip holds
+# one; the tiny model above has 2, so this one doubles the heads (8 q, 4 KV, 4 linear key, 8 linear value heads).
+MD4 = os.path.join(WD, "tiny4")
+build(MD4, num_attention_heads=8, num_key_value_heads=4, linear_num_key_heads=4, linear_num_value_heads=8)
+write_bshj(os.path.join(WD, "tiny4-int8.bshj"), int8_tree(hf_tensors(MD4)), {"bshj": {"quant": {"type": "TEST"}}})
+cfg4 = Q.Config(MD4)
+W41, i41 = QW.load(os.path.join(WD, "tiny4-int8.bshj"), cfg4)
+e41 = Engine(cfg4, W41, Q, CTX=512, S=4, K=4)
+mesh4 = QS.mesh_for(4)
+W44, i44 = QS.load(os.path.join(WD, "tiny4-int8.bshj"), cfg4, mesh4)
+tpm4 = QS.TPModel(Q, mesh4)
+e44 = Engine(cfg4, W44, tpm4, CTX=512, S=4, K=4)
+l41, l44 = e41.logits(seqs[1]), e44.logits(seqs[1])
+g41, g44 = e41.generate(prompts, max_new=16)["ids"], e44.generate(prompts, max_new=16)["ids"]
+st4 = tpm4.new_state(cfg4, 4, 512)                 # the state the Engine allocates under tp: each chip its own share
+kv_share = {d.id: s.data.shape[3] for s in st4[0][0].addressable_shards for d in [s.device]}
+lin_share = {d.id: s.data.shape[3] for s in st4[1][0].addressable_shards for d in [s.device]}
+R["T11"] = dict(kl_vs_one_device=kl_top1(l41, l44), greedy_equal=[a == b for a, b in zip(g41, g44)],
+                device_bytes=i44["device_bytes"], one_device_bytes=i41["device_bytes"], tp=i44["tp"],
+                kv_heads=cfg4.KV, kv_heads_per_device=sorted(kv_share.values()), value_heads=cfg4.HV,
+                value_heads_per_device=sorted(lin_share.values()))
+R["T11_pass"] = (R["T11"]["kl_vs_one_device"]["kl_mean"] < 1e-4 and i44["device_bytes"] == i41["device_bytes"] and i44["tp"] == 4
+                 and len(kv_share) == 4 and set(kv_share.values()) == {cfg4.KV // 4} and set(lin_share.values()) == {cfg4.HV // 4})
 
 samp = [dict(temperature=0.8, top_p=0.9, seed=7), dict(temperature=1.0, top_k=5, seed=8), None]
 a1 = eng.generate(prompts, max_new=12, samp=samp)["ids"]

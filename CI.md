@@ -47,7 +47,7 @@ The chip gets the commit and the kernel bundles, never a token. The run is poste
 
 **How to trigger it:** say in the pull request that the change needs a chip run; a maintainer starts T2 for the commit.
 
-**Cost:** on-demand v6e-1 list price is about $2.70 an hour. One T2 run billed 10.1 minutes, about $0.46: 2.6 min to create the chip, 13 s to install, 229 s for the 28 Hy-Nomas kernels, 46 s for the CPU suite on the chip, 2.2 min to delete. Getting a chip can take longer than the run: for example, on-demand v6e-1 had no capacity in five zones for about 30 minutes, and a failed create bills nothing.
+**Cost:** on-demand v6e-1 list price is about $2.70 an hour. A T2 run bills about 10.1 minutes, about $0.46 at that price: 2.6 min to create the chip, 13 s to install, 229 s for the 28 Hy-Nomas kernels, 46 s for the CPU suite on the chip, 2.2 min to delete. Getting a chip can take longer than the run: on-demand v6e-1 can have no capacity in five zones for about 30 minutes, and a failed create bills nothing.
 
 ## Every test earns its place
 

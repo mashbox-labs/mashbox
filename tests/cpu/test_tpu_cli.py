@@ -1,12 +1,14 @@
 """`mashbox tpu` against a fake gcloud (tests/cpu/fake_gcloud.py), and install.sh checks. No cloud, no network."""
 import hashlib
-import inspect
 import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
 
 import re
@@ -68,12 +70,12 @@ def test_zone_exhaustion_moves_to_next_zone(cloud, capsys):
     assert creates(S) == Z[:3]
     assert f"{Z[2]}/mashbox-qwen3-8-27b" in S["nodes"]
     out = capsys.readouterr().out
-    assert out.count(": no free chip (") == 2 and "$2.70 per hour" in out and "ESTIMATE" in out
+    assert out.count(": no free chip (") == 2 and "$2.70 per hour" in out and "estimate at Google's on-demand list price" in out
     assert re.search(r"Local URL +http://127\.0\.0\.1:80\d\d/v1 ", out) and "mashbox tpu down mashbox-qwen3-8-27b" in out
 
 
 def test_internal_error_shows_googles_message_and_continues(cloud, capsys):
-    """Seen for real 2026-10-28 (europe-west4-a, after 3 min): code 13 JSON error; the user saw only "}"."""
+    """Seen on a real create (europe-west4-a, after 3 min): code 13 JSON error; the user saw only "}"."""
     read = cloud(plain={Z[0]: "internal", Z[1]: "ok"})
     assert up() == 0 and creates(read()) == Z[:2]
     out = capsys.readouterr().out
@@ -108,7 +110,7 @@ def test_queued_fallback_keeps_first_grant_deletes_others(cloud, capsys):
 
 
 def test_create_accepted_then_sign_in_expired_names_the_chip(cloud, capsys):
-    """Seen for real 2026-10-28: the sign-in expired during a 9 min create; `up` stopped and Google kept creating."""
+    """Seen on a real create: the sign-in expired during a 9 min create; `up` stopped and Google kept creating."""
     read = cloud(plain={Z[0]: "accepted-auth", Z[1]: "ok"})
     assert up() == 2
     S = read()
@@ -330,7 +332,7 @@ def test_failed_list_never_reads_as_nothing_up(cloud, capsys, err, says):
 
 
 def test_held_tunnel_stops_when_the_chip_is_gone(cloud, capsys, monkeypatch):
-    """Seen for real 2026-10-28: `down` in a second terminal left the first one reopening a tunnel to a deleted chip
+    """Seen in real use: `down` in a second terminal left the first one reopening a tunnel to a deleted chip
     while it still said the chip bills. hold() must notice the chip is gone and stop."""
     read = cloud(plain={Z[0]: "ok"})
     assert up() == 0
@@ -462,20 +464,221 @@ def test_install_sh_refuses(tmp_path, uname_s, uname_m, uid, msg):
     assert r.returncode == 1 and msg in r.stderr and "uv" not in r.stdout
 
 
-def test_tunnel_port_is_held_and_its_forward_is_private():
-    """The local port stays bound by mashbox for the whole session, so another
-    local user cannot bind it before ssh does (or after a drop) and answer in the chip's place; the SSH forward and its
-    log live in a 0700 directory of this user, never a shared /tmp name."""
-    lp = tpu.free_port(18950)
+# ---------------------------------------------------------------------------------------------------------- security
+def test_f19_another_local_user_cannot_answer_for_the_chip(cloud, monkeypatch):
+    """The local port was checked free, released, and bound by ssh a moment later; another user of this machine who
+    bound it first got "Server ready", then every prompt and the agent's tool calls. Now this process binds the port and
+    keeps it, and the forward is a Unix socket in a private directory: the race has nothing to win."""
+    cloud(plain={Z[0]: "ok"})
+    real, hits, evil = tpu.open_tunnel, [], []
+
+    class Evil(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", "4")
+            self.end_headers()
+            self.wfile.write(b"evil")
+
+        def log_message(self, *a):
+            pass
+
+    def racing(*a):                                     # runs right before ssh binds its forward
+        port = a[4] if isinstance(a[4], int) else a[4].port
+        try:
+            srv = HTTPServer(("127.0.0.1", port), Evil)
+        except OSError:
+            return real(*a)                             # the port is held: nobody else can bind it
+        evil.append(srv)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return real(*a)
+    monkeypatch.setattr(tpu, "open_tunnel", racing)
     try:
-        port = lp.port if hasattr(lp, "port") else lp
-        other = socket.socket()
-        with pytest.raises(OSError):
-            other.bind(("127.0.0.1", port))                 # the old free_port released it here
-        other.close()
-        assert os.stat(lp.dir).st_mode & 0o777 == 0o700 and lp.sock.startswith(lp.dir)
-        src = inspect.getsource(tpu.open_tunnel)
-        assert "lp.dir" in src and "gettempdir" not in src
+        assert up() == 0
     finally:
-        if hasattr(lp, "close"):
-            lp.close()
+        for srv in evil:
+            srv.shutdown()
+            srv.server_close()
+    assert evil == [] and hits == []                    # "Server ready" came from the chip, through our own forward
+
+
+def test_f19_forward_failure_stops_loudly(cloud, monkeypatch, capsys):
+    """A forward SSH cannot set up (ExitOnForwardFailure) ends `up` with SSH's message; it is never retried in silence
+    while something else may answer on the port."""
+    cloud(plain={Z[0]: "ok"}, tunnel_fail=True)
+    monkeypatch.setattr(tpu, "READY_MIN", 0.05)
+    assert up() == 2
+    err = capsys.readouterr().err
+    assert "could not open its forward" in err and "forwarding failed" in err.lower()
+
+
+def a_free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def test_held_port_is_free_again_right_after_its_session():
+    """The port a session held and closed is taken again at once (the same URL as before), although the connections it
+    relayed sit in TIME_WAIT on that port for a minute; a port another socket listens on is still refused."""
+    p = a_free_port()
+    lp = tpu.free_port(p)
+    c = socket.create_connection(("127.0.0.1", p), timeout=5)
+    assert c.recv(1) == b""                             # no forward yet: our relay closes first, so TIME_WAIT is ours
+    c.close()
+    lp.close()
+    again = tpu.free_port(p)
+    try:
+        assert again.port == p
+        other = socket.socket()
+        other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        with pytest.raises(OSError):
+            other.bind(("127.0.0.1", p))
+        other.close()
+    finally:
+        again.close()
+
+
+def test_port_in_use_leaves_no_private_folder(tmp_path, monkeypatch):
+    """A port that cannot be bound makes no private folder: none is left behind for each busy port tried."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen(1)
+        with pytest.raises(OSError):
+            tpu.Port(busy.getsockname()[1])
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("argv", [["down", "Mashbox_X"], ["tunnel", "a" * 64], ["ssh", "x;id"],
+                                  ["up", "qwen3-8-27b", "--yes", "--name", "x y"],
+                                  ["status", "--zone", "us-east5-b --verbosity=debug"],
+                                  ["status", "--project=--impersonate-service-account=e@x.iam.gserviceaccount.com"]])
+def test_f10_names_zones_projects_are_checked_before_gcloud(cloud, argv, capsys):
+    """On the mashbox tpu side, a chip name, zone or project that is not one can never reach gcloud's argv, where it
+    could be read as an option or another chip."""
+    read = cloud(plain={Z[0]: "ok"})
+    with pytest.raises(SystemExit) as e:
+        tpu.main(argv)
+    assert e.value.code == 2 and "not a valid" in capsys.readouterr().err
+    assert read().get("calls", []) == []
+
+
+def test_up_chip_choices_come_from_passing_chip_rows():
+    """`tpu up --chip` offers exactly the models.json chips rows that pass (one source with the docs chip tables)."""
+    q = tpu.model("qwen3-8-27b")
+    names = [c for c, _ in tpu.offered(q)]
+    assert names[0] == "v6e-1" and set(names) == {"v6e-1", "v5e-4", "v6e-4"}
+    assert tpu.pick_chip(q, None) is q
+    v5e = tpu.pick_chip(q, "v5e-4")["cloud"]
+    assert (v5e["accelerator"], v5e["runtime"]) == ("v5litepod-4", "v2-alpha-tpuv5-lite") and v5e["zones"]
+    assert tpu.price(v5e["accelerator"]) == pytest.approx(4.80)
+    assert q["cloud"]["accelerator"] == "v6e-1"          # the registry entry itself is unchanged
+    for chip in ("v5p-8", "v5e-1"):                       # not passing / not a row: refused with the list
+        with pytest.raises(tpu.Stop, match="runs on: v6e-1"):
+            tpu.pick_chip(q, chip)
+    assert [c for c, _ in tpu.offered(tpu.model("hy-nomas"))] == ["v6e-4"]
+
+
+# ------------------------------------------------------------------------------------- run on chips that are too small
+# `mashbox run` on a chip split that cannot hold the model stops with one line before any weights are read (CHIPS-VERIFY
+# case C: `-tp 1` on a v5e-4 loaded ~14.7 GB onto chip 0, then a raw RESOURCE_EXHAUSTED traceback). Chip memory as
+# JAX reports it (bytes_limit, MEASURED: v5e 15.75 GiB, v6e 31.24 GiB); the config has the real Qwen3.8-27B shapes.
+QWEN_CFG = dict(model_type="qwen3_5_text", num_hidden_layers=64, hidden_size=5120, intermediate_size=17408,
+                num_attention_heads=24, num_key_value_heads=4, head_dim=256, vocab_size=248320, linear_num_key_heads=16,
+                linear_num_value_heads=48, linear_key_head_dim=128, linear_value_head_dim=128, linear_conv_kernel_dim=4,
+                full_attention_interval=4, tie_word_embeddings=False,
+                rope_parameters=dict(rope_type="default", rope_theta=10000000, partial_rotary_factor=0.25))
+GIB = 2 ** 30
+CHIP = {"v5e": ("TPU v5 lite", int(15.75 * GIB)), "v6e": ("TPU v6 lite", int(31.24 * GIB))}
+
+
+class WeightsReached(Exception):
+    pass
+
+
+@pytest.fixture
+def host(tmp_path, monkeypatch):
+    """host(family, chips) -> run(*args): cli.load on a fake TPU host; WeightsReached when it gets to the weights."""
+    jax = pytest.importorskip("jax")
+    from mashbox import cli, hub
+    up = tmp_path / "upstream"
+    up.mkdir()
+    (up / "config.json").write_text(json.dumps(QWEN_CFG))
+    monkeypatch.setattr(hub, "upstream_dir", lambda m, log=print: str(up))
+    monkeypatch.setattr(cli, "setup_cache", lambda d=None: str(tmp_path / "xla"))     # no global JAX cache dir in tests
+
+    def weights(*a, **k):
+        raise WeightsReached()
+    monkeypatch.setattr(hub, "weights_file", weights)
+
+    def setup(fam, n):
+        kind, limit = CHIP[fam]
+
+        class Chip:
+            platform, device_kind = "tpu", kind
+
+            def memory_stats(self):
+                return {"bytes_limit": limit}
+        monkeypatch.setattr(jax, "devices", lambda *a: [Chip() for _ in range(n)])
+        return lambda *args: cli.load(cli.build_parser().parse_args(["run", "qwen3-8-27b", "--prompt", "Hi", *args]))
+    return setup
+
+
+def stop_line(run, *args):
+    with pytest.raises(SystemExit) as e:
+        run(*args)
+    msg = str(e.value.code)
+    assert "\n" not in msg and "Traceback" not in msg and "RESOURCE_EXHAUSTED" not in msg
+    return msg
+
+
+def test_one_v5e_chip_of_four_stops_at_once_with_the_split_and_chip_that_work(host):
+    msg = stop_line(host("v5e", 4), "--tensor-parallel-size", "1")
+    assert msg.startswith("qwen3-8-27b does not fit on 1 TPU v5e chip: it needs at least 29.53 GB per chip")
+    assert "weights 26.94 GB + context 2.59 GB for --ctx 2048 x --slots 8" in msg and "each chip here has 16.91 GB" in msg
+    assert "leave out --tensor-parallel-size (it then uses 4)" in msg
+    assert msg.endswith("mashbox tpu up qwen3-8-27b --chip v5e-4 (from your own machine).")
+    from mashbox import hub
+    m = hub.model_entry("qwen3-8-27b")
+    assert tpu.pick_chip(m, "v5e-4")["cloud"]["accelerator"] == "v5litepod-4"      # the line it gives is one tpu up takes
+
+
+def test_a_one_chip_v5e_host_points_to_the_v5e_4(host):
+    msg = stop_line(host("v5e", 1))
+    assert msg.startswith("qwen3-8-27b does not fit on 1 TPU v5e chip: it needs at least 29.53 GB per chip")
+    assert msg.endswith("It runs on a v5e-4: mashbox tpu up qwen3-8-27b --chip v5e-4 (from your own machine).")
+
+
+def test_too_long_a_context_names_ctx_and_slots(host):
+    msg = stop_line(host("v5e", 4), "--ctx", "262144")
+    assert "does not fit on 4 TPU v5e chips" in msg and "Lower --ctx or --slots" in msg
+
+
+@pytest.mark.parametrize("fam,n,args", [
+    ("v5e", 4, ()),                                       # auto tp 4: the P7 / CHIPS-VERIFY B run
+    ("v5e", 4, ("--ctx", "32768")),                       # 32768 x 8 slots: peak 12.06 GB per chip measured
+    ("v5e", 4, ("--ctx", "131072", "--slots", "1")),      # 131072 x 1: needle recalled
+    ("v6e", 1, ()),                                       # v6e-1, the public default
+    ("v6e", 1, ("--ctx", "32768", "--slots", "1")),       # agents setting on one v6e chip
+    ("v6e", 4, ("--ctx", "131072")),                      # v6e-4 tp 4 at 131072 x 8: peak 26.56 GB per chip
+])
+def test_settings_that_ran_on_real_chips_are_never_stopped(host, fam, n, args):
+    with pytest.raises(WeightsReached):
+        host(fam, n)(*args)
+
+
+def test_top_help_lists_tpu_and_every_tpu_command_has_help(capsys):
+    """`mashbox --help` names the tpu command family, and `mashbox tpu --help` describes each of its commands."""
+    from mashbox import cli
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = capsys.readouterr().out
+    flat = " ".join(out.split())        # argparse wraps help lines at the terminal width
+    assert "{env,tpu,run,download}" in flat and "mashbox tpu --help" in flat, out
+    with pytest.raises(SystemExit):
+        cli.main(["tpu", "--help"])
+    out = capsys.readouterr().out
+    for n in ("up", "down", "status", "ssh", "tunnel"):
+        line = next((l for l in out.splitlines() if l.strip().startswith(n + " ") or l.strip() == n), None)
+        assert line is not None and len(line.split(None, 1)) == 2, (n, out)

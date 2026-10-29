@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""TPU status badges from real chip runs (public-safe; ships in the main repo as tools/tpu_status.py).
+"""TPU status badges from real chip runs (public-safe; ships in the main repo as tools/tpu_status.py). A badge says
+passing, failing or stale; the run date stays in the status record, never on the badge.
 
 GitHub-hosted runners have no TPU. Our on-demand chip runner calls `record` after `tests/tpu` on a chip;
 the daily `tpu-status.yml` job calls `refresh`. A badge is a pure function of its run record, today's
@@ -16,12 +17,12 @@ from pathlib import Path
 def badge(rec, latest, today, max_age):
     chip = rec["chip"]
     if rec is None or "date" not in rec:
-        return {"schemaVersion": 1, "label": f"TPU {chip}", "message": "no run yet", "color": "lightgrey"}
+        return {"schemaVersion": 1, "label": f"TPU {chip}", "message": "no run", "color": "lightgrey"}
     age = (today - datetime.date.fromisoformat(rec["date"])).days
     if age > max_age or (latest and rec["version"] != latest.lstrip("v")):
-        return {"schemaVersion": 1, "label": f"TPU {chip}", "message": f"stale, last {rec['date']}", "color": "lightgrey"}
+        return {"schemaVersion": 1, "label": f"TPU {chip}", "message": "stale", "color": "lightgrey"}
     ok = rec["failed"] == 0 and rec["passed"] > 0
-    return {"schemaVersion": 1, "label": f"TPU {chip}", "message": f"{'passing' if ok else 'failing'} {rec['date']}",
+    return {"schemaVersion": 1, "label": f"TPU {chip}", "message": "passing" if ok else "failing",
             "color": "brightgreen" if ok else "red"}
 
 def main(argv=None):

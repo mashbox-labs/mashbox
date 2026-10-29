@@ -15,5 +15,6 @@
  "decoder_default": "full",
  "camera": {"move_units_per_s": 2.8, "turn_deg_per_s": 25.0, "rotation_scale": 2.5, "pitch_limit_deg": 60, "pitch_limit_max_deg": 85},
  "controls": ["describe or Tencent JSON prompt", "preset worlds", "timed actions", "W A S D and arrow keys", "turn rate", "move speed", "rotation scale", "pitch limit", "pause", "restart", "hide UI (H)"],
+ "play": {"lead_s": 5.6, "slow_extra_s": 0.9, "sync": true, "sync_margin_s": 0.25},
  "server": {"host": "127.0.0.1", "port": 8790}
 }

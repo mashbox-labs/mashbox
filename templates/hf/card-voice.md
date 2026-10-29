@@ -18,7 +18,7 @@ ${summary}
 On a Google Cloud TPU VM. The [docs](${docs_url}) cover setup from a new Google account, and coding agents can follow [AGENTS.md](${agents_url}).
 
 ```bash
-python3 -m pip install "mashbox[tpu]"
+${install}
 ${run}
 ```
 

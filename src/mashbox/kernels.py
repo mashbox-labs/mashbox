@@ -19,6 +19,8 @@ def chip_family():
     for name, fam in (("v6 lite", "v6e"), ("v6e", "v6e"), ("v5 lite", "v5e"), ("v5e", "v5e"), ("v5p", "v5p"), ("v4", "v4")):
         if name in kind:
             return fam
+    if kind.endswith("v5"):  # v5p reports "TPU v5" (jax._src.test_util.is_device_tpu: v5p = device_kind.endswith("v5"))
+        return "v5p"
     return kind
 
 

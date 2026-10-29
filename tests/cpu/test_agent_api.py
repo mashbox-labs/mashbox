@@ -60,6 +60,7 @@ class Script:
 
     def generate(self, prompts, max_new=128, stop_ids=(), samp=None, on_step=None, marks=None):
         self.prompts.append(prompts[0])
+        self.marks = marks
         self.cached_now = [0] * len(prompts)
         ids = [self.chat.encode(self.texts.pop(0))[:max_new] for _ in prompts]
         fin = ["stop" if len(i) < max_new else "length" for i in ids]
@@ -158,3 +159,151 @@ def test_responses_stream(server):
         dict(type="function_call_output", call_id="call_1", output="/home/u")]))
     assert r["output"][0]["content"][0]["text"] == "It is /home/u."
     assert "<tool_response>\n/home/u\n</tool_response>" in eng.chat.decode(eng.prompts[-1])
+
+
+def test_cache_points_at_user_message_starts(server):
+    """the server offers the prefix cache the start of every user message and of the last message block"""
+    eng, url = server
+    eng.texts += ["ok"]
+    msgs = [dict(role="system", content="be brief"), dict(role="user", content="one"), dict(role="assistant", content="1"),
+            dict(role="user", content="two")]
+    post(url + "/v1/chat/completions", dict(messages=msgs))
+    ids, im = eng.prompts[-1], eng.chat.encode("<|im_start|>")[0]
+    starts = [j for j in range(len(ids)) if ids[j] == im]
+    users = [j for j in starts if eng.chat.decode(ids[j + 1:j + 2]) == "user"]
+    assert len(users) == 2 and eng.marks[0] == sorted(set(users + [starts[-1]]))
+
+
+# ---------------------------------------------------------------------------------------------- review fixes (10-28)
+def test_tool_results_follow_call_order():
+    """the template has no call ids: results sent in another order than the calls are put back in call order"""
+    def tools_of(cv):
+        return [m["content"] for m in cv.messages() if m["role"] == "tool"]
+    use = [dict(type="tool_use", id="A", name="Bash", input=dict(command="a")),
+           dict(type="tool_use", id="B", name="Bash", input=dict(command="b"))]
+    res = [dict(type="tool_result", tool_use_id="B", content="out b"), dict(type="tool_result", tool_use_id="A", content="out a")]
+    cv, _, _ = A.from_anthropic(dict(messages=[dict(role="user", content="go"), dict(role="assistant", content=use),
+                                               dict(role="user", content=res)]))
+    assert tools_of(cv) == ["out a", "out b"]
+    assert not [k for m in cv.messages() for k in m if k.startswith("_")]
+    cv, _, _ = A.from_openai_chat(dict(messages=[dict(role="user", content="go"), dict(role="assistant", content="", tool_calls=[
+        dict(id="A", type="function", function=dict(name="Bash", arguments='{"command": "a"}')),
+        dict(id="B", type="function", function=dict(name="Bash", arguments='{"command": "b"}'))]),
+        dict(role="tool", tool_call_id="B", content="out b"), dict(role="tool", tool_call_id="A", content="out a")]))
+    assert tools_of(cv) == ["out a", "out b"]
+    cv, _, _, _, _ = A.from_responses(dict(input=[dict(type="message", role="user", content="go"),
+                                                  dict(type="function_call", name="Bash", arguments='{"command": "a"}', call_id="A"),
+                                                  dict(type="function_call", name="Bash", arguments='{"command": "b"}', call_id="B"),
+                                                  dict(type="function_call_output", call_id="B", output="out b"),
+                                                  dict(type="function_call_output", call_id="A", output="out a")]))
+    assert tools_of(cv) == ["out a", "out b"]
+    # results without ids, or naming an unknown call, keep the order the client sent
+    cv, _, _ = A.from_openai_chat(dict(messages=[dict(role="user", content="go"), dict(role="assistant", content="", tool_calls=[
+        dict(id="A", type="function", function=dict(name="Bash", arguments="{}")),
+        dict(id="B", type="function", function=dict(name="Bash", arguments="{}"))]),
+        dict(role="tool", content="first"), dict(role="tool", tool_call_id="A", content="second")]))
+    assert tools_of(cv) == ["first", "second"]
+
+
+def test_responses_stream_added_item_starts_empty(server):
+    """an aggregator that starts from output_item.added and appends the deltas (as OpenAI's SDK does) gets valid JSON"""
+    eng, url = server
+    eng.texts += [CALL]
+    tools = [dict(type="function", name="Bash", description="run", parameters=TOOLS[0]["function"]["parameters"])]
+    ev = post(url + "/v1/responses", dict(model="qwen3-8-27b", stream=True, tools=tools, input="where am I?"), True)
+    added = [d["item"] for n, d in ev if n == "response.output_item.added" and d["item"]["type"] == "function_call"]
+    assert added and added[0]["arguments"] == ""
+    agg = added[0]["arguments"] + "".join(d["delta"] for n, d in ev if n == "response.function_call_arguments.delta")
+    done = [d["arguments"] for n, d in ev if n == "response.function_call_arguments.done"]
+    assert json.loads(agg) == {"command": "pwd"} and done == [agg]
+
+
+class Slow(Script):
+    """Engine stand-in that decodes one token per step and ends the row when on_step returns it (as Engine._cancel)."""
+    ended_at = None             # the server streams its first chunk (the role) before generate() starts
+
+    def generate(self, prompts, max_new=128, stop_ids=(), samp=None, on_step=None, marks=None):
+        self.prompts.append(prompts[0])
+        self.cached_now, self.ended_at = [0], None
+        full = self.chat.encode(self.texts.pop(0))[:max_new]
+        fin = ["length"]
+        for k in range(1, len(full) + 1):
+            time.sleep(0.005)
+            fin = ["stop" if len(full) < max_new else "length"] if k == len(full) else [None]
+            if (on_step([full[:k]], fin) or []) and fin[0] is None:
+                self.ended_at = k
+                return dict(ids=[full[:k]], finish=["cancel"], cached=[0], timing={})
+        return dict(ids=[full], finish=fin, cached=[0], timing={})
+
+
+@pytest.fixture()
+def slow_server():
+    if not UP:
+        pytest.skip("MASHBOX_QWEN_UPSTREAM not set")
+    from mashbox.runtime.chat import Chat
+    from mashbox.runtime.server import Server, serve
+    chat = Chat(UP)
+    eng = Slow(chat, [])
+    srv = Server(eng, chat, "qwen3-8-27b", {}, log=lambda m: None)
+    srv.ready = True
+    with socket.socket() as s_:
+        s_.bind(("127.0.0.1", 0))
+        port = s_.getsockname()[1]
+    threading.Thread(target=serve, args=(srv, "127.0.0.1", port, lambda m: None), daemon=True).start()
+    time.sleep(0.3)
+    return eng, f"http://127.0.0.1:{port}", port
+
+
+def test_stop_string_ends_generation(slow_server):
+    eng, url, _ = slow_server
+    eng.texts += ["alpha beta STOP" + " gamma" * 300]
+    r = post(url + "/v1/chat/completions", dict(messages=[dict(role="user", content="hi")], stop=["STOP"]))
+    assert r["choices"][0]["message"]["content"] == "alpha beta" and r["choices"][0]["finish_reason"] == "stop"
+    assert eng.ended_at is not None and eng.ended_at < 20         # not the 300 tokens after the stop string
+
+
+def test_client_disconnect_ends_generation(slow_server):
+    eng, url, port = slow_server
+    eng.texts += [" word" * 2000, "ok"]
+    body = json.dumps(dict(model="qwen3-8-27b", max_tokens=4000, stream=True, messages=[dict(role="user", content="hi")])).encode()
+    s_ = socket.create_connection(("127.0.0.1", port))
+    s_.sendall(b"POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: "
+               + str(len(body)).encode() + b"\r\n\r\n" + body)
+    got = b""
+    while b"text_delta" not in got:
+        got += s_.recv(4096)
+    s_.close()                                     # the client hangs up mid-answer
+    t = time.time()
+    while eng.ended_at is None and time.time() - t < 5:
+        time.sleep(0.05)
+    assert eng.ended_at is not None and eng.ended_at < 1000      # ended soon after, not after all 2000 tokens
+    r = post(url + "/v1/chat/completions", dict(messages=[dict(role="user", content="hi")]))      # the server still answers
+    assert r["choices"][0]["message"]["content"] == "ok"
+
+
+def test_client_half_close_ends_generation(slow_server):
+    """Behind an SSH tunnel a stopped browser shows up as EOF on the server's socket while writes still succeed (the tunnel
+    keeps taking bytes), so a failed write never comes. The server checks the socket itself, as llama-server does."""
+    eng, url, port = slow_server
+    eng.texts += [" word" * 2000, "ok"]
+    body = json.dumps(dict(model="qwen3-8-27b", max_tokens=4000, stream=True, messages=[dict(role="user", content="hi")])).encode()
+    s_ = socket.create_connection(("127.0.0.1", port))
+    s_.sendall(b"POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: "
+               + str(len(body)).encode() + b"\r\n\r\n" + body)
+    got = b""
+    while b"content" not in got:
+        part = s_.recv(4096)
+        assert part, got                           # the server closed before streaming (a refused request)
+        got += part
+    s_.shutdown(socket.SHUT_WR)                    # EOF to the server, the socket stays open and readable
+    t = time.time()
+    while eng.ended_at is None and time.time() - t < 5:
+        s_.settimeout(0.05)
+        try:
+            s_.recv(65536)
+        except OSError:
+            pass
+    s_.close()
+    assert eng.ended_at is not None and eng.ended_at < 1000      # ended soon after, not after all 2000 tokens
+    r = post(url + "/v1/chat/completions", dict(messages=[dict(role="user", content="hi")]))
+    assert r["choices"][0]["message"]["content"] == "ok" and r["timings"]["predicted_n"] == 1

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+<meta name="robots" content="noindex,nofollow">
+<title>Chat | MASHBOX Labs</title>
+<link rel="icon" href="ui/shell/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="ui/shell/shell.css">
+<script type="application/json" id="mbx-module">{"model": "qwen3-8-27b", "module": "Chat", "status": {"state": "busy", "text": "Connecting"}}</script>
+<script type="application/json" id="mbx-chat">{}</script>
+<script src="ui/shell/shell.js"></script>
+<style>
+  /* MASHBOX Chat: the module's own content area. Every colour, font and frame comes from the shell's --mbx-* tokens. */
+  .room-btns { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  #open-chats, #open-set { display: none; }
+  .chat { display: grid; grid-template-columns: 250px minmax(0, 1fr) 330px; gap: var(--mbx-gap); align-items: start; }
+  .chat > .mbx-panel { margin-top: 0; }   /* side by side, not stacked */
+  .side, .set { position: sticky; top: 96px; max-height: calc(100vh - 112px); overflow: auto; overscroll-behavior: contain; }
+  .pane-h { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .mbx-ui .pane-h h3 { margin: 0; flex: 1; font: 700 13px/1.4 var(--mbx-font); letter-spacing: 0.6px; text-transform: uppercase; color: var(--mbx-acc); }
+  .pane-h .x { display: none; }
+  .mbx-ui .side input[type=search] { width: 100%; }
+
+  /* history */
+  .hist { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .hist li { display: flex; align-items: stretch; gap: 2px; }
+  .hist .h-none { color: var(--mbx-faint); font-size: 13px; padding: 6px 2px; }
+  .mbx-ui .hist .h-open { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 1px; box-shadow: none; background: none;
+    border-color: transparent; padding: 6px 8px; white-space: normal; font-weight: 600; }
+  .mbx-ui .hist .h-open:hover { border-color: var(--mbx-line-2); }
+  .mbx-ui .hist li.on .h-open { border-color: var(--mbx-acc); background: color-mix(in srgb, var(--mbx-acc) 10%, var(--mbx-panel)); }
+  .h-t { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .h-m { font-size: 11.5px; font-weight: 400; color: var(--mbx-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mbx-ui .hist .h-del { box-shadow: none; border-color: transparent; opacity: 0.45; padding: 0 9px; font-size: 16px; }
+  .hist li:hover .h-del, .mbx-ui .hist .h-del:focus-visible { opacity: 1; }
+
+  /* conversation */
+  .conv { display: flex; flex-direction: column; min-height: calc(100vh - 230px); min-height: calc(100svh - 230px); padding-bottom: 0; }
+  .conv-h { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .mbx-ui .conv-h h3 { margin: 0; flex: 1 1 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 700 13px/1.4 var(--mbx-font); letter-spacing: 0.6px; text-transform: uppercase; color: var(--mbx-acc); }
+  .ctx { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--mbx-dim); white-space: nowrap; }
+  .ctx-track { width: 84px; height: 8px; border: 1px solid var(--mbx-line-2); background: var(--mbx-field); position: relative; }
+  .ctx-track i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--mbx-acc); transition: width 0.3s; }
+  .ctx.hot { color: var(--mbx-down); } .ctx.hot .ctx-track i { background: var(--mbx-down); }
+  .log { flex: 1; display: flex; flex-direction: column; gap: 18px; padding: 8px 0 14px; min-width: 0; }
+  .empty { margin: auto; text-align: center; padding: 36px 10px; color: var(--mbx-dim); }
+  .empty p { margin: 8px 0 0; }
+  .msg { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .msg.user { align-items: flex-end; }
+  .msg.user .bubble { max-width: min(85%, 760px); background: var(--mbx-panel-2); border: 2px solid var(--mbx-line-2); padding: 9px 13px;
+    white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.editing { align-items: stretch; }
+  .edit-row { margin-top: 6px; }
+  .who { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+  .who .mbx-pxl { font-size: 13px; color: var(--mbx-up); }
+  .vers { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--mbx-dim); }
+  .mbx-ui .vers button { box-shadow: none; padding: 0 7px; }
+  .acts { display: flex; gap: 6px; opacity: 0.55; transition: opacity 0.15s; }
+  .msg:hover .acts, .acts:focus-within { opacity: 1; }
+  .mbx-ui .acts button { box-shadow: none; padding: 2px 9px; font-size: 12px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12.5px; color: var(--mbx-dim); }
+  .stats i { font-style: normal; color: var(--mbx-faint); }
+  .wait { font-size: 13px; color: var(--mbx-ok); animation: blink 1.2s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: 0.35; } }
+  .err { border: 2px solid var(--mbx-down); color: var(--mbx-down); padding: 8px 11px; font-size: 13.5px; overflow-wrap: anywhere; }
+  .think { border: 2px dashed var(--mbx-line-2); background: var(--mbx-field); }
+  .think summary { cursor: pointer; padding: 7px 10px 6px; font: 400 14px/1 var(--mbx-pixel); letter-spacing: 1px; text-transform: uppercase; color: var(--mbx-ok); }
+  .think-b { padding: 2px 12px 10px; color: var(--mbx-dim); font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow-y: auto; }
+
+  /* rendered Markdown */
+  .md { overflow-wrap: anywhere; line-height: 1.6; }
+  .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+  .md p { margin: 0 0 10px; }
+  .md :is(h1, h2, h3, h4, h5, h6) { margin: 16px 0 8px; line-height: 1.3; font-weight: 700; }
+  .md h1 { font-size: 21px; } .md h2 { font-size: 18.5px; } .md h3 { font-size: 16.5px; } .md :is(h4, h5, h6) { font-size: 15px; }
+  .md :is(ul, ol) { margin: 0 0 10px; padding-left: 24px; } .md li { margin: 3px 0; } .md li.task { list-style: none; margin-left: -20px; }
+  .md a { color: var(--mbx-up); }
+  .md code { font: 0.92em var(--mbx-mono); background: var(--mbx-field); border: 1px solid var(--mbx-line-2); padding: 0 4px; }
+  .md hr { border: 0; height: 2px; background: var(--mbx-line); margin: 14px 0; }
+  .md blockquote { margin: 0 0 10px; padding: 6px 12px; border: 2px solid var(--mbx-line); color: var(--mbx-dim); }
+  .cb { border: 2px solid var(--mbx-line-2); background: var(--mbx-field); margin: 0 0 12px; min-width: 0; }
+  .cb-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; background: var(--mbx-panel-2);
+    font: 12.5px var(--mbx-mono); color: var(--mbx-faint); }
+  .mbx-ui .cb-h button { box-shadow: none; padding: 1px 9px; font-size: 12px; }
+  .cb pre { margin: 0; padding: 10px 12px; overflow-x: auto; }
+  .md .cb code { font: 13px/1.55 var(--mbx-mono); background: none; border: 0; padding: 0; white-space: pre; color: var(--mbx-ink); }
+  .tbl { overflow-x: auto; margin: 0 0 12px; }
+  .md table { border-collapse: collapse; font-size: 14px; }
+  .md :is(th, td) { border: 1px solid var(--mbx-line-2); padding: 5px 10px; text-align: left; vertical-align: top; }
+  .md th { background: var(--mbx-panel-2); }
+
+  /* composer: stays at the bottom of the screen while the conversation scrolls */
+  .composer { position: sticky; bottom: 0; z-index: 5; background: var(--mbx-panel); padding: 10px 0 14px; margin-top: auto;
+    box-shadow: 0 -14px 14px -8px var(--mbx-panel); }
+  .mbx-ui #msg { display: block; resize: none; max-height: 40vh; min-height: 46px; }
+  .comp-row { margin-top: 8px; }
+  .think-w { display: inline-flex; align-items: center; gap: 8px; }
+  #hint { font-size: 12px; color: var(--mbx-faint); }
+  .mbx-ui #keys { box-shadow: none; font-family: var(--mbx-mono); }
+
+  /* settings */
+  .grp { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; }
+  .grp + .grp { margin-top: 2px; }
+  .grp h4 { margin: 4px 0 0; font: 400 14px/1 var(--mbx-pixel); letter-spacing: 1px; text-transform: uppercase; color: var(--mbx-faint); }
+  .grp .mbx-seg { flex-wrap: wrap; align-self: flex-start; }
+  .knob { display: flex; flex-direction: column; gap: 2px; padding: 3px 0; }
+  .knob-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .mbx-ui .knob-h input, .mbx-ui .grp input.num { width: 92px; text-align: right; padding: 4px 8px; font-family: var(--mbx-mono); }
+  .knob input[type=range] { width: 100%; }
+  .knob.unset input[type=range] { opacity: 0.4; }
+  .knob .mbx-note, .grp .mbx-note { margin: 0; }
+  .line { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .mbx-ui .set textarea { font-size: 14px; }
+  #k-stop { font-family: var(--mbx-mono); }
+
+  /* API screen */
+  .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 16px; margin: 0; font-size: 14px; }
+  .kv dt { color: var(--mbx-dim); text-transform: capitalize; } .kv dd { margin: 0; overflow-wrap: anywhere; }
+  pre.call { margin: 10px 0; padding: 12px; background: var(--mbx-field); border: 2px solid var(--mbx-line); font: 13px/1.5 var(--mbx-mono); color: var(--mbx-dim);
+    overflow-x: auto; white-space: pre; max-height: 60vh; }
+  #tab-api { --mbx-acc: var(--mbx-ok); }
+
+  /* shortcuts */
+  dialog.keys { border: 2px solid var(--mbx-line-3); background: var(--mbx-panel); color: var(--mbx-ink); box-shadow: 4px 4px 0 var(--mbx-hard); padding: 16px 18px;
+    width: min(92vw, 440px); }
+  dialog.keys::backdrop { background: rgba(0, 0, 0, 0.5); }
+  .mbx-ui dialog.keys h3 { margin: 0 0 10px; font: 700 13px/1.4 var(--mbx-font); letter-spacing: 0.6px; text-transform: uppercase; color: var(--mbx-up); }
+  .keys dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 14px; margin: 0 0 14px; font-size: 14px; }
+  .keys dd { margin: 0; color: var(--mbx-dim); }
+  kbd { font: 12.5px var(--mbx-mono); border: 2px solid var(--mbx-line-2); padding: 0 5px; background: var(--mbx-field); white-space: nowrap; }
+  .scrim { position: fixed; inset: 0; z-index: 35; background: rgba(0, 0, 0, 0.45); }
+
+  /* narrower screens: the chat list, then the settings, become drawers */
+  @media (max-width: 1100px) {
+    #open-chats { display: inline-block; }
+    .chat { grid-template-columns: minmax(0, 1fr) 320px; }
+    .side { position: fixed; top: 0; bottom: 0; left: 0; z-index: 40; width: min(86vw, 330px); max-height: none; transform: translateX(-110%);
+      visibility: hidden; transition: transform 0.18s, visibility 0.18s; }
+    .side.open { transform: none; visibility: visible; }
+    .side .x { display: inline-block; }
+  }
+  @media (max-width: 900px) {
+    #open-set { display: inline-block; }
+    .chat { grid-template-columns: minmax(0, 1fr); }
+    .set { position: fixed; top: 0; bottom: 0; right: 0; z-index: 40; width: min(90vw, 370px); max-height: none; transform: translateX(110%);
+      visibility: hidden; transition: transform 0.18s, visibility 0.18s; }
+    .set.open { transform: none; visibility: visible; }
+    .set .x { display: inline-block; }
+  }
+  @media (max-width: 640px) {
+    .conv { min-height: calc(100svh - 120px); }
+    .msg.user .bubble { max-width: 92%; }
+    .ctx-track { width: 56px; }
+    #hint { display: none; }
+  }
+  @media (max-width: 480px) {
+    .room-btns { margin-left: 0; }
+    .conv-h { gap: 6px; }
+    .md :is(ul, ol) { padding-left: 20px; }
+  }
+  @media (pointer: coarse) { .acts, .hist .h-del { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .wait { animation: none; } .side, .set { transition: none; } }
+</style>
+</head>
+<body class="mbx-ui">
+<header data-mbx-top></header>
+<nav class="mbx-tabs mbx-wrap" data-mbx-tabs aria-label="Screens">
+  <button type="button" data-tab="chat" class="on">Chat</button>
+  <button type="button" data-tab="api" style="--mbx-acc: var(--mbx-ok)">API</button>
+</nav>
+<main class="mbx-main">
+  <section class="mbx-tab" id="tab-chat">
+    <div class="mbx-room">
+      <span class="mbx-plate">Chat</span>
+      <span class="mbx-room-line">Talk to the model on this server. Every setting goes with each message; chats stay in this browser.</span>
+      <span class="room-btns">
+        <button type="button" class="sm" id="open-chats" aria-controls="side">Chats</button>
+        <button type="button" class="sm" id="open-set" aria-controls="set">Settings</button>
+        <button type="button" class="sm pri" id="new-chat" title="New chat (Ctrl or Cmd + Shift + O)">New chat</button>
+      </span>
+    </div>
+    <div class="chat">
+      <aside class="side mbx-panel" id="side" aria-label="Chats">
+        <div class="pane-h"><h3>Chats</h3><button type="button" class="sm ghost x" data-close aria-label="Close the chat list">Close</button></div>
+        <input type="search" id="find" placeholder="Search chats" aria-label="Search chats" autocomplete="off">
+        <ol class="hist" id="hist"></ol>
+        <div class="mbx-row">
+          <button type="button" class="sm ghost" id="import">Import</button>
+          <input type="file" id="import-file" accept="application/json,.json" hidden>
+          <button type="button" class="sm ghost" id="clear-all">Delete all</button>
+        </div>
+        <p class="mbx-note" id="save-note">Chats are saved in this browser only.</p>
+      </aside>
+
+      <section class="conv mbx-panel" aria-label="Conversation">
+        <div class="conv-h">
+          <h3 id="conv-title">New chat</h3>
+          <span class="ctx" id="ctx"><span class="ctx-track"><i id="ctx-bar"></i></span><span class="mbx-mono" id="ctx-t">0 / ? tokens</span></span>
+          <span class="mbx-row">
+            <button type="button" class="sm ghost" id="export-md" title="Download this chat as Markdown">Export .md</button>
+            <button type="button" class="sm ghost" id="export-json" title="Download this chat as JSON (OpenAI messages, settings, timings)">.json</button>
+          </span>
+        </div>
+        <div class="log" id="log" aria-live="polite"></div>
+        <form class="composer" id="composer">
+          <textarea id="msg" rows="1" spellcheck="true" placeholder="Write a message" aria-label="Message" enterkeyhint="enter"></textarea>
+          <div class="mbx-row comp-row">
+            <span class="think-w" id="think" hidden><span class="mbx-label">Thinking</span>
+              <span class="mbx-seg" role="group" aria-label="Thinking"><button type="button" data-think="1">On</button><button type="button" data-think="0">Off</button></span>
+            </span>
+            <span id="hint"></span>
+            <span class="mbx-spacer"></span>
+            <button type="button" class="sm ghost" id="keys" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
+            <button type="button" id="stop" hidden title="Stop the reply (Esc)">Stop</button>
+            <button type="submit" class="pri" id="send">Send</button>
+          </div>
+        </form>
+      </section>
+
+      <aside class="set mbx-panel" id="set" aria-label="Settings">
+        <div class="pane-h"><h3>Settings</h3><button type="button" class="sm ghost x" data-close aria-label="Close the settings">Close</button></div>
+        <div class="grp">
+          <h4>Preset</h4>
+          <div class="mbx-seg" id="preset" role="group" aria-label="Preset">
+            <button type="button" data-p="rec">Recommended</button><button type="button" data-p="greedy">Greedy</button><button type="button" data-p="server">Server</button>
+          </div>
+          <p class="mbx-note" id="preset-note"></p>
+        </div>
+        <div class="grp">
+          <h4>System prompt</h4>
+          <textarea id="system" rows="3" placeholder="Optional. Sent first in this chat." aria-label="System prompt"></textarea>
+        </div>
+        <div class="grp" id="knobs"><h4>Sampling</h4></div>
+        <div class="grp">
+          <h4>Length and seed</h4>
+          <div class="line"><label class="mbx-label" for="k-max">Max new tokens</label><input class="num" type="number" id="k-max" min="1" step="1" placeholder="to limit" inputmode="numeric"></div>
+          <p class="mbx-note">Empty: the reply may run to the end of the context.</p>
+          <div class="line"><label class="mbx-label" for="k-seed">Seed</label><input class="num" type="number" id="k-seed" step="1" placeholder="random" inputmode="numeric"></div>
+          <p class="mbx-note">Same seed and settings, same reply.</p>
+        </div>
+        <div class="grp">
+          <h4>Stop at</h4>
+          <textarea id="k-stop" rows="2" placeholder="One per line; \n for a new line" aria-label="Stop strings"></textarea>
+        </div>
+        <div class="grp"><button type="button" class="sm" id="reset">Reset to recommended</button></div>
+      </aside>
+    </div>
+    <div class="scrim" id="scrim" hidden></div>
+  </section>
+
+  <section class="mbx-tab" id="tab-api">
+    <div class="mbx-room"><span class="mbx-plate">API</span><span class="mbx-room-line">The same server speaks the OpenAI chat format, so any client or coding agent can use it.</span></div>
+    <div class="mbx-panels" style="--mbx-cols: 2">
+      <div class="mbx-panel">
+        <h3>Server</h3>
+        <dl class="kv" id="srv"></dl>
+      </div>
+      <div class="mbx-panel">
+        <h3>This chat as a request</h3>
+        <div class="mbx-row">
+          <div class="mbx-seg" id="lang" role="group" aria-label="Language"><button type="button" data-lang="curl" class="on">curl</button><button type="button" data-lang="python">Python</button></div>
+          <span class="mbx-spacer"></span>
+          <button type="button" class="sm" id="copy-call">Copy</button>
+        </div>
+        <pre class="call" id="call"></pre>
+        <p class="mbx-note">Built from this chat and the settings on the Chat screen.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog class="keys" id="keys-dlg" aria-label="Keyboard shortcuts">
+  <h3>Shortcuts</h3>
+  <dl>
+    <dt><kbd>Enter</kbd></dt><dd>Send</dd>
+    <dt><kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>New line</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Stop the reply</dd>
+    <dt><kbd>↑</kbd></dt><dd>Edit your last message (in an empty box)</dd>
+    <dt><kbd>Ctrl/Cmd</kbd> <kbd>Shift</kbd> <kbd>O</kbd></dt><dd>New chat</dd>
+    <dt><kbd>Ctrl/Cmd</kbd> <kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>Regenerate the last reply</dd>
+    <dt><kbd>/</kbd></dt><dd>Go to the message box</dd>
+    <dt><kbd>?</kbd></dt><dd>This list</dd>
+  </dl>
+  <button type="button" class="sm" id="keys-close">Close</button>
+</dialog>
+<footer data-mbx-foot></footer>
+<script src="ui/chat/chat.js"></script>
+</body>
+</html>

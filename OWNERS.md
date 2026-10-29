@@ -19,7 +19,9 @@ This repo holds one shared core and one set of folders per model. A change to a 
 | `docs/README.md`, `docs/SUMMARY.md`, `docs/google-cloud.md`, `docs/chips.md`, `docs/assets/` | shared docs |
 | `templates/hf/` | Hugging Face card templates, one per model kind |
 | `tools/` | `hf_github_sync_check.py` (keeps the views in sync with `models.json`), `tpu_status.py` (TPU badges) |
+| `src/mashbox/ui/` | the MASHBOX module shell: the top bar, model bar, footer, tokens and fonts every module page loads (`ui/shell/README.md`); MASHBOX Chat, the chat module every chat model serves with `--ui` (`ui/chat/`) |
 | `tests/cpu/test_core.py` | core checks |
+| `tests/cpu/test_module_shell.py` | module page rules: every page loads the shell, copies none of it, and links to real pages |
 | `.github/` | CI, issue forms, pull request template |
 
 ## Per model

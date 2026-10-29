@@ -8,6 +8,15 @@ P2 generate: a second turn that resends turn 1 + the answer + new tokens is serv
    reference = teacher-forced logits of an engine without the cache. A third turn that changes the last message is
    served from the mark (start of the last message).
 P3 two conversations on two slots keep their own cache; a third, new prompt takes the least recently used slot.
+P4 host-memory prompt cache (llama-server --cache-ram): on one slot, conversation A, then an unrelated prompt B takes the
+   slot, then A's next turn is restored from host memory (cached = restored = A's turn-1 length) and decodes exactly
+   the tokens of an engine that served A's two turns back to back; B comes back restored too. With cache_ram=0 the
+   same sequence re-prefills A (cached 0).
+P5 user-message checkpoints (llama-server PR 24176): over many turns the point at the first user message (the end of the
+   tools and system prompt) is kept within the per-slot limit, and a compacted conversation (same start, new history)
+   resumes there; its tokens are the reference argmax within 0.05 logits.
+P6 a row ended by on_step (client gone, stop string) stops at that step; the other row decodes the reference tokens and the
+   ended conversation's next turn is served from the cache.
 """
 import json
 import os
@@ -81,6 +90,68 @@ rc = pc.generate([rng.integers(1, 512, 40).tolist()], max_new=4)
 R["P3_new_prompt"] = dict(cached=rc["cached"][0], slot=rc["slots"][0])
 R["P3_pass"] = R["P3_pass"] and rc["cached"][0] == 0
 R["stats"] = pc.stats
+
+# P4 ------------------------------------------------------------------------------------------------------------------
+h = Engine(cfg, W, Q, CTX=512, S=1, K=4, prefix_cache=True)
+u1 = Engine(cfg, W, Q, CTX=512, S=1, K=4, prefix_cache=True)
+off = Engine(cfg, W, Q, CTX=512, S=1, K=4, prefix_cache=True, cache_ram=0)
+a1 = rng.integers(1, 512, 140).tolist()
+b1 = rng.integers(1, 512, 90).tolist()
+ra1 = h.generate([a1], max_new=12, marks=[[60, 120]])
+rb1 = h.generate([b1], max_new=6, marks=[[50, 80]])
+a2 = a1 + ra1["ids"][0] + rng.integers(1, 512, 40).tolist()
+ra2 = h.generate([a2], max_new=16, marks=[[60, 120, 152]])
+q1 = u1.generate([a1], max_new=12, marks=[[60, 120]])
+q2 = u1.generate([a2], max_new=16, marks=[[60, 120, 152]])
+o = [off.generate([x], max_new=6) for x in (a1, b1, a2)]
+b2 = b1 + rb1["ids"][0] + rng.integers(1, 512, 9).tolist()
+rb2 = h.generate([b2], max_new=4)
+R["P4"] = dict(cached=ra2["cached"][0], restored=ra2["restored"][0], expect=len(a1), same_tokens_as_uninterrupted=ra2["ids"][0] == q2["ids"][0],
+               uninterrupted_cached=q2["cached"][0], off_cached=o[2]["cached"][0], b_restored=rb2["restored"][0], saves=h.stats["saves"],
+               host_entries=len(h.host.items), host_mb=round(h.host.nbytes() / 2 ** 20, 2))
+# three conversations taking turns on one slot (several saved entries at once), each comes back restored
+cs = [rng.integers(1, 512, 60 + 10 * k).tolist() for k in range(3)]
+for c_ in cs:
+    h.generate([c_], max_new=4)
+back = [h.generate([c_ + [7, 8, 9]], max_new=4)["restored"][0] for c_ in cs]
+R["P4"]["three_rotating_restored"] = back
+R["P4_pass"] = back == [len(c_) for c_ in cs] and (ra2["cached"][0] == ra2["restored"][0] == len(a1) == q2["cached"][0] and ra1["ids"][0] == q1["ids"][0]
+                and ra2["ids"][0] == q2["ids"][0] and o[2]["cached"][0] == 0 and rb2["restored"][0] == len(b1) and h.stats["saves"] >= 2)
+
+# P5 ------------------------------------------------------------------------------------------------------------------
+cp = Engine(cfg, W, Q, CTX=512, S=1, K=4, prefix_cache=True, ckpt_step=64)
+sysp = rng.integers(1, 512, 100).tolist()
+conv, msgs = sysp + rng.integers(1, 512, 20).tolist(), [100]
+kept = []
+for turn in range(9):
+    r_ = cp.generate([conv], max_new=4, marks=[msgs + [len(conv) - 2]])     # user starts, then a last-message point
+    kept.append(sorted(len(x["ids"]) for x in cp.snaps[0]))
+    msgs = msgs + [len(conv) + len(r_["ids"][0])]
+    conv = conv + r_["ids"][0] + rng.integers(1, 512, 25).tolist()
+comp = sysp + rng.integers(1, 512, 30).tolist()
+rc_ = cp.generate([comp], max_new=8, marks=[[100, len(comp) - 2]])
+R["P5"] = dict(points_per_turn=kept, last_prompt=len(conv), compacted_cached=rc_["cached"][0], expect=100,
+               max_gap=max(gaps(ref, comp, rc_["ids"][0])))
+R["P5_pass"] = (rc_["cached"][0] == 100 and R["P5"]["max_gap"] < 0.05 and all(100 in k and len(k) <= cp.ckpts for k in kept))
+# P6 ------------------------------------------------------------------------------------------------------------------
+# a row that on_step ends (client gone, stop string found) stops at that step; the other row of the batch decodes the
+# reference tokens, and the ended conversation's next turn is still served from the cache
+cx = Engine(cfg, W, Q, CTX=512, S=2, K=4, prefix_cache=True)
+v = [rng.integers(1, 512, 80).tolist(), rng.integers(1, 512, 70).tolist()]
+
+
+def end_row0(ids, fin):
+    return [0] if len(ids[0]) >= 5 else []
+
+
+rx = cx.generate(v, max_new=40, on_step=end_row0)
+v2 = v[0] + rx["ids"][0] + rng.integers(1, 512, 12).tolist()
+rx2 = cx.generate([v2], max_new=8)
+R["P6"] = dict(finish=rx["finish"], row0_tokens=len(rx["ids"][0]), row1_tokens=len(rx["ids"][1]),
+               row1_max_gap=max(gaps(ref, v[1], rx["ids"][1])), next_cached=rx2["cached"][0], expect=len(v[0]),
+               next_max_gap=max(gaps(ref, v2, rx2["ids"][0])))
+R["P6_pass"] = (rx["finish"][0] == "cancel" and len(rx["ids"][0]) == 5 and rx["finish"][1] in ("stop", "length")
+                and R["P6"]["row1_max_gap"] < 0.05 and rx2["cached"][0] == len(v[0]) and R["P6"]["next_max_gap"] < 0.05)
 R["ALL_PASS"] = all(v for k, v in R.items() if k.endswith("_pass"))
 print(json.dumps(R))
 sys.exit(0 if R["ALL_PASS"] else 1)

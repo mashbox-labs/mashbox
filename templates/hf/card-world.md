@@ -10,7 +10,7 @@ ${badges}
 
 ### Read our guide: [run ${name} on TPU](${docs_url})
 
-${summary} One install and one command, from a new Google account to a running model. Made by ${maker}, ported to TPU by MASHBOX Labs.
+${summary} Made by ${maker}, ported to TPU by MASHBOX Labs.
 
 ${highlights}
 
@@ -21,7 +21,7 @@ ${hero}
 On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](${agents_url})):
 
 ```bash
-python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"
+${install}
 ${run}
 ```
 
@@ -51,4 +51,4 @@ ${links_table}
 
 ## Licence
 
-${weights_licence}; code: ${our_license} (MASHBOX Labs). ${upstream_licence_file}${kernels_license}
+${weights_licence}; code: ${our_license} (MASHBOX Labs). ${upstream_licence_source}${own_files_licence}${kernels_license}

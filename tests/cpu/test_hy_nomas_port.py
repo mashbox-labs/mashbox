@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -71,10 +72,13 @@ def session(rt, n=3, order=("seg1", "seg2", "act")):
 
 
 # ------------------------------------------------------------------ app files
-def test_page_copy_matches_app():
-    a = open(os.path.join(ROOT, "apps", "hy-nomas", "page.html"), "rb").read()
-    b = open(os.path.join(ROOT, "src", "mashbox", "models", "hy_nomas", "page.html"), "rb").read()
-    assert a == b, "src/mashbox/models/hy_nomas/page.html must be a copy of apps/hy-nomas/page.html"
+def test_world_page_has_one_source():
+    """The world page lives once, in the package (the installed app serves it); no second copy to drift."""
+    pages = sorted(os.path.relpath(os.path.join(d, f), ROOT).replace(os.sep, "/")
+                   for top in ("apps", "src")
+                   for d, _, fs in os.walk(os.path.join(ROOT, top)) for f in fs
+                   if f == "page.html" and ("hy-nomas" in d or "hy_nomas" in d))
+    assert pages == ["src/mashbox/models/hy_nomas/page.html"], pages
 
 
 def test_upstream_pins():
@@ -263,11 +267,13 @@ def test_app_server_against_stub():
     try:
         assert srv.server_address[0] == "127.0.0.1"
         base = "http://127.0.0.1:%d" % port
-        assert b"<title>" in urllib.request.urlopen(base + "/", timeout=5).read()
+        page = urllib.request.urlopen(base + "/", timeout=5).read()
+        assert b"<title>" in page
+        tok = re.search(rb'<meta name="mbx-token" content="([^"]+)">', page).group(1).decode()   # POST needs this run's token
         st = json.loads(urllib.request.urlopen(base + "/api/state", timeout=5).read())
         assert st["stub"] and len(st["worlds"]) >= 1
         req = lambda p, b: json.loads(urllib.request.urlopen(urllib.request.Request(base + p, json.dumps(b).encode(),
-                                                                                   {"Content-Type": "application/json"}), timeout=5).read())
+                                      {"Content-Type": "application/json", "X-Mashbox-Token": tok}), timeout=5).read())
         assert req("/api/world", dict(mode="preset", id=st["worlds"][0]["id"]))["ok"]
         assert req("/api/settings", dict(preset="live", gain=3.0))["settings"]["preset"] == "live"
         t0 = time.time()
@@ -302,6 +308,7 @@ def test_app_server_same_machine_only_and_bad_seeds():
     port = free_port()
     srv = live.start(port)
     base = "http://127.0.0.1:%d" % port
+    tok = re.search(rb'<meta name="mbx-token" content="([^"]+)">', urllib.request.urlopen(base + "/", timeout=5).read()).group(1).decode()
 
     def code(p, body=None, **h):
         r = urllib.request.Request(base + p, None if body is None else json.dumps(body).encode(), h)
@@ -313,12 +320,12 @@ def test_app_server_same_machine_only_and_bad_seeds():
 
     def ws(origin):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
-        c.request("GET", "/ws", headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Version": "13",
+        c.request("GET", "/ws?token=" + tok, headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Version": "13",
                                          "Sec-WebSocket-Key": base64.b64encode(b"the sample nonce").decode(), "Origin": origin})
         st = c.getresponse().status
         c.close()
         return st
-    J = {"Content-Type": "application/json"}
+    J = {"Content-Type": "application/json", "X-Mashbox-Token": tok}      # POST needs this run's token
     try:
         assert code("/") == 200 and code("/", Host="localhost:%d" % (port + 1)) == 200   # a tunnel on another local port
         assert code("/", Host="evil.example:%d" % port) == 403 and code("/api/state", Host="evil.example") == 403

@@ -15,8 +15,8 @@ Model code is open. Each model's TPU kernels ship compiled, as one bundle that `
 ## Models
 
 <!-- models:start -->
-- [Qwen3.8-27B](https://mashbox.gg/docs/models/qwen3-8-27b): text in, text out. LLM.
-- Hy-Nomas: coming soon. World model.
+- [Hy-Nomas](https://mashbox.gg/docs/models/hy-nomas): text and movement keys in, video out. World model. Runs on: TPU v6e slice (v6e-4).
+- [Qwen3.8-27B](https://mashbox.gg/docs/models/qwen3-8-27b): text in, text out. LLM. Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1), TPU v6e slice (v6e-4).
 <!-- models:end -->
 
 ## Optional

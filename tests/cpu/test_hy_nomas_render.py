@@ -1,7 +1,7 @@
 """`mashbox run hy-nomas --out`: every part of every window reaches the clip.
 
 The decoder threads count a part as done before its frames are copied to the host and handed on, so the window barrier can
-return while the last part's frames are still on their way (on a TPU v6e-4 on 28 October 2026 this stopped the documented
+return while the last part's frames are still on their way (on a TPU v6e-4 this stopped the documented
 --out command at window 2 with KeyError (1, 0)). Here part 0's host copy is slow on purpose; the clip must still get every
 frame in order.
 """
@@ -9,6 +9,7 @@ import argparse
 import time
 
 import numpy as np
+import pytest
 
 from mashbox.models.hy_nomas import app, cameras, server
 from mashbox.models.hy_nomas.server import Engine
@@ -108,7 +109,7 @@ def test_out_clip_gets_every_part(monkeypatch, tmp_path):
     monkeypatch.setattr(app.subprocess, 'Popen', lambda cmd, *x, **k: _FF() if cmd[0] == 'fake-ffmpeg' else real(cmd, *x, **k))
     model = _Model()
     eng = Engine(model, log=lambda s: None)
-    a = argparse.Namespace(world='frog', windows=3, keys='w;w,left;w', preset='quality', seed=2701, out=str(tmp_path / 'out.mp4'))
+    a = argparse.Namespace(world='eagle', windows=3, keys='w;w,left;w', preset='quality', seed=2701, out=str(tmp_path / 'out.mp4'))
     assert app.render(eng, model, a) == 0
     fr = np.frombuffer(b''.join(_FF.last.chunks), np.uint8).reshape(-1, 2, 2, 3)
     assert fr.shape[0] == 4 * FRAMES * a.windows                # every latent's 4 frames once: overlaps are blended, not repeated
@@ -118,3 +119,16 @@ def test_out_clip_gets_every_part(monkeypatch, tmp_path):
     seq = [(int(f[0, 0, 2]), int(f[0, 0, 0])) for k, f in enumerate(fr) if k not in blended]
     runs = [x for k, x in enumerate(seq) if k == 0 or x != seq[k - 1]]
     assert runs == [(w, j) for w in range(a.windows) for j in range(3)]
+
+
+def test_frog_world_is_gone(capsys):
+    """The presets are eagle (default), fish, mars and moon. `--world frog` is refused like any unknown id: the command
+    line stops before any model loads, and the app's world call raises KeyError, which the server answers with 404."""
+    assert list(server.worlds()) == ['eagle', 'fish', 'mars', 'moon']
+    assert app.parser('run').parse_args([]).world == 'eagle'
+    with pytest.raises(SystemExit) as e:
+        app.main('run', ['--out', 'out.mp4', '--world', 'frog'])
+    assert e.value.code == 2 and "invalid choice: 'frog'" in capsys.readouterr().err
+    live = server.Live(server.StubEngine(lambda *a: None), lambda *a: None, hw='STUB', stub=True)
+    with pytest.raises(KeyError):
+        live.api('/api/world', {'mode': 'preset', 'id': 'frog'})

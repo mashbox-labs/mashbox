@@ -2,23 +2,31 @@
 
 Routes: GET /health, GET /v1/models, POST /v1/chat/completions (with tools), POST /v1/completions,
 POST /v1/messages and /v1/messages/count_tokens (Anthropic Messages, for Claude Code), POST /v1/responses (OpenAI
-Responses, for Codex); stream true or false. See agents.py for the coding-agent APIs.
+Responses, for Codex); stream true or false. See agents.py for the coding-agent APIs. Every route, request field and
+response shape is in runtime/openapi.py, served at GET /openapi.json (tests/cpu/test_openapi.py keeps the two equal).
+With ui=True (`mashbox run <model> --ui`) GET / is the MASHBOX Chat page (mashbox.ui.chat) and /ui/... its files.
 Requests sent together (within GATHER_S of the first) run as one batch of up to S rows (the engine's slot count), so
 several users share each decode step. Requests that arrive while a batch is running wait for it to finish, then run
 together as the next batch. Send "merge": false to run a request alone.
 
 Who may call it (runtime/guard.py): a request must name the server as localhost, 127.0.0.1, [::1], another IP address
-or its own --host (a DNS-rebinding page names its own domain and is refused); a browser request must come from the
-server's own origin; a POST must be Content-Type application/json, so a web page cannot send one without a CORS
-preflight, which this server never approves. Clients that are not browsers (curl, SDKs, coding agents) pass as before.
-With API keys (cli.py: --api-key-file or MASHBOX_API_KEY; made for you when --host is not loopback) every /v1 request
-needs one (Authorization: Bearer or x-api-key), and each key's prompts have a prefix cache of their own: a cached prompt
-is reused, and reported as cached_tokens, only for requests made with the same key.
+or its own --host (a DNS-rebinding page names its own domain and is refused; with API keys any name, the key is the
+check; MASHBOX_ALLOW_HOSTS adds names to a server without keys); a browser request must come from the
+server's own origin (the chat page); a POST must be Content-Type application/json, so a web page cannot send one without
+a CORS preflight, which this server never approves. Clients that are not browsers (curl, SDKs, coding agents) pass as
+before. With API keys (cli.py: --api-key-file or MASHBOX_API_KEY; made for you when --host is not loopback) every /v1 and
+/openapi.json request needs one (Authorization: Bearer or x-api-key), and each key's prompts have a prefix cache of
+their own: a cached prompt is reused, and reported as cached_tokens, only for requests made with the same key.
+A request whose client hangs up is ended, waiting or running, streamed or not; at most MAX_WAITING wait at once (more
+get 429 with Retry-After).
 """
 import collections
+import hashlib
 import json
 import os
 import queue
+import select
+import socket
 import sys
 import threading
 import time
@@ -30,8 +38,27 @@ from . import guard as G
 from .agents import BadRequest, TooLong
 
 GATHER_S = 0.02      # how long the first request of a batch waits for others sent at the same time
+MAX_WAITING = 256    # requests waiting for a batch at once; more get 429 + Retry-After (the queue is never unbounded)
 KNOBS = dict(max_tokens=512, temperature=0.0, top_p=1.0, top_k=0, min_p=0.0, seed=None, stop=None,
              repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0)
+
+
+def session_of(headers, b):
+    """Short, stable tag for the client session a request belongs to, so the log can tell several agents apart: Claude
+    Code's X-Claude-Code-Session-Id header, Codex's prompt_cache_key, or an X-Session-Id header any client can set.
+    Logged as the first 8 hex digits of its sha256 (the id itself is not kept); None when the client sends none."""
+    key = (headers.get("X-Claude-Code-Session-Id") or b.get("prompt_cache_key") or headers.get("X-Session-Id")
+           or headers.get("session_id"))
+    return hashlib.sha256(str(key).encode()).hexdigest()[:8] if key else None
+
+
+def agent_of(headers, b):
+    """Short tag for the subagent a request comes from, None for the main conversation. Subagents send the parent's session
+    id (session_of), so the log needs a second key: Claude Code's x-claude-code-agent-id header (one per subagent), or
+    Codex's x-openai-subagent header. Codex 0.165 subagents also send the parent's session-id and prompt_cache_key and no
+    id of their own, so all subagents of one Codex session share one tag. Logged as 8 hex of sha256."""
+    key = headers.get("x-claude-code-agent-id") or headers.get("X-Agent-Id") or headers.get("x-openai-subagent")
+    return hashlib.sha256(str(key).encode()).hexdigest()[:8] if key else None
 
 
 def knobs_of(b, max_key=None):
@@ -78,6 +105,10 @@ def samp_of(k):
                 presence_penalty=k["presence_penalty"])
 
 
+class Busy(Exception):
+    pass
+
+
 class Text:
     """Incremental detokenisation with stop strings: emits only text that can no longer change."""
 
@@ -102,7 +133,9 @@ class Server:
         self.log = log or (lambda m: print(m, file=sys.stderr, flush=True))
         im = chat.encode("<|im_start|>")
         self.im_start = im[0] if len(im) == 1 else None
+        self.user = tuple(chat.encode("user"))
         self.q = queue.Queue()
+        self.waiting, self.wlock = 0, threading.Lock()
         self.ready = False
         threading.Thread(target=self.loop, daemon=True).start()
 
@@ -134,14 +167,29 @@ class Server:
             self.run(batch)
 
     def run(self, batch):
+        with self.wlock:
+            self.waiting -= len(batch)
+        for j in [j for j in batch if j.get("cancel")]:       # the client left while it waited: nothing to run
+            j["error"] = ConnectionResetError("client closed the connection")
+            j["ev"].set()
+            if j.get("stream") is not None:
+                j["stream"].put(None)
+        batch = [j for j in batch if not j.get("cancel")]
+        if not batch:
+            return
         mx = max(j["max_new"] for j in batch)
+        t_run = time.monotonic()
+        for j in batch:                 # time spent waiting for the slot(s), logged as queue_s
+            j["t_run"] = t_run
 
         def tap(ids, fin):
             for i, j in enumerate(batch):
                 if "cached" not in j:
                     j["cached"] = (getattr(self.engine, "cached_now", None) or [0] * len(batch))[i]
-                if j.get("stream") is not None:
+                if j.get("stream") is not None and not j.get("cancel"):
                     j["stream"].put((ids[i][:j["max_new"]], fin[i] is not None or len(ids[i]) >= j["max_new"], fin[i]))
+            # rows whose client hung up or whose stop string was found: the engine ends them at this step
+            return [i for i, j in enumerate(batch) if j.get("cancel")]
         try:
             kw = dict(marks=[j.get("mark") for j in batch]) if getattr(self.engine, "prefix_cache", False) else {}
             if kw and any(j.get("scope") is not None for j in batch):     # API keys: each key's cache is its own
@@ -151,7 +199,8 @@ class Server:
             for i, j in enumerate(batch):
                 ids = r["ids"][i]
                 j["result"] = dict(ids=ids[:j["max_new"]], finish="length" if len(ids) >= j["max_new"] else (r["finish"][i] or "length"),
-                                   batch_rows=len(batch), timing=r["timing"], cached=(r.get("cached") or [0] * len(batch))[i])
+                                   batch_rows=len(batch), timing=r["timing"], cached=(r.get("cached") or [0] * len(batch))[i],
+                                   restored=(r.get("restored") or [0] * len(batch))[i])
         except Exception as e:      # reported to every request of the batch
             for j in batch:
                 j["error"] = e
@@ -171,8 +220,20 @@ class Server:
             raise BadRequest(f"prompt ({len(ids)} tokens) + max_tokens ({k['max_tokens']}) is over the context of {self.engine.CTX}")
         job = dict(ids=ids, max_new=k["max_tokens"], samp=samp_of(k), merge=merge, ev=threading.Event(),
                    stream=queue.Queue() if stream else None, mark=mark, scope=scope)
+        with self.wlock:
+            if self.waiting >= MAX_WAITING:
+                raise Busy(f"server busy: {self.waiting} requests are waiting; try again shortly")
+            self.waiting += 1
         self.q.put(job)
         return job
+
+    @staticmethod
+    def wait(job, gone):
+        """Wait for a job that streams nothing to its client; end it if the client hangs up meanwhile."""
+        while not job["ev"].wait(0.25):
+            if gone is not None and gone():
+                job["cancel"] = True
+                raise ConnectionResetError("client closed the connection")
 
     # -------------------------------------------------------------------------------------------------- routes
     def prompt_ids(self, b, chat):
@@ -218,6 +279,9 @@ class Server:
                 if tx.done:
                     continue
                 delta = tx.update(got, final=done)
+                done = done or tx.done
+                if tx.done:
+                    job["cancel"] = True
                 if done:
                     finish = "stop" if (fin == "stop" or tx.done) else "length"
                 if delta or done:
@@ -226,12 +290,17 @@ class Server:
                         ch["delta"] = dict(content=delta)
                     else:
                         ch["text"] = delta
-                    write_sse(dict(id=rid, object=obj + ".chunk" if chat else obj, created=created, model=self.model_id, choices=[ch]))
+                    try:
+                        write_sse(dict(id=rid, object=obj + ".chunk" if chat else obj, created=created, model=self.model_id,
+                                       choices=[ch]))
+                    except (BrokenPipeError, ConnectionResetError):
+                        job["cancel"] = True        # the client hung up: the engine ends this row at its next step
+                        raise
             job["ev"].wait()
             if "error" in job:
                 raise job["error"]
             return None
-        job["ev"].wait()
+        self.wait(job, (meta or {}).get("gone"))
         if "error" in job:
             raise job["error"]
         r = job["result"]
@@ -247,14 +316,18 @@ class Server:
 
 
     # -------------------------------------------------------------------------------------------------- agent APIs
-    def mark_of(self, ids):
-        """start of the last message block (its <|im_start|>), remembered by the prefix cache next to the prompt end"""
+    def marks_of(self, ids):
+        """Points the prefix cache may remember besides the prompt end: the start (<|im_start|>) of every user message,
+        then the start of the last message. The engine keeps the last one always and the others as llama.cpp keeps its
+        user-message checkpoints (the first, then at least --checkpoint-min-step apart), so a compacted or new
+        conversation with the same tools and system prompt resumes after them."""
         if self.im_start is None:
             return None
-        for j in range(len(ids) - 1, 0, -1):
-            if ids[j] == self.im_start:
-                return j
-        return None
+        u, n = self.user, len(self.user)
+        at = [j for j in range(1, len(ids)) if ids[j] == self.im_start]
+        if not at:
+            return None
+        return sorted(set([j for j in at if tuple(ids[j + 1:j + 1 + n]) == u] + [at[-1]]))
 
     def run_chat(self, msgs, tools, think, k, merge=True, on_start=None, on_event=None, meta=None):
         """Render, generate, parse. on_start(prompt_tokens) runs once the request is accepted; on_event(ev) gets each
@@ -264,41 +337,77 @@ class Server:
             ids = self.chat.chat_ids(msgs, think, tools or None)
         except Exception as e:
             raise BadRequest(f"chat template: {e}")
-        job = self.submit(ids, k, merge, True, mark=self.mark_of(ids), clamp=True, scope=(meta or {}).get("scope"))
-        if on_start is not None:
-            on_start(len(ids))
+        job = self.submit(ids, k, merge, True, mark=self.marks_of(ids), clamp=True, scope=(meta or {}).get("scope"))
+        gone_fn = (meta or {}).get("gone")
         par, tx = A.OutParser(tools, think), Text(self.chat, k["stop"])
         out = dict(text=[], reasoning=[], calls=[], finish="length", stop_sequence=None)
-        t_first, n_out = None, 0
-        while True:
-            ev = job["stream"].get()
-            if ev is None:
-                break
-            got, done, fin = ev
-            if tx.done:
-                continue
-            n_out = len(got)
-            if t_first is None and got:
-                t_first = time.monotonic()
-            delta = tx.update(got, final=done)
-            end = done or tx.done
-            for e in par.feed(delta, final=end):
-                (out["calls"].append(e[1:]) if e[0] == "tool" else out[e[0]].append(e[1]))
-                if on_event is not None:
-                    on_event(e)
-            if end:
-                out["finish"] = "stop" if (fin == "stop" or tx.done) else "length"
+        t_first, t_last, n_out, gone = None, None, 0, None
+        closed = (meta or {}).get("closed")       # streaming: () -> True once the client has closed its side
+        try:
+            if on_start is not None:
+                on_start(len(ids))
+            t_chk = time.monotonic()
+            while True:
+                try:
+                    ev = job["stream"].get(timeout=0.25)
+                except queue.Empty:
+                    ev = False
+                if gone_fn is not None and time.monotonic() - t_chk >= 0.25:  # a client that hangs up mid-answer when
+                    t_chk = time.monotonic()                                    # nothing is written to it (waiting,
+                    if gone_fn():                                               # prefill, not streamed) ends it too
+                        raise ConnectionResetError("client closed the connection")
+                if ev is False:
+                    continue
+                if ev is None:
+                    break
+                if closed is not None and closed():
+                    raise BrokenPipeError("client closed the connection")
+                got, done, fin = ev
                 if tx.done:
-                    out["stop_sequence"] = next((s for s in k["stop"] or [] if s in self.chat.decode(got)), None)
+                    continue
+                n_out = len(got)
+                t_last = time.monotonic()
+                if t_first is None and got:
+                    t_first = t_last
+                delta = tx.update(got, final=done)
+                end = done or tx.done
+                if tx.done:
+                    job["cancel"] = True         # stop string found: the engine ends this row at its next step
+                for e in par.feed(delta, final=end):
+                    (out["calls"].append(e[1:]) if e[0] == "tool" else out[e[0]].append(e[1]))
+                    if on_event is not None:
+                        on_event(e)
+                if end:
+                    out["finish"] = "stop" if (fin == "stop" or tx.done) else "length"
+                    if tx.done:
+                        out["stop_sequence"] = next((s for s in k["stop"] or [] if s in self.chat.decode(got)), None)
+        except (BrokenPipeError, ConnectionResetError) as e:
+            job["cancel"], gone, out["finish"] = True, e, "client_closed"    # the engine ends this row at its next step
         job["ev"].wait()
         if "error" in job:
             raise job["error"]
         cached = job.get("cached", job.get("result", {}).get("cached", 0))
         out["usage"] = dict(prompt=len(ids), completion=n_out, cached=cached)
-        self.log(json.dumps(dict(event="request", api=(meta or {}).get("api"), ua=(meta or {}).get("ua"), prompt_tokens=len(ids),
-                                 cached_tokens=cached, new_tokens=n_out, tools=len(tools or []), tool_calls=len(out["calls"]),
+        # llama-server's timings block: prompt = queue end to first token (restore + prefill of the uncached tokens),
+        # predicted = first to last token; predicted_per_second = tokens after the first / that time (decode only)
+        t_run = job.get("t_run", t0)
+        p_ms = ((t_first or time.monotonic()) - t_run) * 1e3
+        g_ms = ((t_last or 0) - (t_first or 0)) * 1e3
+        out["timings"] = dict(prompt_n=len(ids) - cached, prompt_ms=round(p_ms, 1),
+                              prompt_per_second=round((len(ids) - cached) / p_ms * 1e3, 2) if p_ms > 0 else None,
+                              predicted_n=n_out, predicted_ms=round(g_ms, 1),
+                              predicted_per_second=round((n_out - 1) / g_ms * 1e3, 2) if n_out > 1 and g_ms > 0 else None,
+                              cache_n=cached, queue_ms=round((t_run - t0) * 1e3, 1))
+        self.log(json.dumps(dict(event="request", t=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), api=(meta or {}).get("api"),
+                                 ua=(meta or {}).get("ua"), model=(meta or {}).get("model"), session=(meta or {}).get("session"),
+                                 agent=(meta or {}).get("agent"), queue_s=round(job.get("t_run", t0) - t0, 3), prompt_tokens=len(ids),
+                                 cached_tokens=cached, restored_tokens=job.get("result", {}).get("restored", 0), new_tokens=n_out, tools=len(tools or []), tool_calls=len(out["calls"]),
                                  thinking=bool(think), finish=out["finish"], dropped_tools=(meta or {}).get("dropped_tools"), batch_rows=job.get("result", {}).get("batch_rows"),
-                                 ttft_s=round((t_first or time.monotonic()) - t0, 3), total_s=round(time.monotonic() - t0, 3))))
+                                 ttft_s=round((t_first or time.monotonic()) - t0, 3), total_s=round(time.monotonic() - t0, 3),
+                                 prompt_ms=out["timings"]["prompt_ms"], predicted_ms=out["timings"]["predicted_ms"],
+                                 predicted_per_second=out["timings"]["predicted_per_second"])))
+        if gone is not None:
+            raise gone
         return out
 
     def count_tokens(self, b):
@@ -339,9 +448,9 @@ class Server:
         usage = dict(prompt_tokens=u["prompt"], completion_tokens=u["completion"], total_tokens=u["prompt"] + u["completion"],
                      prompt_tokens_details=dict(cached_tokens=u["cached"]))
         if sse:
-            sse.data(dict(head, choices=[dict(index=0, delta={}, finish_reason=fin)]))
+            sse.data(dict(head, choices=[dict(index=0, delta={}, finish_reason=fin)], timings=r["timings"]))
             if (b.get("stream_options") or {}).get("include_usage"):
-                sse.data(dict(head, choices=[], usage=usage))
+                sse.data(dict(head, choices=[], usage=usage, timings=r["timings"]))
             sse.done()
             return None
         msg = dict(role="assistant", content="".join(r["text"]) or (None if r["calls"] else ""))
@@ -351,7 +460,7 @@ class Server:
             msg["tool_calls"] = [dict(id=A.rid("call_"), type="function", function=dict(name=n, arguments=json.dumps(a, ensure_ascii=False)))
                                  for n, a in r["calls"]]
         return dict(id=cid, object="chat.completion", created=created, model=self.model_id,
-                    choices=[dict(index=0, message=msg, finish_reason=fin)], usage=usage)
+                    choices=[dict(index=0, message=msg, finish_reason=fin)], usage=usage, timings=r["timings"])
 
     def anthropic(self, b, sse=None, meta=None):
         k = knobs_of(b, "max_tokens")
@@ -466,7 +575,8 @@ class Server:
                         it["namespace"] = ns
                 items.append(it)
                 if sse:
-                    ev("response.output_item.added", output_index=len(items) - 1, item=dict(it, status="in_progress"))
+                    ev("response.output_item.added", output_index=len(items) - 1,      # empty: the value comes in the delta
+                       item=dict(it, status="in_progress", **({"arguments": ""} if it["type"] == "function_call" else {"input": ""})))
                     if it["type"] == "function_call":
                         ev("response.function_call_arguments.delta", item_id=it["id"], output_index=len(items) - 1, delta=it["arguments"])
                         ev("response.function_call_arguments.done", item_id=it["id"], output_index=len(items) - 1,
@@ -530,6 +640,15 @@ class SSE:
         h.close_connection = True
         self.started = True
 
+    def closed(self):
+        """The client has closed its side. A write alone does not show it behind an SSH tunnel (the tunnel keeps taking
+        bytes), so check the socket as llama-server does: readable, and a 1-byte peek reads nothing."""
+        s = self.h.connection
+        try:
+            return bool(select.select([s], [], [], 0)[0]) and s.recv(1, socket.MSG_PEEK) == b""
+        except (OSError, ValueError):
+            return True
+
     def _w(self, b):
         self.h.wfile.write(b)
         self.h.wfile.flush()
@@ -551,6 +670,11 @@ class SSE:
             self.done()
 
 
+
+# POST routes by their runtime/openapi.py ROUTES id; the server finds a request's route only through openapi.route.
+POST_API = {"createChatCompletion": "chat", "createCompletion": "completions", "createMessage": "anthropic",
+            "countTokens": "count_tokens", "createResponse": "responses"}
+
 def key_scope(headers, keys):
     """The index of the API key a request carries (Authorization: Bearer or x-api-key), None when it carries none of them.
     Every key is compared in full, in constant time."""
@@ -564,35 +688,51 @@ def key_scope(headers, keys):
     return hit
 
 
-def serve(server, host="127.0.0.1", port=8000, log=print, keys=None):
-    """keys: API keys a request must carry on /v1 (None or empty: no key). Each key is its own prefix cache scope.
-    /health stays open, as llama-server's public endpoints."""
+def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
+    """keys: API keys a request must carry on /v1 and /openapi.json (None or empty: no key). Each key is its own prefix
+    cache scope. The chat page, its files and /health stay open, as llama-server's public endpoints."""
     S = server
     keys = [k for k in (keys or []) if k]
     guard = G.Guard(hosts=[host])
+    if keys:            # the key guards every API route, so any name may reach the server (a VM's DNS name, a proxy)
+        guard.host_ok = lambda h: True
+    UI = None
+    if ui:                                     # the chat page at / and its files under /ui/
+        from ..ui import chat as UI
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         scope = None
 
-        def _gate(self, key=True):
-            """Host, Origin and Content-Type for every request, and the API key when `key`. True = answered (refused)."""
-            err = guard.check(self.command, self.path, self.headers, auth=False)
+        def _gate(self, key=True, anth=False):
+            """Host, Origin and Content-Type for every request, and the API key when `key`. True = answered (refused),
+            in the Anthropic error shape when `anth` (the route's family in runtime/openapi.py)."""
+            err = guard.check(self.command, None, self.headers, auth=False)   # no session token here: no path needed
             if err is None and keys and key:
                 self.scope = key_scope(self.headers, keys)
                 if self.scope is None:
                     err = (401, "missing or wrong API key: send Authorization: Bearer <key> or x-api-key: <key>")
             if err is None:
                 return False
-            anth = self.path.startswith("/v1/messages")
             typ = {401: "authentication_error", 403: "permission_error"}.get(err[0], "invalid_request_error")
             self._err(err[0], err[1], typ, anth=anth)
             self.close_connection = True
             return True
 
+        def _gone(self):
+            """True once the client has closed its end of the connection (a request is answered whole, so nothing else
+            arrives on it while one runs)."""
+            try:
+                r, _, _ = select.select([self.connection], [], [], 0)
+                return bool(r) and self.connection.recv(1, socket.MSG_PEEK) == b""
+            except (OSError, ValueError):
+                return True
+
         def _send(self, code, obj):
             body = json.dumps(obj).encode()
             self.send_response(code)
+            if code == 429:
+                self.send_header("Retry-After", "1")
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -613,23 +753,39 @@ def serve(server, host="127.0.0.1", port=8000, log=print, keys=None):
 
         def do_GET(self):
             path = self.path.split("?")[0].rstrip("/") or "/"
-            if self._gate(key=path not in ("/health", "/v1/health", "/")):      # /health needs no key
+            if self._gate(key=False):                    # the chat page and /health need no key
                 return
-            if path in ("/health", "/v1/health", "/"):
+            hit = UI.handle(path, S.model_id) if UI is not None else None
+            if hit is not None:
+                self.send_response(200)
+                self.send_header("Content-Type", hit[1])
+                self.send_header("Content-Length", str(len(hit[0])))
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return self.wfile.write(hit[0])
+            from . import openapi                         # one route table for the server and its spec (as FastAPI)
+            route, params = openapi.route("get", path)
+            op = route and route["id"]
+            if op in ("health", "healthShort", "root"):
                 return self._send(200 if S.ready else 503, dict(status="ok" if S.ready else "loading"))
-            if path == "/v1/models":
+            if self._gate():
+                return
+            if op == "listModels":
                 return self._send(200, S.models())
-            if path.startswith("/v1/models/"):
+            if op == "openapi":                          # the OpenAPI 3.1 description (runtime/openapi.py)
+                return self._send(200, openapi.spec(S))
+            if op == "getModel":
                 m = S.models()["data"][0]
-                return self._send(200, m) if path.endswith("/" + m["id"]) else self._err(404, f"model {path.rsplit('/', 1)[1]} not found")
+                return self._send(200, m) if params["model"] == m["id"] else self._err(404, f"model {params['model']} not found")
             self._err(404, "not found")
 
         def do_POST(self):
             path = self.path.split("?")[0].rstrip("/")
-            api = {"/v1/chat/completions": "chat", "/v1/completions": "completions", "/v1/messages": "anthropic",
-                   "/v1/messages/count_tokens": "count_tokens", "/v1/responses": "responses"}.get(path)
+            from . import openapi
+            route, _ = openapi.route("post", path)
+            api = POST_API.get(route and route["id"])
             anth = api in ("anthropic", "count_tokens")
-            if self._gate():
+            if self._gate(anth=anth):
                 return
             if api is None:
                 return self._err(404, f"not found: POST {path}", anth=anth)
@@ -642,7 +798,9 @@ def serve(server, host="127.0.0.1", port=8000, log=print, keys=None):
                 return self._err(400, f"bad JSON body: {e}", anth=anth)
             if not S.ready:
                 return self._err(503, "model is loading", "unavailable" if not anth else "overloaded_error", anth=anth)
-            meta = dict(api=api, ua=(self.headers.get("User-Agent") or "")[:80], scope=self.scope)
+            meta = dict(api=api, ua=(self.headers.get("User-Agent") or "")[:80], session=session_of(self.headers, b),
+                        agent=agent_of(self.headers, b), model=str(b.get("model") or "")[:64] or None)
+            meta.update(scope=self.scope, gone=self._gone)           # not logged: run_chat logs named fields only
             if os.environ.get("MASHBOX_DUMP_DIR"):        # debugging client compatibility: keep each request body
                 try:
                     with open(os.path.join(os.environ["MASHBOX_DUMP_DIR"], f"{time.time():.3f}-{api}.json"), "w") as f:
@@ -651,6 +809,8 @@ def serve(server, host="127.0.0.1", port=8000, log=print, keys=None):
                 except OSError:
                     pass
             sse = SSE(self) if b.get("stream") else None
+            if sse is not None:
+                meta["closed"] = sse.closed
             try:
                 if api == "count_tokens":
                     return self._send(200, S.count_tokens(b))
@@ -660,6 +820,10 @@ def serve(server, host="127.0.0.1", port=8000, log=print, keys=None):
                 r = fn(b, sse, meta)
                 if sse is None:
                     return self._send(200, r)
+            except Busy as e:
+                if sse is not None and sse.started:
+                    return sse.error(str(e), anth, "rate_limit_error" if anth else "rate_limit_exceeded")
+                return self._err(429, str(e), "rate_limit_error" if anth else "rate_limit_exceeded", anth=anth)
             except BadRequest as e:
                 S.log(json.dumps(dict(event="rejected", api=api, ua=meta["ua"], error=str(e)[:300])))
                 if sse is not None and sse.started:
@@ -687,7 +851,7 @@ def serve(server, host="127.0.0.1", port=8000, log=print, keys=None):
                     self.wfile.flush()
                 try:
                     S.complete(b, chat, write, meta)
-                except BadRequest as e:
+                except (BadRequest, Busy) as e:
                     write(dict(error=dict(message=str(e), type="invalid_request_error")))
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()

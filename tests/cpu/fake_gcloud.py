@@ -3,7 +3,8 @@
 Scenario keys: account, project, api (bool), plain {zone: ok|capacity|quota|no-access|vanish|accepted-auth|accepted-internal},
 qr_create {zone: ok|quota|accepted-auth|accepted-internal} (accepted-*: Google made it, then the call ended in that error;
 accepted-auth also leaves the sign-in expired, so every later call fails as UNAUTHENTICATED),
-grant {zone: describes before ACTIVE}, list_error {zone: auth|other}, probe ("404" or "403"), armed (int), server ("running" or "").
+grant {zone: describes before ACTIVE}, list_error {zone: auth|other}, probe ("404" or "403"), armed (int), server ("running" or ""),
+tunnel_fail (bool: the SSH forward cannot be set up).
 Every call is appended to state["calls"]. `tpu-vm ssh ... -- -N -L SOCKET:...` serves HTTP 200 ("ok") on that Unix
 socket (the tunnel's forward), until killed; with -L 127.0.0.1:L:... (mashbox before the held port) on 127.0.0.1:L, and
 it exits as ssh does with ExitOnForwardFailure when L is taken.
@@ -137,7 +138,7 @@ def run(S, args):
         print(json.dumps(n))
         return 0
     if verb == "list":
-        if S.get("list_error", {}).get(z):           # e.g. an expired sign-in (seen for real 2026-10-28)
+        if S.get("list_error", {}).get(z):           # e.g. an expired sign-in (seen in real use)
             print(LIST_ERR[S["list_error"][z]], file=sys.stderr)
             return 1
         rows = nodes if res == "tpu-vm" else qrs
@@ -193,7 +194,7 @@ def run(S, args):
         return 0
     if res == "tpu-vm" and verb == "ssh":
         if "-L" in args:
-            return "tunnel"
+            return "tunnel-fail" if S.get("tunnel_fail") else "tunnel"
         cmd = opt(args, "--command") or ""
         if "mashbox-install.sh" in cmd:
             print("    mashbox install: done: /home/u/.local/bin/mashbox (mashbox 0.1.0)")
@@ -226,6 +227,10 @@ def main():
             json.dump(S, f)
     if rc == "tunnel":
         tunnel(args)
+    if rc == "tunnel-fail":                               # as ssh -o ExitOnForwardFailure=yes when it cannot bind
+        print("unix_listener: cannot bind to path: Permission denied\nCould not request local forwarding.", file=sys.stderr)
+        print("Error: Port forwarding failed.", file=sys.stderr)
+        sys.exit(255)
     sys.exit(rc)
 
 

@@ -1,6 +1,6 @@
-"""runtime/guard.py, the request checks for the local servers: guards against a web page driving them.
+"""runtime/guard.py, the request checks the three local servers share: guards against a web page driving them.
 
-Each refused case is a request shape a web page can send: a cross-site text/plain POST, a DNS-rebound Host, a
+Each refused case is a request shape from a security review: a cross-site text/plain POST, a DNS-rebound Host, a
 WebSocket from another origin, a missing token or key.
 Each passing case is a client that must keep working: curl as in docs/server-api.md, coding agents (no Origin), a
 tunnel on another local port, the server's own page, IPv6, a configured --host. Headers are parsed by
@@ -28,7 +28,7 @@ JSON = "application/json"
 WS = dict(Upgrade="websocket", Connection="Upgrade", Sec_WebSocket_Key=base64.b64encode(b"the sample nonce").decode(), Sec_WebSocket_Version="13")
 
 REFUSED = [   # (why, method, path, headers, expected status)
-    ("no-cors text/plain POST from a web page", "POST", "/v1/chat/completions",
+    ("F1/F9: no-cors text/plain POST from a web page", "POST", "/api/tpu/up",
      H(Host="127.0.0.1:18930", Origin="https://attacker.example", Content_Type="text/plain;charset=UTF-8"), 403),
     ("same, page with Referrer-Policy no-referrer (Origin: null)", "POST", "/v1/messages",
      H(Host="127.0.0.1:8000", Origin="null", Content_Type="text/plain"), 403),
@@ -36,11 +36,11 @@ REFUSED = [   # (why, method, path, headers, expected status)
      H(Host="127.0.0.1:8000", Content_Type="text/plain"), 415),
     ("a form POST", "POST", "/api/world", H(Host="127.0.0.1:8790", Content_Type="application/x-www-form-urlencoded"), 415),
     ("a POST with no Content-Type", "POST", "/api/restart", H(Host="127.0.0.1:8790"), 415),
-    ("DNS-rebound page reading the API (same-origin to the browser)", "GET", "/v1/models",
+    ("F5/F7/F17: DNS-rebound page reading /api (same-origin to the browser)", "GET", "/api/gcloud",
      H(Host="rebind.attacker.tld:18930"), 403),
-    ("rebound page POSTing JSON to /v1", "POST", "/v1/chat/completions",
+    ("F5: rebound page POSTing JSON to the key-adding /v1 proxy", "POST", "/v1/chat/completions",
      H(Host="rebind.attacker.tld:18930", Origin="http://rebind.attacker.tld:18930", Content_Type=JSON), 403),
-    ("WebSocket from another site", "GET", "/ws?mode=jpeg",
+    ("F11/F13/F15: WebSocket from another site", "GET", "/ws?mode=jpeg",
      H(Host="127.0.0.1:8790", Origin="https://attacker.example", **WS), 403),
     ("WebSocket with no Origin", "GET", "/ws", H(Host="127.0.0.1:8790", **WS), 403),
     ("another local web app on another port", "POST", "/api/settings",

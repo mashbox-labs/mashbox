@@ -8,8 +8,10 @@
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
+import threading
 import time
 from importlib import resources
 
@@ -29,7 +31,8 @@ def parser(cmd):
     d = DEFAULTS
     p.add_argument('--ui', action='store_true', help='serve the browser app (the default when --out is not given)')
     p.add_argument('--out', help='render a clip to this .mp4 instead of serving the app')
-    p.add_argument('--world', default='eagle', help='preset world id for --out or to start with --ui (see worlds.json)')
+    ids = [w['id'] for w in json.loads(resources.files(__package__).joinpath('worlds.json').read_text())['worlds']]
+    p.add_argument('--world', default='eagle', choices=ids, help='preset world for --out or to start with --ui: %(choices)s')
     p.add_argument('--windows', type=int, default=4, help='--out: number of 5 s windows')
     p.add_argument('--keys', default='w', help="--out: keys held per window, ';' between windows, ',' between keys (e.g. 'w;w,left;w')")
     p.add_argument('--preset', choices=sorted(d['presets']), default=d['preset'],
@@ -38,6 +41,10 @@ def parser(cmd):
     p.add_argument('--port', type=int, default=d['server']['port'], help='browser app port on 127.0.0.1 (default %(default)s)')
     p.add_argument('--decoder', choices=sorted(d['decoders']), default=d['decoder_default'],
                    help="full: Tencent's pixel decoder (default); fast: the MASHBOX Fast Decoder (ours, much faster, softer); switch live in the app")
+    p.add_argument('--lead', type=float, default=d['play']['lead_s'],
+                   help='seconds a window is made ahead of its play time (default %(default)s; shorter = keys show sooner)')
+    p.add_argument('--sync', choices=['on', 'off'], default='on' if d['play']['sync'] else 'off',
+                   help='sync mode: hold the picture for single 1/24 s ticks instead of sending frames late (default %(default)s)')
     p.add_argument('--no-kernels', action='store_true', help='plain JAX only (slower, same outputs within bf16 rounding)')
     p.add_argument('--cache-dir', help='XLA compile cache directory (default ~/.cache/mashbox/xla)')
     p.add_argument('--stub', action='store_true', help='CPU stand-in engine: tests the app, controls and streaming without the model')
@@ -57,6 +64,29 @@ def main(cmd, argv):
     if a.stub:
         return run_stub(a)
     return run(a)
+
+
+# ------------------------------------------------------------------ downloads
+def kernel_bundle(m, log):
+    """hub.kernel_bundle, except that a download the Hub refuses (401, 403, 404) or that cannot reach it stops the run with
+    one plain line saying what failed and what to do, instead of a traceback."""
+    from ... import hub
+    try:
+        from huggingface_hub.errors import HfHubHTTPError
+    except ImportError:                                    # older huggingface_hub: its HTTP errors are OSErrors
+        HfHubHTTPError = OSError
+    try:
+        return hub.kernel_bundle(m, log)
+    except (OSError, HfHubHTTPError) as e:
+        raise SystemExit(download_error('the kernel bundle', m, e)) from None
+
+
+def download_error(what, m, e):
+    code = getattr(getattr(e, 'response', None), 'status_code', None)
+    first = (str(e).strip().splitlines() or [''])[0][:200]
+    why = 'Hugging Face answered HTTP %d' % code if code else '%s%s' % (type(e).__name__, ': ' + first if first else '')
+    return ('could not download %s from https://huggingface.co/%s (revision %s): %s. Check the network and run again, '
+            'or start with --no-kernels to run without it, in plain JAX (slower).' % (what, m['hf_repo'], m['hf_revision'][:8], why))
 
 
 # ------------------------------------------------------------------ model
@@ -84,7 +114,7 @@ class Model:
         hub.compile_cache(m, self.cache, log)              # our compiled programs for this chip and jax, when they match
         bundle = None
         if not a.no_kernels:
-            path, row = hub.kernel_bundle(m, log)
+            path, row = kernel_bundle(m, log)
             if path is not None:
                 b = KB.open_bundle(path, row['sha256'])
                 bundle = b if (b.usable() and fam in row['chips']) else None
@@ -134,10 +164,11 @@ def run(a):
     eng = Engine(model, log)
     if a.out:
         return render(eng, model, a)
-    live = Live(eng, log, hw=model.hw, seed=a.seed, preset=a.preset, camera=DEFAULTS['camera'], tencent_cam=model.tencent_cam)
+    live = Live(eng, log, hw=model.hw, seed=a.seed, preset=a.preset, camera=DEFAULTS['camera'], tencent_cam=model.tencent_cam,
+                lead=a.lead, slow_extra=DEFAULTS['play']['slow_extra_s'], sync=a.sync == 'on', sync_margin=DEFAULTS['play']['sync_margin_s'])
     live.start(a.port, autostart=a.world if a.world in live.worlds else None)
     log('open http://127.0.0.1:%d/ through your SSH tunnel (see docs/models/hy-nomas.md); Ctrl-C stops the server' % a.port)
-    _wait()
+    _serve_until_stopped(live)
     return 0
 
 
@@ -146,19 +177,35 @@ def run_stub(a):
     eng = StubEngine(log, split=tuple(DEFAULTS['decoder']['split_latent_frames']), overlap=DEFAULTS['decoder']['overlap_latent_frames'])
     if a.out:
         raise SystemExit('--stub serves the app only; --out needs the model on a TPU v6e-4')
-    live = Live(eng, log, hw='STUB on CPU (no model)', seed=a.seed, preset=a.preset, camera=DEFAULTS['camera'], stub=True)
+    live = Live(eng, log, hw='STUB on CPU (no model)', seed=a.seed, preset=a.preset, camera=DEFAULTS['camera'], stub=True,
+                lead=a.lead, slow_extra=DEFAULTS['play']['slow_extra_s'], sync=a.sync == 'on', sync_margin=DEFAULTS['play']['sync_margin_s'])
     live.start(a.port, autostart=a.world if a.world in live.worlds else None)
     log('stub: open http://127.0.0.1:%d/' % a.port)
-    _wait()
+    _serve_until_stopped(live)
     return 0
 
 
-def _wait():
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        return
+def _serve_until_stopped(live):
+    """Serve until Ctrl-C (SIGINT) or SIGTERM, then stop the app: port closed, viewers and video encoder ended.
+
+    The app takes both signals itself. A shell that starts a command in the background (`cmd &` or `nohup cmd &` in a
+    script) hands it SIGINT ignored, and Python then never raises KeyboardInterrupt, so Ctrl-C and `kill -INT` did nothing
+    and the app kept the TPU. A second Ctrl-C while stopping ends the app at once."""
+    stop, got = threading.Event(), []
+
+    def on_signal(signum, frame):
+        got.append(signum)
+        stop.set()
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+    while not stop.wait(1.0):
+        pass
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    t0 = time.time()
+    log(json.dumps(dict(event='stopping', signal=signal.Signals(got[0]).name)))
+    live.stop()
+    log(json.dumps(dict(event='stopped', s=round(time.time() - t0, 2))))
 
 
 def render(eng, model, a):

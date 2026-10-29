@@ -40,16 +40,15 @@ python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[t
 <One command that runs the model, with what it prints or opens. Then the commands that delete the chip.>
 
 ```bash
-python3 -m mashbox run <model id>
+mashbox run <model id>
 ```
 
 ## Options
 
-<Every option and flag, one row each. Copy the defaults from `python3 -m mashbox run <model id> --help`.>
+<The options of `mashbox run <model id>`, each with its default and what it does.>
 
-| Option | Default | What it does |
-|---|---|---|
-| `--<option>` | <default> | <what it does, and when to change it> |
+<!-- cli:start run -->
+<!-- cli:end -->
 
 ## Variants
 

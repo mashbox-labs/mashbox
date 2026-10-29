@@ -10,6 +10,7 @@ Which licence covers which part of this repo and its downloads. The licence file
 |---|---|
 | Our code: the `mashbox` package and CLI, model ports, demo apps, docs | Apache License 2.0 ([LICENSE](../LICENSE)). |
 | Compiled kernel bundles (our Culet kernels, one bundle per release) and the precompiled compile cache | MASHBOX Kernel Licence 1.0 ([LICENSE-KERNELS](../LICENSE-KERNELS)): free for personal use, research and evaluation, and for any use by companies under US$1M annual revenue; larger companies in production write to hello@mashbox.gg. |
+| Our own trained weights: the MASHBOX Fast Decoder for Hy-Nomas (`decoders/hy-nomas-fast-decoder-v1.safetensors` in [mashbox-labs/Hy-Nomas-TPU](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU)) | Apache License 2.0. |
 | Model weights, and our conversions of them (such as our BQ8_R file of Qwen3.8-27B) | The licence their makers publish, read at the revision we pin. It is shown on the model's Hugging Face card, and the upstream LICENSE file is kept unchanged in `licenses/` and in the model's Hugging Face repo. |
 
 ## Details

@@ -1,0 +1,101 @@
+# Numbers in the hand-written pages that are not measurements, each with the reason (read by
+# tools/hf_github_sync_check.py, T0). One line each: page | the number with the words around it, as the page reads
+# (3 words or more, table cells joined by |) | why it is not a measurement. No "*" lines: a line allows those words on
+# that page only, so "10x" in a GIF caption never lets "10x faster" through anywhere else.
+# Every measured number goes in a number marker instead: <!-- r:MODEL/KEY -->6.6 s<!-- /r --> with its value in
+# models.json (results by number, figures by name). A line that holds no number on its page any more fails the check.
+README.md | answer (sped up 10x) | playback speed-up of the terminal GIF (an edit)
+README.md | downloads the 26.9 GB weights file | size of Qwen3.8-27B-BQ8_R.bshj, rounded (models.json files)
+README.md | single TPU v6e chip (32 GB) from a 26.94 GB weights file at 8.01 bits per weight | v6e memory per chip (Google's spec); size and bits per weight of the Qwen file (models.json files)
+README.md | Memory per chip | 32 GB | 16 GB | TPU v6e and v5e memory per chip, Google's published spec
+README.md | Memory bandwidth per chip | 1,638 GBps | 800 GiBps | TPU v6e and v5e memory bandwidth per chip, Google's published spec
+README.md | working memory fit in 16 GB | TPU v5e memory per chip, Google's published spec
+docs/chips.md | Memory per chip | 32 GB | 16 GB | TPU v6e and v5e memory per chip, Google's published spec
+docs/chips.md | Memory bandwidth per chip | 1,638 GBps | 800 GiBps | TPU v6e and v5e memory bandwidth per chip, Google's published spec
+docs/chips.md | Chip-to-chip bandwidth (ICI) | 800 GBps | 400 GBps | TPU v6e and v5e chip-to-chip bandwidth, Google's published spec
+docs/chips.md | working memory fit in 16 GB | TPU v5e memory per chip, Google's published spec
+docs/glossary.md | with 16 GB of memory per chip | TPU v5e memory per chip, Google's published spec
+docs/glossary.md | with 32 GB of memory per chip | TPU v6e memory per chip, Google's published spec
+docs/faq.md | one 26.94 GB weights file, plus an 890 MB compile cache | file sizes of the Qwen download (models.json files)
+docs/faq.md | TPU v6e-1: 97 GB disk | boot disk of a TPU v6e-1 VM (Google's default)
+docs/faq.md | `/dev/shm` holds 355 GB in RAM | /dev/shm on a TPU v6e-4 VM (part of the machine's RAM)
+docs/faq.md | also downloads an 890 MB compile cache | size of the Qwen compile cache file (models.json files)
+docs/faq.md | is taking more than 60.0 seconds | JAX's own error message, quoted (its timeout setting)
+docs/faq.md | Wait 10 s after the prompt returns | advice: how long to wait before the next start
+docs/faq.md | A TPU v6e chip has 32 GB of memory (JAX reports 31.24 GiB); a TPU v5e chip has 16 GB (15.75 GiB) | Google's published memory per chip and the device memory JAX reports
+docs/agents-on-tpu.md | fits next to the 26.94 GB of weights | size of the Qwen weights file (models.json files)
+docs/agents/claude-code.md | fits next to the 26.94 GB of weights | size of the Qwen weights file (models.json files)
+docs/agents/codex.md | fits next to the 26.94 GB of weights | size of the Qwen weights file (models.json files)
+docs/agents/codex.md | Codex compacts at 80% of <marker> | Codex's compaction point, 26,214 of the context (a setting)
+docs/agents/codex.md | Codex compacts at 26,214 tokens | the model_auto_compact_token_limit setting above
+docs/agents/pi.md | fits next to the 26.94 GB of weights | size of the Qwen weights file (models.json files)
+docs/google-cloud.md | so 30 minutes is about | the example in a price sum
+docs/google-cloud.md | downloads the 26.9 GB weights file | size of the Qwen weights file, rounded (models.json files)
+docs/install.md | downloads the 26.94 GB weights | size of the Qwen weights file (models.json files)
+docs/install.md | max lifetime, 8 hours unless | the default max lifetime of a chip (a setting)
+docs/agents-on-tpu.md | the chip deletes itself 8 hours after it starts | the default max lifetime of a chip (a setting)
+docs/quickstart.md | downloads the 26.94 GB weights file | size of the Qwen weights file (models.json files)
+docs/models/qwen3-8-27b.md | Sped up 10x, pauses over 2 s cut to 2 s | edits of the terminal GIF (playback speed and cut pauses)
+docs/models/qwen3-8-27b.md | within 20 ms of each other | the server's batching window (a setting)
+docs/models/qwen3-8-27b.md | BSHJ | 26.94 GB | 8.01 | size and bits per weight of the Qwen file (models.json files)
+docs/models/qwen3-8-27b.md | came back, for 60 s | length of the closed-loop load test (a test setting)
+docs/models/qwen3-8-27b.md | (26.94 GB, 8.01 bits per weight) | size and bits per weight of the Qwen file (models.json files)
+docs/models/hy-nomas.md | 5 seconds at a time | length of one video window (how the model works)
+docs/models/hy-nomas.md | downloads 87.4 GB into the | Hy-Nomas download, the sum of its files
+docs/models/hy-nomas.md | main model 34.2 GB, LoRA adapter 6.1 GB and video decoder file 31.6 GB, plus 15.5 GB of text | Hy-Nomas file sizes
+docs/models/hy-nomas.md | default 100 GB boot disk | boot disk of a TPU v6e-4 VM (Google's default)
+docs/models/hy-nomas.md | `/dev/shm` holds 355 GB in RAM | /dev/shm on a TPU v6e-4 VM (part of the machine's RAM)
+docs/models/hy-nomas.md | fetches every file (87.4 GB, | Hy-Nomas download, the sum of its files
+docs/models/hy-nomas.md | Wait 10 s after the prompt returns | advice: how long to wait before the next start
+docs/models/qwen3-8-27b.md | Wait 10 s before you start it again | advice: how long to wait before the next start
+docs/models/hy-nomas.md | inside the next 5 s window | length of one video window (how the model works)
+docs/models/hy-nomas.md | 4 model passes per 5 s window | length of one video window (how the model works)
+docs/models/hy-nomas.md | number of 5 s windows | length of one video window (how the model works)
+docs/models/hy-nomas.md | take for a 5 s window divided by 5 s | how the speed is defined (window length)
+docs/models/hy-nomas.md | Download of the 87.4 GB of weights | Hy-Nomas download, the sum of its files
+docs/models/hy-nomas.md | wait 10 s after it exits | advice: how long to wait before the next start
+docs/models/hy-nomas.md | the clock jumps after 0.5 s | the app's sync threshold (a setting)
+README.md | Peak bf16 per chip | 918 TFLOPs | 197 TFLOPs | TPU v6e and v5e peak bf16 compute per chip, Google's published spec
+README.md | Peak int8 per chip | 1,836 TOPs | 393 TOPs | TPU v6e and v5e peak int8 compute per chip, Google's published spec
+docs/chips.md | Peak bf16 per chip | 918 TFLOPs | 197 TFLOPs | TPU v6e and v5e peak bf16 compute per chip, Google's published spec
+docs/chips.md | Peak int8 per chip | 1,836 TOPs | 393 TOPs | TPU v6e and v5e peak int8 compute per chip, Google's published spec
+CI.md | A T1 test takes at most 10 s on the CI runner | the T1 time limit per test (a rule)
+CI.md | and keep it under 10 s | the T1 time limit per test (a rule)
+CI.md | at most 14 days out | how far ahead an expected-failure date may be (a rule)
+docs/agents-on-tpu.md | a summary of up to 4,096 tokens | the CLAUDE_CODE_MAX_OUTPUT_TOKENS setting (docs/agents/claude-code.md)
+docs/agents-on-tpu.md | then one at least every 8,192 tokens, up to 8 | where the server keeps resume points in a prompt (a setting)
+docs/agents-on-tpu.md | and `--ctx 65536` runs out of chip memory | a context that does not fit, the failed example
+docs/faq.md | `--ctx 65536 --slots 1` runs out of chip memory | a context that does not fit, the failed example
+docs/agents/claude-code.md | Claude Code compacts at about 19,000 tokens | from the settings: CLAUDE_CODE_MAX_CONTEXT_TOKENS minus the output size minus about 13,000
+docs/agents/pi.md | Pi compacts at 26,624 tokens | the context minus the reserveTokens setting above
+docs/models/hy-nomas.md | 1280x704 video at 24 frames per second | the model's output frame rate (how the model works)
+docs/models/hy-nomas.md | the picture stays at 24 fps | the model's output frame rate (how the model works)
+docs/models/hy-nomas.md | (256 or 512 tokens) | the text encoder's two fixed lengths (how the model works)
+docs/models/hy-nomas.md | Texts longer than 512 tokens are refused | the text encoder's longest length (how the model works)
+docs/models/hy-nomas.md | texts longer than 512 tokens are refused | the text encoder's longest length (how the model works)
+docs/models/hy-nomas.md | padded to 256 or 512 tokens | the text encoder's two fixed lengths (how the model works)
+docs/models/hy-nomas.md | bf16 | 15.5 | 16 | reference | text encoder size on disk and on the chips in GB (file sizes)
+docs/models/qwen3-8-27b.md | Context is 2,048 tokens per request | the mashbox run --ctx default (docs/cli.md)
+docs/models/qwen3-8-27b.md | `temperature` | 0 (greedy) | 0.7 | the server default and Qwen's recommended setting (settings)
+docs/models/qwen3-8-27b.md | `top_p` | 1.0 | 0.8 | the server default and Qwen's recommended setting (settings)
+docs/models/qwen3-8-27b.md | `top_k` | 0 (no cut) | 20 | the server default and Qwen's recommended setting (settings)
+docs/models/qwen3-8-27b.md | `presence_penalty` | 0 | 1.5 | the server default and Qwen's recommended setting (settings)
+docs/models/qwen3-8-27b.md | (8 prompts x 32 tokens) | size of the agreement test (a test setting)
+docs/models/qwen3-8-27b.md | 64-token prompt, 128 new tokens | the speed test's prompt and answer length (a test setting)
+docs/models/qwen3-8-27b.md | Chat prompts of about 30 tokens | the load test's prompts (a test setting)
+docs/models/qwen3-8-27b.md | 8 fixed prompts (367 token positions) | size of the agreement test (a test setting)
+docs/models/qwen3-8-27b.md | 790-token prompts, greedy | the long-prompt speed test's prompt length (a test setting)
+docs/tpu-vs-gpu.md | 64-token prompts, 128 new tokens | the speed test's prompt and answer length (a test setting)
+src/mashbox/ui/shell/README.md | orange at 16 / 30 / 60 % | brown at 18 / 32 %, orange 70 % | colour mix percentages of the shell's palette (design values)
+docs/models/hy-nomas.md | 34.2 + 6.1 + 31.6 on disk | Hy-Nomas file sizes in GB (main model, LoRA, video decoder) as downloaded, not a measurement
+docs/server-api.md | integer | | 1, 2, 3, ... | generated from the spec: the values a counter field takes
+src/mashbox/models/hy_nomas/page.html | play back in the next 5 s window | the length of one video window (the model makes 120 frames at 24 fps)
+src/mashbox/models/hy_nomas/page.html | drew more than 100 ms after their time | the page's threshold for counting a frame as late (a setting)
+src/mashbox/models/hy_nomas/page.html | The TPU makes each 5 s of video | the length of one video window (model design)
+src/mashbox/models/hy_nomas/page.html | makes video in windows of 5 s (120 frames at 24 fps) | window length and frame rate of the model (design)
+src/mashbox/models/hy_nomas/page.html | starts at 1.0 s lasts 1.0 s | example values in the timed action hint
+src/mashbox/models/hy_nomas/page.html | Timed inside the next 5 s window | the length of one video window (model design)
+src/mashbox/models/hy_nomas/page.html | rate 25 move speed 1.00x | default camera settings shown in the controls
+src/mashbox/models/hy_nomas/page.html | the picture stays at 24 fps | the model's frame rate (design)
+src/mashbox/models/hy_nomas/page.html | the clock jumps after 0.5 s | the sync setting's threshold (a setting)
+docs/models/hy-nomas.md | A v5e chip has 16 GB, and the video decoder takes | a TPU v5e chip's memory (Google's spec)

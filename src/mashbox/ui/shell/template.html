@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MODULE NAME | MASHBOX Labs</title>
+<link rel="icon" href="ui/shell/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="ui/shell/shell.css">
+<script type="application/json" id="mbx-module">{"model": "qwen3-8-27b", "module": "Chat", "status": {"state": "off", "text": "Starting"}}</script>
+<script src="ui/shell/shell.js"></script>
+<style>
+  /* This module's own styles only. Use the --mbx-* tokens and the mbx- blocks; never redefine them. */
+</style>
+</head>
+<body class="mbx-ui">
+<header data-mbx-top></header>
+<nav class="mbx-tabs mbx-wrap" data-mbx-tabs aria-label="Screens">
+  <button type="button" data-tab="main" class="on">Main</button>
+  <button type="button" data-tab="about">About</button>
+</nav>
+<main class="mbx-main">
+  <section class="mbx-tab" id="tab-main">
+    <div class="mbx-room"><span class="mbx-plate">Main</span><span class="mbx-room-line">One line on what this screen does.</span></div>
+    <div class="mbx-cols">
+      <div class="mbx-panel"><h3>Output</h3><p class="mbx-note">The module's output goes here.</p></div>
+      <div class="mbx-panel"><h3>Settings</h3><p class="mbx-note">Defaults are the settings the docs use.</p></div>
+    </div>
+  </section>
+  <section class="mbx-tab" id="tab-about">
+    <details class="mbx-how" open><summary>How this works</summary><p>Plain words on what the module does and what each control changes.</p></details>
+  </section>
+</main>
+<footer data-mbx-foot></footer>
+</body>
+</html>

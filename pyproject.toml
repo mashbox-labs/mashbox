@@ -4,13 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mashbox"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Open models that run faster and cheaper, from MASHBOX Labs"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "LICENSE-KERNELS"]
 requires-python = ">=3.12"
 dependencies = ["numpy", "ml_dtypes", "tokenizers", "jinja2==3.1.6", "huggingface_hub", "flatbuffers"]
+
+[project.urls]
+Homepage = "https://mashbox.gg"
+Documentation = "https://mashbox.gg/docs"
+Source = "https://github.com/mashbox-labs/mashbox"
+Issues = "https://github.com/mashbox-labs/mashbox/issues"
 
 [project.optional-dependencies]
 tpu = ["jax[tpu]==0.11.2"]
@@ -21,14 +27,14 @@ hy-nomas = ["torch>=2.5", "transformers==4.57.1", "pyyaml", "scipy", "imageio-ff
 [project.scripts]
 mashbox = "mashbox.cli:main"
 
-[project.urls]
-Homepage = "https://mashbox.gg"
-Documentation = "https://mashbox.gg/docs"
-Source = "https://github.com/mashbox-labs/mashbox"
-Issues = "https://github.com/mashbox-labs/mashbox/issues"
+[tool.setuptools.dynamic]
+version = {attr = "mashbox.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-mashbox = ["models.json", "models/*/*.json", "models/*/*.html", "tpu/*.sh", "tpu/*.sha256"]
+mashbox = ["models.json", "models/*/*.json", "models/*/*.html", "tpu/*.sh", "tpu/*.sha256",
+           "ui/shell/*.css", "ui/shell/*.js", "ui/shell/*.svg", "ui/shell/*.html", "ui/shell/*.md", "ui/shell/fonts/*",
+           "ui/chat/*.html", "ui/chat/*.js",
+           "ui/app/*.html", "ui/app/*.js", "ui/app/*.css", "ui/app/window/*.html", "ui/app/window/*.js"]

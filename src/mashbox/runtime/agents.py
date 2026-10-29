@@ -187,7 +187,9 @@ def _args(a):
 
 
 class Conv:
-    """The internal conversation: system text, then user / assistant / tool messages in template form."""
+    """The internal conversation: system text, then user / assistant / tool messages in template form.
+    Call ids are kept on the side (keys starting with _, removed by messages()): the chat template has no ids, so a run of
+    tool results is put in the order of the calls it answers, whatever order the client sent them in."""
 
     def __init__(self):
         self.system, self.msgs = [], []
@@ -203,7 +205,8 @@ class Conv:
     def user(self, text):
         self.msgs.append(dict(role="user", content=text))
 
-    def assistant(self, text="", reasoning="", calls=()):
+    def assistant(self, text="", reasoning="", calls=(), ids=()):
+        ids = list(ids) if ids else [None] * len(calls)
         last = self.msgs[-1] if self.msgs else None
         if last and last["role"] == "assistant" and not (text and last.get("tool_calls")):
             if text:
@@ -211,6 +214,7 @@ class Conv:
             if reasoning:
                 last["reasoning_content"] = (last.get("reasoning_content", "") + "\n" + reasoning).strip()
             last.setdefault("tool_calls", []).extend(calls)
+            last.setdefault("_ids", []).extend(ids)
             if not last["tool_calls"]:
                 del last["tool_calls"]
             return
@@ -219,14 +223,31 @@ class Conv:
             m["reasoning_content"] = reasoning
         if calls:
             m["tool_calls"] = list(calls)
+            m["_ids"] = ids
         self.msgs.append(m)
 
-    def tool(self, text):
-        self.msgs.append(dict(role="tool", content=text))
+    def tool(self, text, cid=None):
+        self.msgs.append(dict(role="tool", content=text, _id=cid))
 
     def messages(self, extra_system=""):
         s = "\n\n".join(x for x in self.system + [extra_system] if x)
-        return ([dict(role="system", content=s)] if s else []) + self.msgs
+        out, ms, i = [], self.msgs, 0
+        while i < len(ms):
+            if ms[i]["role"] != "tool":
+                out.append(ms[i])
+                i += 1
+                continue
+            j = i
+            while j < len(ms) and ms[j]["role"] == "tool":
+                j += 1
+            run = ms[i:j]
+            order = (ms[i - 1].get("_ids") or []) if (i and ms[i - 1]["role"] == "assistant") else []
+            if len(run) > 1 and all(t["_id"] is not None and t["_id"] in order for t in run):
+                run = sorted(run, key=lambda t: order.index(t["_id"]))     # every result names a call of that turn
+            out += run
+            i = j
+        out = [{k: v for k, v in m.items() if not k.startswith("_")} for m in out]
+        return ([dict(role="system", content=s)] if s else []) + out
 
 
 def call(name, args):
@@ -273,11 +294,12 @@ def from_openai_chat(b):
         elif role == "user":
             cv.user(_text(m.get("content"), "user"))
         elif role == "assistant":
-            calls = [call((c.get("function") or {}).get("name"), _args((c.get("function") or {}).get("arguments")))
-                     for c in m.get("tool_calls") or []]
-            cv.assistant(_text(m.get("content"), "assistant"), m.get("reasoning_content") or m.get("reasoning") or "", calls)
+            tc = m.get("tool_calls") or []
+            calls = [call((c.get("function") or {}).get("name"), _args((c.get("function") or {}).get("arguments"))) for c in tc]
+            cv.assistant(_text(m.get("content"), "assistant"), m.get("reasoning_content") or m.get("reasoning") or "", calls,
+                         [c.get("id") for c in tc])
         elif role in ("tool", "function"):
-            cv.tool(_text(m.get("content"), "tool"))
+            cv.tool(_text(m.get("content"), "tool"), m.get("tool_call_id"))
         else:
             raise BadRequest(f"unknown message role {role!r}")
     tools = tools_openai(b.get("tools"), "tools")
@@ -301,13 +323,13 @@ def from_anthropic(b):
             for x in blocks:
                 if x.get("type") == "tool_result":
                     out = _text(x.get("content"), "tool_result")
-                    cv.tool(("Error: " + out) if x.get("is_error") else out)
+                    cv.tool(("Error: " + out) if x.get("is_error") else out, x.get("tool_use_id"))
                 else:
                     text.append(_text([x], "user"))
             if any(t for t in text) or not blocks:
                 cv.user("\n".join(t for t in text if t))
         elif role == "assistant":
-            text, think, calls = [], [], []
+            text, think, calls, cids = [], [], [], []
             for x in blocks:
                 t = x.get("type")
                 if t == "text":
@@ -318,9 +340,10 @@ def from_anthropic(b):
                     pass
                 elif t in ("tool_use", "server_tool_use"):
                     calls.append(call(x.get("name"), _args(x.get("input"))))
+                    cids.append(x.get("id"))
                 else:
                     raise BadRequest(f"messages: assistant content type {t!r} is not supported")
-            cv.assistant("\n\n".join(text).strip(), "\n".join(think).strip(), calls)
+            cv.assistant("\n\n".join(text).strip(), "\n".join(think).strip(), calls, cids)
         else:
             raise BadRequest(f"messages: unknown role {role!r}")
     tools = []
@@ -360,17 +383,17 @@ def from_responses(b):
             else:
                 raise BadRequest(f"input: unknown message role {role!r}")
         elif t == "function_call":
-            cv.assistant(calls=[call(it.get("name"), _args(it.get("arguments")))])
+            cv.assistant(calls=[call(it.get("name"), _args(it.get("arguments")))], ids=[it.get("call_id")])
         elif t == "custom_tool_call":
             custom.add(it.get("name"))
-            cv.assistant(calls=[call(it.get("name"), {"input": it.get("input", "")})])
+            cv.assistant(calls=[call(it.get("name"), {"input": it.get("input", "")})], ids=[it.get("call_id")])
         elif t == "local_shell_call":
-            cv.assistant(calls=[call("local_shell", dict((it.get("action") or {})))])
+            cv.assistant(calls=[call("local_shell", dict((it.get("action") or {})))], ids=[it.get("call_id")])
         elif t in ("function_call_output", "custom_tool_call_output", "local_shell_call_output"):
             o = it.get("output")
             if isinstance(o, dict):
                 o = o.get("content", o.get("output", json.dumps(o)))
-            cv.tool(_text(o, t) if not isinstance(o, str) else o)
+            cv.tool(_text(o, t) if not isinstance(o, str) else o, it.get("call_id"))
         elif t == "reasoning":
             r = "\n".join(x.get("text", "") for x in (it.get("content") or []) + (it.get("summary") or []) if isinstance(x, dict))
             if r.strip():

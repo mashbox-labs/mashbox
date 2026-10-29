@@ -1,6 +1,6 @@
 # Qwen3.8-27B on TPU
 
-[Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) by Qwen, running on a single Google Cloud TPU v6e chip, with an OpenAI-compatible server. The model code is plain JAX in [src/mashbox/models/qwen3_8_27b](../../src/mashbox/models/qwen3_8_27b). The weights come as one BSHJ file from [mashbox-labs/Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU), and decoding uses our compiled TPU kernels (Culet).
+[Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) by Qwen, running on Google Cloud TPU (one TPU v6e chip, or a host of 4 chips: TPU v5e-4 or v6e-4), with an OpenAI-compatible server. The model code is plain JAX in [src/mashbox/models/qwen3_8_27b](../../src/mashbox/models/qwen3_8_27b). The weights come as one BSHJ file from [mashbox-labs/Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU), and decoding uses our compiled TPU kernels (Culet).
 
 ## What it is
 
@@ -16,12 +16,12 @@ How it runs:
 
 ## What you need
 
-| | TPU v6e (v6e-1) | TPU v5e |
-|---|---|---|
-| Status | Supported | does not fit: the weights alone are about 27 GB and a v5e chip has 16 GB |
-| Create with | `--accelerator-type=v6e-1 --version=v2-alpha-tpuv6e` | |
+| | TPU v6e (v6e-1) | TPU v5e (v5e-4) | TPU v6e slice (v6e-4) | TPU v5p slice (v5p-8) |
+|---|---|---|---|---|
+| Status | Supported: one chip (v6e-1) | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: 4 chips, split across them automatically | Not supported |
+| Create with | `--accelerator-type=v6e-1 --version=v2-alpha-tpuv6e` | `--accelerator-type=v5litepod-4 --version=v2-alpha-tpuv5-lite` | `--accelerator-type=v6e-4 --version=v2-alpha-tpuv6e` | |
 
-One TPU v6e chip is $2.70 an hour at Google's on-demand list price. The chip bills from create to delete. Context is 2,048 tokens per request with 8 request slots.
+One TPU v6e chip is $2.70 an hour at Google's on-demand list price. The chip bills from create to delete. Context is 2,048 tokens per request with 8 request slots. On a host of 4 chips, `mashbox run` splits the model across them by itself (`--tensor-parallel-size`, in [Options](#options)). The commands on this page use a v6e-1.
 
 You also need the Google Cloud CLI set up: [google-cloud.md](../google-cloud.md) does that from a new Google account.
 
@@ -33,24 +33,26 @@ On the chip, the package installs with one line; the command in [Run](#run) does
 python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"
 ```
 
-The chip's system Python is 3.10 and JAX for TPU needs 3.12, so pip installs [uv](https://docs.astral.sh/uv/), and uv installs `mashbox` with its own Python 3.12. The `mashbox` command goes to `~/.local/bin`; the commands on this page use that full path. pip and uv each print a warning that `~/.local/bin` is not on your `PATH`: that is expected. On a new TPU v6e-1 the install took 5 to 7 s.
+The chip's system Python is 3.10 and JAX for TPU needs 3.12, so pip installs [uv](https://docs.astral.sh/uv/), and uv installs `mashbox` with its own Python 3.12. The `mashbox` command goes to `~/.local/bin`; the commands on this page use that full path. uv prints a warning that `~/.local/bin` is not on your `PATH` (pip may print one too): that is expected. The download may print a Hugging Face warning about unauthenticated requests and `HF_TOKEN`: no token is needed, the model repos are public. On a new TPU v6e-1 the install takes 5 to 7 s.
 
 ## Run
 
 From your own machine, with the Google Cloud CLI set up ([google-cloud.md](../google-cloud.md) does that from a new Google account):
 
 ```bash
-gcloud compute tpus tpu-vm create qwen-1 --zone=us-east5-b --accelerator-type=v6e-1 --version=v2-alpha-tpuv6e
-gcloud compute tpus tpu-vm ssh qwen-1 --zone=us-east5-b --command='python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]" && ~/.local/bin/mashbox run qwen3-8-27b --prompt "Write a haiku about the sea."'
-gcloud compute tpus tpu-vm delete qwen-1 --zone=us-east5-b --quiet
+gcloud compute tpus tpu-vm create mashbox-1 --zone=us-east5-b --accelerator-type=v6e-1 --version=v2-alpha-tpuv6e
+gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b --command='python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]" && ~/.local/bin/mashbox run qwen3-8-27b --prompt "Write a haiku about the sea."'
+gcloud compute tpus tpu-vm delete mashbox-1 --zone=us-east5-b --quiet
 ```
 
-The first run downloads the tokenizer and config from Qwen's repo (pinned revision), the weights file and the kernel bundle, and checks each against the sha256 in [models.json](../../models.json).
+The first run downloads the tokenizer and config from Qwen's repo (pinned revision), the weights file and the kernel bundle, and checks each against the sha256 in [models.json](../../models.json). On a new TPU v6e-1 this takes about 279.2 s and depends on the download speed ([first start](../faq.md#why-is-the-first-start-slow-and-later-starts-fast)).
+
+If the create command says there is no capacity, try the other zones in [step 6 of the setup guide](../google-cloud.md#6-create-one-chip) or [queue a request](../google-cloud.md#if-no-zone-has-a-chip-queue-a-request) for the chip `mashbox-1`, and use its zone in every later command. A chip you queued is deleted with its request: `gcloud compute tpus queued-resources delete REQUEST_NAME --zone=ZONE --force --quiet` ([step 8](../google-cloud.md#8-delete-the-chip)).
 
 ### Serve it
 
 ```bash
-gcloud compute tpus tpu-vm ssh qwen-1 --zone=us-east5-b --command='~/.local/bin/mashbox run qwen3-8-27b' -- -L 8000:127.0.0.1:8000
+gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b --command='~/.local/bin/mashbox run qwen3-8-27b' -- -L 8000:127.0.0.1:8000
 ```
 
 The server listens on 127.0.0.1:8000 on the chip, and the SSH tunnel brings it to port 8000 on your machine. It prints `"event": "ready"` when it takes requests. Then, from your machine:
@@ -60,29 +62,48 @@ curl -s http://127.0.0.1:8000/v1/chat/completions -H 'Content-Type: application/
   -d '{"model": "qwen3-8-27b", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 128}'
 ```
 
+Closing the tunnel does not stop the server on the chip. To stop it, first end the serve command on your machine (Ctrl-C in its terminal, or stop its process if it runs in the background or from a script): while that command runs, gcloud retries it when the server stops and starts the server again. Then stop the server on the chip:
+
+```bash
+gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b --command='pkill -INT -f "^/home/.*/mashbox run"'
+```
+
+`-INT` sends the same signal as Ctrl-C, and the `^/home/` start keeps the pattern from matching the shell that runs it.
+
+Wait 10 s before you start it again ([why](../faq.md#how-do-i-stop-a-server-and-what-if-the-tpu-will-not-start-again)). Then delete the chip with the last line of [Run](#run), or with the queued request if you queued it.
+
 ## Options
 
 `~/.local/bin/mashbox run qwen3-8-27b [options]`
 
+<!-- cli:start run -->
 | Option | Default | What it does |
 |---|---|---|
-| `--prompt TEXT` | none | answer one chat turn, print it and exit; without it, start the server |
-| `--thinking` | off | thinking mode for `--prompt` |
-| `--max-tokens N` | 512 | most new tokens for `--prompt` |
-| `--temperature T` | 0 | 0 is greedy |
-| `--top-p P` | 1.0 | nucleus sampling cut |
-| `--top-k K` | 0 | 0 means no top-k cut |
-| `--seed N` | 0 | seed for sampled answers |
-| `--host H` | 127.0.0.1 | server address; keep it on 127.0.0.1 and use the SSH tunnel |
-| `--port N` | 8000 | server port |
-| `--api-key-file FILE` | none | require an API key from FILE (one per line; each key has its own prompt cache) on `/v1` requests; also `MASHBOX_API_KEY=k1,k2`. Default: no key on 127.0.0.1; on any other `--host` a key is made in `~/.config/mashbox/api-key` |
-| `--ctx N` | 2048 | tokens per request (prompt plus answer) |
-| `--slots N` | 8 | requests decoded together; the kernel bundle is built for 8, other values run plain JAX |
-| `--steps N` | 8 | decode steps per device call |
-| `--cache-dir DIR` | `~/.cache/mashbox/xla` | compile cache (also `JAX_COMPILATION_CACHE_DIR`) |
-| `--no-warm` | off | skip compiling the first request's programs before `ready` |
-| `--weights FILE` | download | a local .bshj file instead of the download; its sha256 is still checked |
-| `--no-kernels` | off | plain JAX only: slower decode, same outputs within rounding |
+| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b) |
+| `--weights FILE` |  | a local .bshj file instead of the download (its sha256 is still checked) |
+| `--no-kernels` | off | plain JAX only (slower decode, same outputs within rounding) |
+| `--prompt TEXT` |  | answer one chat turn, print it and exit; without it, start the server |
+| `--thinking` | off | thinking mode for --prompt |
+| `--max-tokens N` | `512` | most new tokens for --prompt |
+| `--temperature T` | `0.0` | sampling temperature for --prompt; 0 is greedy |
+| `--top-p P` | `1.0` | nucleus sampling cut for --prompt |
+| `--top-k K` | `0` | top-k cut for --prompt; 0 means none |
+| `--seed N` | `0` | seed for sampled --prompt answers |
+| `--host H` | `127.0.0.1` | server address; keep it on 127.0.0.1 and use an SSH tunnel |
+| `--port N` | `8000` | server port |
+| `--api-key-file FILE` |  | require an API key from FILE (one per line; each key has its own prompt cache) on /v1 requests; also MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host a key made in ~/.config/mashbox/api-key |
+| `--ui` | off | also serve the MASHBOX Chat page at http://127.0.0.1:<port>/ |
+| `--ctx N` | `2048` | context per request in tokens (prompt plus answer) |
+| `--slots N` | `8` | requests decoded together; the kernel bundle is built for 8, other values run plain JAX |
+| `--steps N` | `8` | decode steps per device call |
+| `--tensor-parallel-size N` | `0` | chips to split the model across, as vLLM (1, 2 or 4); default: the chips of this host, at most 4 (1 on a TPU v6e-1, 4 on a TPU v5e-4 or v6e-4) |
+| `--cache-dir DIR` |  | compile cache (default ~/.cache/mashbox/xla, or JAX_COMPILATION_CACHE_DIR) |
+| `--no-warm` | off | skip compiling the first request's programs before ready |
+| `--no-prefix-cache` | off | prefill every prompt in full (by default the server reuses a cached prompt start, see docs/agents-on-tpu.md) |
+| `--cache-ram MIB` | `8192` | host memory for saved prompt states, as llama-server's --cache-ram: a conversation that loses its slot is kept here and restored when it comes back (default 8192, 0 = off) |
+| `--ctx-checkpoints N` | `8` | prompt points kept per slot where a cached prompt can resume (default 8) |
+| `--checkpoint-min-step N` | `8192` | minimum tokens between kept user-message points, as llama-server (default 8192) |
+<!-- cli:end -->
 
 `~/.local/bin/mashbox download qwen3-8-27b` fetches and checks the files without loading them. `~/.local/bin/mashbox env` prints the versions and chip for bug reports.
 
@@ -101,7 +122,11 @@ With these settings the `mashbox` server gives 33.0 tokens/s for one request at 
 
 ### Server routes and sampling
 
-Routes: `GET /health`, `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/completions`, with `"stream": true` for server-sent events. Sampling: `temperature`, `top_p`, `top_k`, `min_p`, `seed`, `stop`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`; temperature 0 (the default) is greedy. Thinking mode: `"chat_template_kwargs": {"enable_thinking": true}`. Requests sent within 20 ms of each other share the chip in one batch of up to 8. A request that arrives while a batch is running waits for that batch to finish, then runs with the others that arrived meanwhile.
+<!-- api:start -->
+Routes: `GET /v1/health`, `GET /health`, `GET /`, `HEAD /v1/health`, `GET /v1/models`, `GET /v1/models/{model}`, `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/messages`, `POST /v1/messages/count_tokens`, `POST /v1/responses`, `GET /openapi.json`. Each one, with every request field and response shape: [Server API](../server-api.md); the same as an OpenAPI file at `GET /openapi.json`. Send `"stream": true` for server-sent events. Sampling fields on every generating route: `max_tokens`, `max_completion_tokens`, `temperature`, `top_p`, `top_k`, `min_p`, `seed`, `stop`, `stop_sequences`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `n`; temperature 0 (the default) is greedy.
+<!-- api:end -->
+
+Thinking mode: `"chat_template_kwargs": {"enable_thinking": true}`. Requests sent within 20 ms of each other share the chip in one batch of up to 8. A request that arrives while a batch is running waits for that batch to finish, then runs with the others that arrived meanwhile.
 
 ## Variants
 
@@ -113,7 +138,7 @@ Made from the original bf16 weights: each large weight matrix (and the embedding
 
 ## Performance
 
-Measured on one TPU v6e-1 (on demand), set up on a new chip as this page shows: `mashbox` 0.1.0 with its kernel bundle and JAX 0.11.2 for TPU (`~/.local/bin/mashbox env` prints the full list), through the server with the default options (greedy, `--ctx 2048 --slots 8`). Chat prompts of about 30 tokens, 128 new tokens per request.
+Measured on one TPU v6e-1 (on demand, zone europe-west4-a), set up on a new chip as this page shows: `mashbox` 0.1.0 with its kernel bundle and JAX 0.11.2 for TPU (`~/.local/bin/mashbox env` prints the full list), through the server with the default options (greedy, `--ctx 2048 --slots 8`). Chat prompts of about 30 tokens, 128 new tokens per request.
 
 | What | Result |
 |---|---|
@@ -121,22 +146,28 @@ Measured on one TPU v6e-1 (on demand), set up on a new chip as this page shows: 
 | 8 users sending at the same moment, streamed | first token after 0.11 s for each of the 8 |
 | 8 users, each sending a new request as soon as its answer came back, for 60 s | 258 tokens/s in total; a request took 4.0 s (median) |
 | Install (`pip install uv` and `uv tool install`) | 5 to 7 s |
-| Start to ready on a new chip: download of the 26.9 GB file from Hugging Face (about 200 MB/s there), sha256 check, load; compiled programs come from the shipped compile cache | 138 s; 9.8 s of it after the download and check |
-| The same first start without the compile cache (same chip) | 166.6 s; 25.7 s after the download and check |
-| Start to ready, later runs | 6.6 s (median of 3) |
 
-The engine on its own does 38.6 tokens/s for 1 request and 269 tokens/s for 8 ([Variants](#variants)). On TPU v6e with JAX 0.11.2, `mashbox run` also downloads a 47 MB compile cache from the model repo (checked by sha256 like the weights), so the first start loads its compiled programs instead of compiling them. Any other chip or JAX version compiles on first use and keeps the result. A prompt length the server has not seen before compiles its programs once (5.8 s extra on that first request on a TPU v6e-1); the result is kept on disk in `~/.cache/mashbox/xla`, so later runs skip it. Download speed depends on the zone and the day.
+Start to ready with `mashbox` 0.1.2 on one TPU v6e-1 (on demand), the weights file already on disk, from starting the server until it answers its ready check. Every prefill and decode program is compiled or loaded before the server says ready.
+
+| What | Result |
+|---|---|
+| First start, empty compile cache | 326.6 s |
+| With the shipped compile cache | 69.6 s |
+| With the shipped compile cache, `--ctx 32768 --slots 1` | 32.6 s |
+
+The engine on its own does 38.6 tokens/s for 1 request and 269 tokens/s for 8 ([Variants](#variants)). On TPU v6e with JAX 0.11.2, `mashbox run` also downloads the compile cache from the model repo (checked by sha256 like the weights), so the first start loads its compiled programs instead of compiling them. Any other chip or JAX version compiles on first use and keeps the result. Download speed depends on the zone and the day.
 
 Quality from the installed package on the same chip: mean KL 0.00065 and top-1 agreement 99.72% against Hugging Face transformers in bf16 on 8 fixed prompts (367 token positions), the same as in [Variants](#variants).
 
+
 ### Compared with vLLM TPU on the same chip
 
-Measured on one TPU v6e-1 (on demand), one server on the chip at a time, the same OpenAI chat requests to both (streamed, 256 new tokens, thinking off). Ours: `mashbox` 0.1.0 with `Qwen3.8-27B-BQ8_R.bshj` (26.94 GB, 8.01 bits per weight) and default options. vLLM: vllm-tpu 0.32.0 with Qwen's own 8-bit file [Qwen/Qwen3.8-27B-FP8](https://huggingface.co/Qwen/Qwen3.8-27B-FP8), the closest like-for-like.
+Measured on one TPU v6e-1 (on demand, zone us-east5-b), one server on the chip at a time, the same OpenAI chat requests to both (streamed, 256 new tokens, thinking off). Ours: `mashbox` 0.1.0 with `Qwen3.8-27B-BQ8_R.bshj` (26.94 GB, 8.01 bits per weight) and default options. vLLM: vllm-tpu 0.32.0 with Qwen's own 8-bit file [Qwen/Qwen3.8-27B-FP8](https://huggingface.co/Qwen/Qwen3.8-27B-FP8), the closest like-for-like.
 
 | What | mashbox | vLLM TPU 0.32.0 |
 |---|---|---|
 | Starts on one v6e-1 with default settings | yes | no: Qwen's bf16 weights run out of chip memory; the FP8 weights start only with `--max-num-seqs 8 --gpu-memory-utilization 0.98 --no-enable-prefix-caching` |
-| Start to ready, weights already on disk, empty compile caches | 130.1 s | 1,606.7 s |
+| Start to ready, weights already on disk, empty compile caches | 326.6 s | 1,606.7 s |
 | 1 request at a time, short prompts, greedy | 38.1 tokens/s | 31.4 tokens/s |
 | 1 request at a time, 790-token prompts, greedy | 37.0 tokens/s | 31.0 tokens/s |
 | 1 request at a time, sampled (temperature 0.7, top_p 0.8, top_k 20) | 33.0 tokens/s | 23.7 tokens/s |
@@ -160,7 +191,7 @@ Claude Code, Codex and Pi can use Qwen3.8-27B as their LLM: start the server wit
 
 ## FAQ
 
-- **Why not TPU v5e?** The weights alone are about 27 GB and a v5e chip has 16 GB.
+- **Does it run on TPU v5e?** Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB.
 - **Can several people use one server?** Yes. Requests sent together share the chip in one batch of up to 8; a request that arrives while a batch runs waits for it to finish. With 8 users each sending a new request as soon as the last answer came back, the server gave 258 tokens/s in total on TPU v6e-1 ([Performance](#performance)).
 - **How do I turn on thinking mode?** `--thinking` for `--prompt`, or `"chat_template_kwargs": {"enable_thinking": true}` in a server request.
 
@@ -168,7 +199,8 @@ Claude Code, Codex and Pi can use Qwen3.8-27B as their LLM: start the server wit
 
 | Version | What changed |
 |---|---|
-| 0.1.1 | Server: `/v1/completions` without streaming returns `choices[0].text`, as OpenAI does. `mashbox tpu`: a failed chip list shows Google's error instead of reading as no chips; the tunnel stops when the chip is gone; the max lifetime runs on a wall-clock timer; a create that may have reached Google before an error (such as an expired sign-in) is deleted by name, or `up` prints its name and the delete command. Docs: settings for long Claude Code, Codex and Pi sessions, and installing on your own computer. |
+| 0.1.2 | Runs on TPU v6e-1, a TPU v5e-4 and a TPU v6e-4 slice: the `--chip` option picks the host for a new chip, tensor parallel defaults to the host's chips, and a setting that cannot fit stops before any download with the setting that does. Every prefill and decode program compiles, or loads from the new compile cache for TPU v6e, before the server says ready. Responses carry a llama-server style `timings` block, and a half-closed client socket ends its request. Prompt cache in host memory for coding agents (`--cache-ram`, `--ctx-checkpoints`, `--checkpoint-min-step`). OpenAPI description at `GET /openapi.json`. |
+| 0.1.1 | Server: `/v1/completions` without streaming returns `choices[0].text`, as OpenAI does. `mashbox tpu status` and `mashbox tpu down`: a failed chip list shows Google's error instead of reading as no chips. `mashbox tpu up`: the tunnel stops when the chip is gone; the max lifetime runs on a wall-clock timer; a create that may have reached Google before an error (such as an expired sign-in) is deleted by name, or `up` prints its name and the delete command. Docs: settings for long Claude Code, Codex and Pi sessions, and installing on your own computer. |
 | 0.1.0 | First release: one TPU v6e chip, OpenAI-compatible server, compiled kernels for 8 request slots, compile cache for TPU v6e. |
 
 ## Credits and licences

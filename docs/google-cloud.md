@@ -11,7 +11,7 @@ Google bills the chip from the moment it is created until it is deleted, running
 - A Google account.
 - A payment method for the billing account. Google asks for one when you create a billing account (step 3).
 - A terminal: Linux or macOS, or the Google Cloud SDK Shell on Windows.
-- About 35 minutes from a new project to a deleted chip. The chip exists for 17 minutes of that, which is $0.77 at the list price above.
+- About 35 minutes from a new project to a deleted chip when a zone has a free chip, plus any wait for one ([FAQ](faq.md)). The chip bills for about 17 minutes of that: about $0.77 at the list price above.
 
 ## 1. Install the Google Cloud CLI and sign in
 
@@ -109,7 +109,10 @@ If the value is 0, ask for more:
 | Chip | `--accelerator-type` | `--version` | Zones to try first |
 |---|---|---|---|
 | TPU v6e | `v6e-1` | `v2-alpha-tpuv6e` | us-east5-b, europe-west4-a |
+| TPU v6e slice of 4 chips | `v6e-4` | `v2-alpha-tpuv6e` | asia-northeast1-b, europe-west4-a, us-east5-b |
 | TPU v5e | `v5litepod-1` | `v2-alpha-tpuv5-lite` | us-central1-a, us-south1-a, europe-west4-b |
+
+This is not a full list: Google's [TPU regions and zones](https://cloud.google.com/tpu/docs/regions-zones) page lists every zone that offers each chip, and a zone outside the table may need quota first (step 5). When the zones in the table have no capacity, [queue a request](#if-no-zone-has-a-chip-queue-a-request) instead of trying zones one by one.
 
 In the console, open [console.cloud.google.com/compute/tpus](https://console.cloud.google.com/compute/tpus).
 
@@ -134,7 +137,7 @@ gcloud compute tpus tpu-vm create mashbox-1 \
 gcloud compute tpus tpu-vm describe mashbox-1 --zone=us-east5-b --format='value(state)'
 ```
 
-Wait until the state is `READY`. On a new TPU v6e-1 this took 9 minutes.
+Wait until the state is `READY`. A TPU v6e-1 in us-east5-b can take about 9 minutes.
 
 If a zone has no free chips, the create command fails after about 2 minutes with `There is no more capacity in the zone`. Run it again with the next zone in the table, and use that zone in every command after it.
 
@@ -144,7 +147,27 @@ If a zone has no free chips, the create command fails after about 2 minutes with
 2. **SSH** opens a shell in your browser (next step).
 
 - **Quota error:** go back to step 5.
-- **No capacity:** try the next zone in the table.
+- **No capacity:** try the next zone in the table, or queue a request (below).
+
+### If no zone has a chip: queue a request
+
+A queued request waits in a zone until Google has a chip, then makes it under the name you give. It costs nothing while it waits; the chip bills from the moment it exists.
+
+```bash
+gcloud compute tpus queued-resources create mashbox-1-request --node-id=mashbox-1 \
+  --zone=us-east5-b --accelerator-type=v6e-1 --runtime-version=v2-alpha-tpuv6e
+gcloud compute tpus queued-resources describe mashbox-1-request --zone=us-east5-b --format='value(state.state)'
+```
+
+The software version goes in `queued-resources create --runtime-version`, where `tpu-vm create` uses `--version`. Run the `describe` line until the state is `ACTIVE`:
+
+| State | What it means |
+|---|---|
+| `WAITING_FOR_RESOURCES` | the request waits for a free chip in the zone; nothing bills |
+| `PROVISIONING` | Google is making the chip |
+| `ACTIVE` | the chip `mashbox-1` exists and bills: use it like a chip you created, from step 7 on |
+
+A queued TPU v6e-1 request in us-east5-b can take about 9 min 55 s to go `ACTIVE` with a `READY` chip. A chip you queued is deleted with its request ([step 8](#8-delete-the-chip)).
 
 ## 7. Connect, install and run
 
@@ -176,9 +199,9 @@ gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b \
   --command='python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]" && ~/.local/bin/mashbox run qwen3-8-27b --prompt "Hello"'
 ```
 
-The chip's system Python is 3.10, and JAX for TPU needs Python 3.12. So the command first installs [uv](https://docs.astral.sh/uv/) with pip, and uv installs `mashbox` with its own Python 3.12. The `mashbox` command lands in `~/.local/bin`; the commands in these docs use that full path because the folder is not on your `PATH` until you next log in. pip and uv both print a warning saying so; that is expected. On a new TPU v6e-1 the install took 5 to 7 s, and the model's first start took 138 s, most of it downloading the 26.9 GB weights file; later starts took 6.6 s.
+The chip's system Python is 3.10, and JAX for TPU needs Python 3.12. So the command first installs [uv](https://docs.astral.sh/uv/) with pip, and uv installs `mashbox` with its own Python 3.12. The `mashbox` command lands in `~/.local/bin`; the commands in these docs use that full path because the folder is not on your `PATH` until you next log in. pip and uv both print a warning saying so; that is expected. On a new TPU v6e-1 the install takes 5 to 7 s, and the model's first start downloads the 26.9 GB weights file; with it on disk, a start is ready in 69.6 s.
 
-This runs Qwen3.8-27B, which fits on the one chip from step 6. For another model, swap in its `run` command from [models.json](../models.json) and create the chip type its row lists in step 6. A model that writes files (for example a video) leaves them on the chip; copy them to your machine with `gcloud compute tpus tpu-vm scp mashbox-1:<file> . --zone=us-east5-b` before step 8.
+This runs Qwen3.8-27B, which fits on the one chip from step 6. For another model, swap in its `install` and `run` commands from [models.json](../models.json) and create the chip type its row lists in step 6. A model that writes files (for example a video) leaves them on the chip; copy them to your machine with `gcloud compute tpus tpu-vm scp mashbox-1:<file> . --zone=us-east5-b` before step 8.
 
 ## 8. Delete the chip
 
@@ -203,16 +226,26 @@ gcloud compute tpus tpu-vm list --zone=us-east5-b
 
 The list must not show `mashbox-1`. Until it is gone, it bills.
 
+If you made the chip with a queued request, delete the request; `queued-resources delete --force` deletes the chip with it:
+
+```bash
+gcloud compute tpus queued-resources delete mashbox-1-request --zone=us-east5-b --force --quiet
+gcloud compute tpus queued-resources list --zone=us-east5-b
+```
+
+The delete can take about 93 s. Both lists (`tpu-vm list` and `queued-resources list`) must be empty of your names.
+
 ## Check it worked
 
 Two outputs prove it: the `TpuDevice` line in step 7, and the chip list without `mashbox-1` in step 8.
 
 ## Clean up
 
-Step 8 is the clean-up. A chip you forget keeps billing: $64.80 a day for one TPU v6e chip at the list price above. When in doubt, list your chips in every zone you used:
+Step 8 is the clean-up. A chip you forget keeps billing: $64.80 a day for one TPU v6e chip at the list price above. When in doubt, list your chips and queued requests in every zone you used:
 
 ```bash
 gcloud compute tpus tpu-vm list --zone=us-east5-b
+gcloud compute tpus queued-resources list --zone=us-east5-b
 ```
 
 ## Troubleshooting
@@ -220,17 +253,17 @@ gcloud compute tpus tpu-vm list --zone=us-east5-b
 | What you see | What to do |
 |---|---|
 | an error that mentions quota when you create the chip | request TPU quota for that zone (step 5) |
-| no capacity in the zone | try the next zone in the step 6 table |
+| no capacity in the zone | try the next zone in the step 6 table, or [queue a request](#if-no-zone-has-a-chip-queue-a-request) |
 | the TPU API is not enabled | turn it on (step 4) |
 | the **VM instance** button opens a Compute Engine VM form | that is a different product; use the **Cloud TPU API** tab, then **Create TPU** (step 6) |
 | SSH in the browser asks you to authorize | click **Authorize**; it asks once (step 7) |
-| `There is no more capacity in the zone "us-east5-b"` | no free chips there right now: create the chip in the next zone of the step 6 table, and use that zone in every later command |
+| `There is no more capacity in the zone "us-east5-b"` | no free chips there right now: create the chip in the next zone of the step 6 table and use that zone in every later command, or [queue a request](#if-no-zone-has-a-chip-queue-a-request) |
 | `User does not have permission to submit requests for accelerator type "v6e-1" in location ...` | your project has no on-demand quota for that chip in that zone: pick a zone from the step 6 table, or ask for quota there (step 5) |
 | `ERROR: No matching distribution found for jax[tpu]==0.11.2` | plain `pip install "mashbox[tpu]"` ran on the chip's Python 3.10; use the install line from step 7, which gets Python 3.12 through uv |
 | `mashbox: command not found` | use the full path `~/.local/bin/mashbox`, or log in again so `~/.local/bin` is on your `PATH` |
 | `429 Too Many Requests` from `cdn.hf.co` during the download | Hugging Face's Xet transfer is limiting the download: run the command again. `mashbox` downloads over plain HTTPS unless `HF_HUB_DISABLE_XET=0` is set |
 | `The TPU is already in use by another process` | one process at a time can use the chip: stop the other one (for example a server in another SSH session) and run again |
-| `its runtime is not in mashbox <version> yet` | that model's port is not in the installed version; its page under Models says what is ready |
+| `<model> is not in mashbox <version>` | that model is not in the installed version: pick one from the Models pages |
 
 ## Next
 

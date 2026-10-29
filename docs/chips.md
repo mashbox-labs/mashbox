@@ -23,9 +23,12 @@ The two TPU generations these docs use, side by side, and which one to pick. Spe
 
 ### Per model
 
-| Model | TPU v6e | TPU v5e |
-|---|---|---|
-| [Qwen3.8-27B](models/qwen3-8-27b.md) | one chip (`v6e-1`) | does not fit: the weights alone are about 27 GB |
+<!-- chips:start -->
+| Model | Runs on | TPU v5e | TPU v6e | TPU v5p slice (v5p-8) | TPU v6e slice (v6e-4) |
+|---|---|---|---|---|---|
+| Hy-Nomas | TPU v6e-4 | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | Not supported: runs only on a v6e-4 (a TPU v6e slice of 4 chips) | Supported: 4 chips |
+| Qwen3.8-27B | TPU v6e-1 | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: one chip (v6e-1) | Not supported | Supported: 4 chips, split across them automatically |
+<!-- chips:end -->
 
 ## Examples
 
