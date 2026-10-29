@@ -372,11 +372,6 @@ def test_b7_not_ready_answers_503_529(family, monkeypatch, request):
         assert code == (529 if path == "/v1/messages" else 503) and "Retry-After" in h, (path, code)
 
 
-DROPPED_STREAM = ("open: runtime/server.py run_chat calls on_start (a stream's 200 and its first chunk) as soon as the "
-                  "request is queued, before it has a slot, so a queued stream dropped from the queue (longest-queue "
-                  "drop) gets 200, its first chunk, then an error event, not its refusal as the status")
-
-
 @pytest.mark.slow
 @pytest.mark.parametrize("row", ["caps", "drop"])
 def test_b7_overload_answers_429_529_never_503(family, monkeypatch, request, row):
@@ -389,8 +384,6 @@ def test_b7_overload_answers_429_529_never_503(family, monkeypatch, request, row
     eng, chat, _ = tiny.engine(family, "random", S=1)
     if family == tiny.BSHJ:
         request.applymarker(pytest.mark.xfail(strict=True, reason=NO_TOKENIZER))
-    elif row == "drop":
-        request.applymarker(pytest.mark.xfail(strict=True, reason=DROPPED_STREAM))
     chat.decode(chat.chat_ids([dict(role="user", content="hi")]))     # the chat routes need a tokenizer that decodes
     held, entered, real_step = threading.Event(), threading.Event(), eng.step
 

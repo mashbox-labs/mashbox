@@ -701,15 +701,15 @@
      },
      "cache_bytes": {
       "type": "integer",
-      "description": "Bytes the prompt cache holds: host memory copies plus slot snapshots."
+      "description": "Bytes the prompt cache holds in host memory: host_cache_bytes plus snapshot_bytes, each copy counted once."
      },
      "host_cache_bytes": {
       "type": "integer",
-      "description": "Bytes of prompt cache in host memory."
+      "description": "Bytes of the host memory prompt cache, each copy counted once."
      },
      "snapshot_bytes": {
       "type": "integer",
-      "description": "Bytes of saved slot state points."
+      "description": "Bytes of saved slot state points that host_cache_bytes does not already count."
      },
      "host_cache_cap_bytes": {
       "type": "integer",

@@ -8,7 +8,9 @@ With ui=True (`mashbox run <model> --ui`) GET / is the MASHBOX Chat page (mashbo
 Continuous batching: up to S requests (the engine's slot count) are live at once, and a
 request that arrives while others are mid-answer takes a free slot at the next device call. Its prompt is read in chunks
 next to the decoding rows (a long prompt never stalls them for more than one chunk), it gets its first token at the call
-where its prefill ends, and it ends at its own finish. Requests beyond S wait in arrival order for a slot. The request
+where its prefill ends, and it ends at its own finish. Requests beyond S wait for a slot and are admitted round robin
+across owners, in arrival order within one (Server.next_waiting). A streamed request's 200 goes out with its first token,
+so a request refused while it waits keeps its own status code. The request
 field "merge" is accepted and ignored: no request field changes how other rows are scheduled. Engines without
 admit/step (test stubs) run the older whole-batch loop; speculative decoding (`mashbox run --mtp K`) runs inside the
 continuous path's step.
@@ -39,6 +41,7 @@ import math
 import os
 import queue
 import select
+import signal
 import socket
 import sys
 import threading
@@ -203,6 +206,44 @@ class Text:
         return delta
 
 
+def cache_bytes_once(host, slot_snaps):
+    """-> (host_cache_bytes, snapshot_bytes) for /health: the host memory the prompt cache holds, each array counted once.
+    One state point can sit in several places at once: a slot saved to the host cache keeps its points that the next
+    request on that slot shares (a system prompt), and two saves of one slot both hold that point, so summing each
+    entry's own byte count would count it two or three times. host_cache_bytes = the distinct arrays of the host
+    entries (their K/V blocks and points); snapshot_bytes = the distinct points of the slots that no host entry holds.
+    Their sum is what a soak subtracts from RSS (net of every host-RAM cache). host: a HostCache, or
+    the tuple of its entries that cache_view took."""
+    seen = set()
+
+    def once(t):
+        if isinstance(t, dict):
+            return sum(once(v) for v in t.values())
+        if isinstance(t, (list, tuple)):
+            return sum(once(v) for v in t)
+        if id(t) in seen or not hasattr(t, "nbytes"):
+            return 0
+        seen.add(id(t))
+        return int(t.nbytes)
+    hb = 0
+    for e in (host.items if hasattr(host, "items") else host or ()):
+        hb += once([b for _, b in e.get("kv", ())]) + once([(x["r"], x["c"]) for x in e.get("snaps", ())])
+    snaps = once([(x["r"], x["c"]) for sn in (slot_snaps or ()) for x in sn])
+    return hb, snaps
+
+
+def cache_view(engine):
+    """-> (host entries, slot points): one moment of the prompt cache's structure, which cache_bytes_once(*view) counts.
+    The engine's own loop takes it between device calls (Server.publish_cache_view), where nothing is half changed: a host
+    entry never changes once made (HostCache.add appends it; an eviction or a namespace change replaces the list), and a
+    slot's points change only as a whole list. So a shallow copy of those lists is that moment's cache, and /health,
+    counting it later on another thread, counts exactly the arrays of that moment: never an entry evicted since, next to
+    a slot's newer points."""
+    host = getattr(engine, "host", None)
+    return (tuple(host.items) if host is not None else (),
+            tuple(tuple(sn) for sn in (getattr(engine, "snaps", None) or ())))
+
+
 class Server:
     def __init__(self, engine, chat, model_id, info, log=None):
         self.engine, self.chat, self.model_id, self.info = engine, chat, model_id, info
@@ -228,11 +269,14 @@ class Server:
         floors decide which: a tenant inside cap / tenants is never evicted for another's traffic), the cache namespace and, once the compile key exists, the deployment id and component
         set, and the XLA compiles since ready (runtime/programs.py; 0 when the warm-up covered every program, None in a
         process that does not count them). Certification
-        is a state CERT's gate sets; this server reports not_certified."""
+        is a state the certification gate sets; this server reports not_certified. The cache bytes are those of the loop's last call
+        boundary (publish_cache_view), one moment of the cache, not a sum read while the engine changes it."""
         E = self.engine
         host = getattr(E, "host", None)
-        snaps = sum(x["r"].nbytes + x["c"].nbytes for sn in (getattr(E, "snaps", None) or []) for x in sn)
-        hb = host.nbytes() if host is not None else 0
+        view = getattr(self, "cache_view", None)
+        if view is None:                 # no loop has run yet (its first act is to publish), so nothing changes the cache
+            view = cache_view(E)
+        hb, snaps = cache_bytes_once(*view)
         return dict(live_rows=E.S - E.free_slots() if hasattr(E, "free_slots") else None, waiting=self.waiting,
                     cache_bytes=hb + snaps, host_cache_bytes=hb, snapshot_bytes=snaps,
                     host_cache_cap_bytes=host.cap if host is not None else 0,
@@ -240,6 +284,11 @@ class Server:
                     cache_namespace=getattr(E, "cache_ns", None), deployment_id=getattr(E, "deployment_id", None),
                     component_set_sha=getattr(E, "component_set_sha", None), certification="not_certified",
                     compiles_after_ready=programs.counts()["compiles_after_ready"])
+
+    def publish_cache_view(self):
+        """The engine loop, at a call boundary: keep cache_view(engine) for /health, which another thread reads (the HTTP
+        handler here, the heartbeat thread in a worker). A shallow copy of the entry and point lists, no array copied."""
+        self.cache_view = cache_view(self.engine)
 
     # -------------------------------------------------------------------------------------------------- batching
     def loop(self):
@@ -249,13 +298,15 @@ class Server:
 
     def loop_live(self):
         """Continuous batching: between device calls, admit waiting requests into free
-        slots (first come, first served), then one engine step: a decode call for the decoding rows and a prefill chunk for
+        slots (round robin across owners, first come, first served within one: next_waiting), then one engine step:
+        a decode call for the decoding rows and a prefill chunk for
         rows still reading their prompt. A request waits only for a free slot, never for a batch to finish; the engine
         runs 1 decode step per call while anyone waits. No request field changes how other rows are scheduled ("merge"
         is accepted and ignored)."""
         E = self.engine
         wait, live = collections.deque(), {}
         while True:
+            self.publish_cache_view()                 # a call boundary: /health counts this moment of the cache
             if not live and not wait:
                 wait.append(self.q.get())
             while True:
@@ -271,13 +322,15 @@ class Server:
                                     t_admit=0.0, t_first=0.0, t_end=0.0), 0)
             take, room = [], E.free_slots()
             while wait and room:
-                take.append(wait.popleft())
+                take.append(self.next_waiting(wait))
                 room -= 1
             if take:
                 t_run = time.monotonic()
                 for j in take:
                     j["t_run"] = t_run
                     self._unwait(j)
+                take = self.still_to_admit(take)
+            if take:
                 try:
                     rows = E.admit([dict(ids=j["ids"], max_new=j["max_new"], samp=j["samp"], mark=j.get("mark"),
                                          scope=j.get("scope"), variant=j.get("variant")) for j in take],
@@ -321,6 +374,7 @@ class Server:
                 self.fail(list(live.values()), e)
                 live = {}
                 continue
+            self.publish_cache_view()
             for j in live.values():
                 j["batch_rows"] = max(j["batch_rows"], n_live)
                 if j["row"]["ids"] or j["row"]["fin"] is not None:
@@ -331,11 +385,11 @@ class Server:
 
     def next_waiting(self, wait):
         """Take the next request to admit out of `wait` (a deque of waiting jobs in arrival order) and return it.
-        Round robin across owners (spec §5, A15: tenant = owner group): the owner taken least recently goes first (an
+        Round robin across owners (tenant = owner group): the owner taken least recently goes first (an
         owner never taken before goes before every owner that was), first in, first out within an owner; a request sent
         again after a worker fault (its "retried" mark, runtime/front.py) goes before all. So a request of an owner with
-        nothing else waiting joins at the next free row, however long other owners' queues are (CERT B5-64
-        bounded_progress: a late request emits before an earlier max-length row ends). The order depends only on the
+        nothing else waiting joins at the next free row, however long other owners' queues are (bounded
+        progress: a late request emits before an earlier max-length row ends). The order depends only on the
         arrivals and the earlier admissions, never on prompt content or cached state (B1: no content-dependent
         ordering). With one owner (no API keys) it is plain first come, first served. Fallback: an empty `wait` raises
         IndexError, as deque.popleft() does."""
@@ -360,6 +414,24 @@ class Server:
         self.n_taken += 1
         self.last_admit[j.get("scope")] = self.n_taken
         return j
+
+    def still_to_admit(self, taken):
+        """The jobs of `taken` (taken from the queue by next_waiting, then off the waiting lists by _unwait) that still go to
+        the engine. A job stays in its owner's waiting list until _unwait, so in that moment a longest-queue drop (submit)
+        can pick it: it is then answered already (its "error": 429 / 529 + Retry-After) and is not sent; a job whose client
+        left in that moment (hangup) ends as a cancel, as the loop's sweep ends one. _unwait takes the waiting lock, so after
+        it no drop can pick the job."""
+        keep = []
+        for j in taken:
+            if "error" in j:
+                continue
+            if j.get("cancel"):
+                j.setdefault("t_run", time.monotonic())
+                self.finish(j, dict(slot=None, ids=[], fin="cancel", cached=0, restored=0, sampled=False, calls=0,
+                                    t_admit=0.0, t_first=0.0, t_end=0.0), 0)
+                continue
+            keep.append(j)
+        return keep
 
     def _unwait(self, j):
         """A job stops counting against the waiting limits once (admitted, or its client left while it waited)."""
@@ -442,6 +514,7 @@ class Server:
         hold = collections.deque()
         S = self.engine.S
         while True:
+            self.publish_cache_view()                 # between batches: /health counts this moment of the cache
             first = hold.popleft() if hold else self.q.get()
             # Requests sent together reach the queue a few milliseconds apart; wait up to GATHER_S for them, so they share
             # one batch instead of the first one running alone while the rest wait for it to finish.
@@ -464,6 +537,7 @@ class Server:
     def run(self, batch):
         for j in batch:
             self._unwait(j)
+        batch = [j for j in batch if "error" not in j]       # dropped from the queue while it was gathered: answered
         for j in [j for j in batch if j.get("cancel")]:       # the client left while it waited: nothing to run
             j["error"] = ConnectionResetError("client closed the connection")
             j["ev"].set()
@@ -679,8 +753,12 @@ class Server:
         return sorted(set([j for j in at if tuple(ids[j + 1:j + 1 + n]) == u] + [at[-1]]))
 
     def run_chat(self, msgs, tools, think, k, merge=True, on_start=None, on_event=None, meta=None):
-        """Render, generate, parse. on_start(prompt_tokens) runs once the request is accepted; on_event(ev) gets each
-        ("reasoning", s) / ("text", s) / ("tool", name, args). -> dict(text, reasoning, calls, finish, usage)."""
+        """Render, generate, parse. on_start(prompt_tokens) runs once the engine has sent the request's first event (its
+        first token, or its end), never while it waits for a row: a streamed request's 200 goes out then, so a request
+        refused or dropped while it waits (longest-queue drop, a worker that is not ready) gets its own status code
+        (429 / 529 / 503 + Retry-After) and never a 200 followed by an error event (every refusal goes out before
+        any 200). on_event(ev) gets each ("reasoning", s) / ("text", s) / ("tool", name, args).
+        -> dict(text, reasoning, calls, finish, usage)."""
         t0 = time.monotonic()
         try:
             ids = self.chat.chat_ids(msgs, think, tools or None)
@@ -694,9 +772,8 @@ class Server:
         out = dict(text=[], reasoning=[], calls=[], finish="length", stop_sequence=None)
         t_first, t_last, n_out, gone = None, None, 0, None
         closed = (meta or {}).get("closed")       # streaming: () -> True once the client has closed its side
+        started, seen = on_start is None, False
         try:
-            if on_start is not None:
-                on_start(len(ids))
             t_chk = time.monotonic()
             while True:
                 try:
@@ -713,6 +790,10 @@ class Server:
                     break
                 if closed is not None and closed():
                     raise BrokenPipeError("client closed the connection")
+                if not started:                  # the engine's first event: the row is past every waiting refusal
+                    started = True
+                    on_start(len(ids))
+                seen = True
                 got, done, fin = ev
                 if tx.done:
                     continue
@@ -739,7 +820,21 @@ class Server:
                                                                              # ends this row at its next step
         job["ev"].wait()
         if "error" in job:
-            raise job["error"]
+            raise job["error"]               # before any event: the route answers it with its own status code
+        if not started and gone is None:     # it ended with no event (no token): its 200 goes out with its end
+            started = True
+            on_start(len(ids))
+        if not seen and gone is None and "result" in job:   # no event at all: its answer and finish are its result's,
+            r = job["result"]                                # as the legacy route takes them (legacy())
+            got = list(r.get("ids") or [])
+            for e in par.feed(tx.update(got, final=True), final=True):
+                (out["calls"].append(e[1:]) if e[0] == "tool" else out[e[0]].append(e[1]))
+                if on_event is not None:
+                    on_event(e)
+            n_out = stop_point(self.chat, got, k["stop"]) if tx.done else len(got)
+            out["finish"] = "stop" if (r.get("finish") == "stop" or tx.done) else "length"
+            if tx.done:
+                out["stop_sequence"] = next((s for s in k["stop"] or [] if s in self.chat.decode(got)), None)
         cached = job.get("cached", job.get("result", {}).get("cached", 0))
         out["usage"] = dict(prompt=len(ids), completion=n_out, cached=cached)
         # llama-server's timings block: prompt = queue end to first token (restore + prefill of the uncached tokens),
@@ -1127,11 +1222,36 @@ POST_API = {"createChatCompletion": "chat", "createCompletion": "completions", "
             "countTokens": "count_tokens", "createResponse": "responses"}
 OPENAI_API = ("chat", "completions", "responses")      # the routes that check the request's model id
 
+DRAIN_S = 10.0       # a stop waits this long for the requests still being answered (stop_serving), POLICY
+
 class Listener(ThreadingHTTPServer):
     """The HTTP server. Its accept queue holds request_queue_size connections (the standard library's default is 5: with
     64 users connecting at once on a v6e-1, 5 overflowed and 15 of 128 requests were reset by peer). The kernel caps it at
     net.core.somaxconn."""
     request_queue_size = 1024
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.answering, self.answer_cv = 0, threading.Condition()
+
+    def answer_begin(self):
+        with self.answer_cv:
+            self.answering += 1
+
+    def answer_end(self):
+        with self.answer_cv:
+            self.answering -= 1
+            self.answer_cv.notify_all()
+
+    def drain(self, timeout):
+        """Wait until no POST is being answered (each counts from the top of do_POST, once its path is read, to its last
+        write), at most `timeout` seconds. -> how many are still being answered. An idle keep-alive connection is not
+        counted."""
+        end = time.monotonic() + timeout
+        with self.answer_cv:
+            while self.answering and end - time.monotonic() > 0:
+                self.answer_cv.wait(end - time.monotonic())
+            return self.answering
 
 
 def key_scope(headers, keys):
@@ -1313,86 +1433,90 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
 
         def do_POST(self):
             path = self.path.split("?")[0].rstrip("/")
-            from . import openapi
-            route, _ = openapi.route("post", path)
-            api = self.api_name = POST_API.get(route and route["id"])
-            anth = api in ("anthropic", "count_tokens")
-            if self._gate(anth=anth):
-                return
-            if api is None:
-                return self._err(404, f"not found: POST {path}", anth=anth)
+            self.server.answer_begin()   # counted while answered: a stop waits for its last write (stop_serving)
             try:
-                n = int(self.headers.get("Content-Length") or 0)
-                b = json.loads(self.rfile.read(n) or b"{}")
-                if not isinstance(b, dict):
-                    raise BadRequest("body must be a JSON object")
-            except (ValueError, BadRequest) as e:
-                return self._err(400, f"bad JSON body: {e}", anth=anth)
-            self.reader.deadline = None                  # the request is in: no read deadline while it is answered
-            if isinstance(self.wfile, StallWriter):   # the body is in: from here every write must finish in stall_s
-                self.wfile.stall_s = stall_s()
+                from . import openapi
+                route, _ = openapi.route("post", path)
+                api = self.api_name = POST_API.get(route and route["id"])
+                anth = api in ("anthropic", "count_tokens")
+                if self._gate(anth=anth):
+                    return
+                if api is None:
+                    return self._err(404, f"not found: POST {path}", anth=anth)
                 try:
-                    self.connection.settimeout(self.wfile.stall_s)
-                    if b.get("stream"):          # a stream keeps at most SEND_BUFFER bytes in the kernel for its client
-                        self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)
-                except OSError:
-                    pass
-            if api in OPENAI_API and b.get("model") not in (None, "", S.model_id):
-                # OpenAI routes serve one model id (GET /v1/models); the Anthropic routes answer any model name, because
-                # Claude Code sends its own (main model and subagents) unless every model variable is set.
-                return self._err(404, f"The model `{str(b.get('model'))[:64]}` does not exist on this server; it serves "
-                                      f"`{S.model_id}` (GET /v1/models)", ecode="model_not_found")
-            if not S.ready:
-                return self._not_ready("the model is loading or restarting; try again shortly", anth)
-            meta = dict(api=api, ua=(self.headers.get("User-Agent") or "")[:80], session=session_of(self.headers, b),
-                        agent=agent_of(self.headers, b), model=str(b.get("model") or "")[:64] or None)
-            meta.update(scope=self.scope, gone=self._gone)           # not logged: run_chat logs named fields only
-            if os.environ.get("MASHBOX_DUMP_DIR"):        # debugging client compatibility: keep each request body
+                    n = int(self.headers.get("Content-Length") or 0)
+                    b = json.loads(self.rfile.read(n) or b"{}")
+                    if not isinstance(b, dict):
+                        raise BadRequest("body must be a JSON object")
+                except (ValueError, BadRequest) as e:
+                    return self._err(400, f"bad JSON body: {e}", anth=anth)
+                self.reader.deadline = None                  # the request is in: no read deadline while it is answered
+                if isinstance(self.wfile, StallWriter):   # the body is in: from here every write must finish in stall_s
+                    self.wfile.stall_s = stall_s()
+                    try:
+                        self.connection.settimeout(self.wfile.stall_s)
+                        if b.get("stream"):          # a stream keeps at most SEND_BUFFER bytes in the kernel for its client
+                            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, SEND_BUFFER)
+                    except OSError:
+                        pass
+                if api in OPENAI_API and b.get("model") not in (None, "", S.model_id):
+                    # OpenAI routes serve one model id (GET /v1/models); the Anthropic routes answer any model name, because
+                    # Claude Code sends its own (main model and subagents) unless every model variable is set.
+                    return self._err(404, f"The model `{str(b.get('model'))[:64]}` does not exist on this server; it serves "
+                                          f"`{S.model_id}` (GET /v1/models)", ecode="model_not_found")
+                if not S.ready:
+                    return self._not_ready("the model is loading or restarting; try again shortly", anth)
+                meta = dict(api=api, ua=(self.headers.get("User-Agent") or "")[:80], session=session_of(self.headers, b),
+                            agent=agent_of(self.headers, b), model=str(b.get("model") or "")[:64] or None)
+                meta.update(scope=self.scope, gone=self._gone)           # not logged: run_chat logs named fields only
+                if os.environ.get("MASHBOX_DUMP_DIR"):        # debugging client compatibility: keep each request body
+                    try:
+                        with open(os.path.join(os.environ["MASHBOX_DUMP_DIR"], f"{time.time():.3f}-{api}.json"), "w") as f:
+                            json.dump(dict(path=self.path, headers={k: v for k, v in self.headers.items()
+                                                                    if k.lower() not in ("authorization", "x-api-key")}, body=b), f)
+                    except OSError:
+                        pass
+                sse = SSE(self) if b.get("stream") else None
+                if sse is not None:
+                    meta["closed"] = sse.closed
                 try:
-                    with open(os.path.join(os.environ["MASHBOX_DUMP_DIR"], f"{time.time():.3f}-{api}.json"), "w") as f:
-                        json.dump(dict(path=self.path, headers={k: v for k, v in self.headers.items()
-                                                                if k.lower() not in ("authorization", "x-api-key")}, body=b), f)
-                except OSError:
-                    pass
-            sse = SSE(self) if b.get("stream") else None
-            if sse is not None:
-                meta["closed"] = sse.closed
-            try:
-                if api == "count_tokens":
-                    return self._send(200, S.count_tokens(b))
-                if api == "completions":
-                    return self.legacy(b, False, meta)
-                fn = dict(chat=S.openai_chat, anthropic=S.anthropic, responses=S.responses)[api]
-                r = fn(b, sse, meta)
-                if sse is None:
-                    return self._send(200, r)
-            except NotReady as e:
-                if sse is not None and sse.started:
-                    return sse.error(str(e), anth, "overloaded_error" if anth else "server_error")
-                return self._not_ready(str(e), anth, e.retry_after)
-            except WorkerFault as e:
-                S.log(json.dumps(dict(event="error", api=api, error=f"WorkerFault {e.code}: {e}"[:300])))
-                if sse is not None and sse.started:
-                    return sse.error(str(e), anth, "api_error" if anth else "server_error")
-                return self._err(500, str(e), "server_error", anth=anth)
-            except Busy as e:
-                over = isinstance(e, Overloaded)
-                typ = ("overloaded_error" if anth else "server_overloaded") if over else ("rate_limit_error" if anth else "rate_limit_exceeded")
-                if sse is not None and sse.started:
-                    return sse.error(str(e), anth, typ)
-                return self._err(529 if (over and anth) else 429, str(e), typ, anth=anth, retry_after=e.retry_after)
-            except BadRequest as e:
-                S.log(json.dumps(dict(event="rejected", api=api, ua=meta["ua"], error=str(e)[:300])))
-                if sse is not None and sse.started:
-                    return sse.error(str(e), anth)
-                return self._err(400, str(e), anth=anth)
-            except (BrokenPipeError, ConnectionResetError):
-                return
-            except Exception as e:
-                S.log(json.dumps(dict(event="error", api=api, error=f"{type(e).__name__}: {e}"[:300])))
-                if sse is not None and sse.started:
-                    return sse.error(f"{type(e).__name__}: {e}", anth, "server_error" if not anth else "api_error")
-                return self._err(500, f"{type(e).__name__}: {e}", "server_error" if not anth else "api_error", anth=anth)
+                    if api == "count_tokens":
+                        return self._send(200, S.count_tokens(b))
+                    if api == "completions":
+                        return self.legacy(b, False, meta)
+                    fn = dict(chat=S.openai_chat, anthropic=S.anthropic, responses=S.responses)[api]
+                    r = fn(b, sse, meta)
+                    if sse is None:
+                        return self._send(200, r)
+                except NotReady as e:
+                    if sse is not None and sse.started:
+                        return sse.error(str(e), anth, "overloaded_error" if anth else "server_error")
+                    return self._not_ready(str(e), anth, e.retry_after)
+                except WorkerFault as e:
+                    S.log(json.dumps(dict(event="error", api=api, error=f"WorkerFault {e.code}: {e}"[:300])))
+                    if sse is not None and sse.started:
+                        return sse.error(str(e), anth, "api_error" if anth else "server_error")
+                    return self._err(500, str(e), "server_error", anth=anth)
+                except Busy as e:
+                    over = isinstance(e, Overloaded)
+                    typ = ("overloaded_error" if anth else "server_overloaded") if over else ("rate_limit_error" if anth else "rate_limit_exceeded")
+                    if sse is not None and sse.started:
+                        return sse.error(str(e), anth, typ)
+                    return self._err(529 if (over and anth) else 429, str(e), typ, anth=anth, retry_after=e.retry_after)
+                except BadRequest as e:
+                    S.log(json.dumps(dict(event="rejected", api=api, ua=meta["ua"], error=str(e)[:300])))
+                    if sse is not None and sse.started:
+                        return sse.error(str(e), anth)
+                    return self._err(400, str(e), anth=anth)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                except Exception as e:
+                    S.log(json.dumps(dict(event="error", api=api, error=f"{type(e).__name__}: {e}"[:300])))
+                    if sse is not None and sse.started:
+                        return sse.error(f"{type(e).__name__}: {e}", anth, "server_error" if not anth else "api_error")
+                    return self._err(500, f"{type(e).__name__}: {e}", "server_error" if not anth else "api_error", anth=anth)
+            finally:
+                self.server.answer_end()
 
         def legacy(self, b, chat, meta=None):
             if b.get("stream"):
@@ -1437,4 +1561,44 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
     httpd = Listener((host, port), H)
     server.httpd = httpd                       # a front that gives up (runtime/front.py) stops serving through it
     log(json.dumps(dict(event="listening", url=f"http://{host}:{port}/v1")))
-    httpd.serve_forever()
+    got = []
+    main = threading.current_thread() is threading.main_thread()   # signal handlers exist only in the main thread
+
+    def on_signal(signum, frame):            # the first SIGINT or SIGTERM: later ones are ignored from here on
+        got.append(signum)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, signal.SIG_IGN)
+        raise KeyboardInterrupt
+    try:              # installing the handlers is inside the block, so a signal right after it still stops the server
+        if main:
+            signal.signal(signal.SIGTERM, on_signal)
+            if signal.getsignal(signal.SIGINT) is signal.default_int_handler:   # a SIGINT the parent ignores stays so
+                signal.signal(signal.SIGINT, on_signal)
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        stop_serving(server, httpd, log, got[0] if got else signal.SIGINT, main)
+
+
+def stop_serving(server, httpd, log, signum, main=True):
+    """SIGINT or SIGTERM (the process group exits, rc 0 / 130, no orphan): stop taking
+    connections, then close the server: a front (runtime/front.py) ends its requests (a stream with output gets its
+    error event, one without gets 503 / 529) and waits for its worker process to exit, killing it after Front.close's
+    timeout, so no process of the server outlives it, also when the worker is mid-call on the device. Then it waits, at
+    most DRAIN_S, for every request still being answered to write its last bytes (that error event or that 503 / 529), so
+    no client gets half an answer. A second signal while this runs is ignored (from the first
+    signal's handler on), so it cannot leave the worker behind. Then exit 128 + the signal number. Fallback: a server
+    without close() (the one-process server: its engine thread ends with the process) waits for its answers the same
+    way, then exits."""
+    if main:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, signal.SIG_IGN)
+    log(json.dumps(dict(event="stopping", signal=signal.Signals(signum).name)))
+    try:
+        httpd.server_close()
+    finally:
+        close = getattr(server, "close", None)
+        if callable(close):
+            close()
+        left = httpd.drain(DRAIN_S) if hasattr(httpd, "drain") else 0
+        log(json.dumps(dict(event="stopped", answering=left)))
+    raise SystemExit(128 + int(signum))

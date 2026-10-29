@@ -339,9 +339,9 @@ The OpenAPI 3.1 description of this server, with the running model's id.
 | `status` (required) | string |  | ok when the model is loaded, loading before (and while its worker restarts). |
 | `live_rows` | integer or null |  | Requests being answered now. |
 | `waiting` | integer |  | Requests waiting for a slot. |
-| `cache_bytes` | integer |  | Bytes the prompt cache holds: host memory copies plus slot snapshots. |
-| `host_cache_bytes` | integer |  | Bytes of prompt cache in host memory. |
-| `snapshot_bytes` | integer |  | Bytes of saved slot state points. |
+| `cache_bytes` | integer |  | Bytes the prompt cache holds in host memory: host_cache_bytes plus snapshot_bytes, each copy counted once. |
+| `host_cache_bytes` | integer |  | Bytes of the host memory prompt cache, each copy counted once. |
+| `snapshot_bytes` | integer |  | Bytes of saved slot state points that host_cache_bytes does not already count. |
 | `host_cache_cap_bytes` | integer |  | Most bytes the host memory prompt cache holds (0 = off). |
 | `host_cache_evictions` | integer |  | Prompt cache entries removed from host memory to stay under that cap. |
 | `cache_namespace` | string or null |  | Id of what cached prompts are valid for: model, weights, tokenizer, chat template and cache policy. |

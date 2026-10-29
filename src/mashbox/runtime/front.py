@@ -431,6 +431,8 @@ class Front(Server):
                     while self.pending and len(link.inflight) < max(1, self.engine.S):
                         j = self.next_waiting(self.pending)     # round robin across owners, never by content
                         self._unwait(j)
+                        if not self.still_to_admit([j]):        # dropped or left while it was being taken
+                            continue
                         j.setdefault("t_run", time.monotonic())
                         req = uuid.uuid4().bytes
                         now = time.perf_counter()

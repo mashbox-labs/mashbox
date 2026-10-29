@@ -106,9 +106,11 @@ SCHEMAS = {
                    # the fields below are sent only to a caller with an API key (or to any caller of a server without keys)
                    "live_rows": f(["integer", "null"], "Requests being answered now."),
                    "waiting": f("integer", "Requests waiting for a slot."),
-                   "cache_bytes": f("integer", "Bytes the prompt cache holds: host memory copies plus slot snapshots."),
-                   "host_cache_bytes": f("integer", "Bytes of prompt cache in host memory."),
-                   "snapshot_bytes": f("integer", "Bytes of saved slot state points."),
+                   "cache_bytes": f("integer", "Bytes the prompt cache holds in host memory: host_cache_bytes plus "
+                                     "snapshot_bytes, each copy counted once."),
+                   "host_cache_bytes": f("integer", "Bytes of the host memory prompt cache, each copy counted once."),
+                   "snapshot_bytes": f("integer", "Bytes of saved slot state points that host_cache_bytes does not "
+                                        "already count."),
                    "host_cache_cap_bytes": f("integer", "Most bytes the host memory prompt cache holds (0 = off)."),
                    "host_cache_evictions": f("integer", "Prompt cache entries removed from host memory to stay under "
                                              "that cap."),
