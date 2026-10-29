@@ -7,7 +7,7 @@
   "hf": {
     "org": "mashbox-labs"
   },
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "Apache-2.0",
   "company_line": "MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.",
   "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]\"",
@@ -71,7 +71,8 @@
         ]
       },
       "hf_repo": "mashbox-labs/Hy-Nomas-TPU",
-      "hf_revision": "344a34563d2eb76d41b2431ba9542b6f98c1108c",
+      "hf_revision": "a2f0ef5b979c7159dbbf3782c08b155a368db20f",
+      "card_release": "0.1.3",
       "pipeline_tag": null,
       "chips": {
         "v6e": {
@@ -234,7 +235,8 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "21e88d98ba8757a620abbc331a9a92b73c440afa",
+      "hf_revision": "c949fe6eb4a74ee9e306be2f53f4c92d2459a753",
+      "card_release": "0.1.3",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
       "chat": {

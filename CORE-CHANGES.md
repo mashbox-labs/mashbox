@@ -2,6 +2,21 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.4
+
+### Track2Rig, our own CPU model
+
+1. **`cli.py`:** `track2rig` joins `RUNNABLE` and `MODEL_CLI` (`mashbox run track2rig TRACKS.npz`, `mashbox download track2rig`), as Hy-Nomas. Compatible: other model ids parse as before.
+2. **`pyproject.toml`:** new extra `track2rig = ["scipy"]`. Inference needs only `jax` (the `cpu` extra) and `numpy`. Compatible: the base install is unchanged.
+3. **`tools/hf_github_sync_check.py`:** kind `rig` (HF repo named after the model, no suffix); a model with `upstream.own: true` has no `base_model` in its card; `rig` cards are tagged `jax, mashbox, rigging, animation, gltf` (no `tpu`); a release accepts `chips.cpu` passing when every TPU chip row says "not supported" with a reason; the hero image's alt text does not say TPU for a `rig` model; a `rig` model's files table is File, Format, Size, Note (no quality or speed columns, which are for weight variants); the chips table names the CPU as where a model with no `cloud` block runs; the number marker `r:MODEL/chip-cpu` shows a CPU model's `chips.cpu` row with its condition, as `chip-v5e` does for a TPU row. Compatible: existing kinds render byte-identical cards (test_views_match_models_json).
+4. **`tools/hf_github_sync_check.py` maturity label and `hf_tag`:** the README models table, the org profile and `llms.txt` print the plain label "Experimental" next to a model whose row sets `catalog.experimental: true` (Track2Rig), from that flag only; a row carrying the old `stage` text is refused. A `rig` model with a pinned `hf_revision` names it by date in `hf_tag` (YYYY-MM-DD, the Hugging Face tag of that weights version), and its card prints that version. Compatible: rows with `experimental: false` and no `hf_tag` render as before.
+5. **`tools/hf_github_sync_check.py` `_package`:** a `mashbox` already in the module cache from somewhere other than `<repo>/src` (an installed copy, or another tree checked earlier in the same process) is dropped before importing. Why: in one pytest process with a non-editable install, `check_numbers` on a temporary tree imported the installed copy, every later call refused it, and `docs_views` returned nothing. Compatible: a run with one tree behaves as before.
+6. **`tools/hf_github_sync_check.py` CLI blocks:** a `cli:start` block may name a model's own command line (`run track2rig`, `run track2rig eval`), rendered from that model's parser; a page under `packages/<name>/` may use the flags of that package's own parser. Compatible: other blocks render as before.
+7. **`tools/ci_select.py`:** the `track2rig` area installs `scipy`.
+8. **`templates/hf/card-rig.md`:** new card template for the `rig` kind.
+9. **`.github/workflows/ci.yml`:** job `track2rig-video` runs `packages/track2rig-video/tests` on Python 3.10 (the tracker's version). Compatible: a new job; T0 and T1 unchanged.
+10. **New top-level folders:** `packages/` (a separately installed package that cannot share the `mashbox` environment: `track2rig-video` needs Python 3.10 for its tracker) and `examples/` (per-model example inputs, `examples/<id>/`).
+
 ## 0.1.3
 
 ### A second start loads the programs it compiled (executable table, local only)
@@ -182,19 +197,6 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 3. **`tests/cpu/test_module_shell.py` (new):** fails any module page that does not load the shell, copies a part of it, loads something from the internet, or shows a link that does not resolve to a docs page, model repo or code path in this repo. `MBX_CHECK_LINKS_ONLINE=1` also fetches every link.
 4. **`OWNERS.md`:** core rows for the shell and its test.
 5. **`shell.css`:** `.mbx-seg` also marks `button.sel` (and `aria-pressed="true"`) as the chosen button; from 901 to 1100px the top bar's site links take less padding so all six fit at 1024. Why: the world model page's script toggles `.sel`, and at 1024 the top bar clipped its last link. Compatible: `.on` works as before; wider and narrower layouts are unchanged.
-
-### Track2Rig, our own CPU model
-
-1. **`cli.py`:** `track2rig` joins `RUNNABLE` and `MODEL_CLI` (`mashbox run track2rig TRACKS.npz`, `mashbox download track2rig`), as Hy-Nomas. Compatible: other model ids parse as before.
-2. **`pyproject.toml`:** new extra `track2rig = ["scipy"]`. Inference needs only `jax` (the `cpu` extra) and `numpy`. Compatible: the base install is unchanged.
-3. **`tools/hf_github_sync_check.py`:** kind `rig` (HF repo named after the model, no suffix); a model with `upstream.own: true` has no `base_model` in its card; `rig` cards are tagged `jax, mashbox, rigging, animation, gltf` (no `tpu`); a release accepts `chips.cpu` passing when every TPU chip row says "not supported" with a reason; the hero image's alt text does not say TPU for a `rig` model; a `rig` model's files table is File, Format, Size, Note (no quality or speed columns, which are for weight variants); the chips table names the CPU as where a model with no `cloud` block runs; the number marker `r:MODEL/chip-cpu` shows a CPU model's `chips.cpu` row with its condition, as `chip-v5e` does for a TPU row. Compatible: existing kinds render byte-identical cards (test_views_match_models_json).
-4. **`tools/hf_github_sync_check.py` maturity label and `hf_tag`:** the README models table, the org profile and `llms.txt` print the plain label "Experimental" next to a model whose row sets `catalog.experimental: true` (Track2Rig), from that flag only; a row carrying the old `stage` text is refused. A `rig` model with a pinned `hf_revision` names it by date in `hf_tag` (YYYY-MM-DD, the Hugging Face tag of that weights version), and its card prints that version. Compatible: rows with `experimental: false` and no `hf_tag` render as before.
-5. **`tools/hf_github_sync_check.py` `_package`:** a `mashbox` already in the module cache from somewhere other than `<repo>/src` (an installed copy, or another tree checked earlier in the same process) is dropped before importing. Why: in one pytest process with a non-editable install, `check_numbers` on a temporary tree imported the installed copy, every later call refused it, and `docs_views` returned nothing. Compatible: a run with one tree behaves as before.
-6. **`tools/hf_github_sync_check.py` CLI blocks:** a `cli:start` block may name a model's own command line (`run track2rig`, `run track2rig eval`), rendered from that model's parser; a page under `packages/<name>/` may use the flags of that package's own parser. Compatible: other blocks render as before.
-7. **`tools/ci_select.py`:** the `track2rig` area installs `scipy`.
-8. **`templates/hf/card-rig.md`:** new card template for the `rig` kind.
-9. **`.github/workflows/ci.yml`:** job `track2rig-video` runs `packages/track2rig-video/tests` on Python 3.10 (the tracker's version). Compatible: a new job; T0 and T1 unchanged.
-10. **New top-level folders:** `packages/` (a separately installed package that cannot share the `mashbox` environment: `track2rig-video` needs Python 3.10 for its tracker) and `examples/` (per-model example inputs, `examples/<id>/`).
 
 ### Docs checks
 
