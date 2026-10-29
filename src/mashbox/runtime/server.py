@@ -1270,7 +1270,9 @@ def key_scope(headers, keys):
 
 def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
     """keys: API keys a request must carry on /v1 and /openapi.json (None or empty: no key). Each key is its own prefix
-    cache scope. The chat page, its files and /health stay open, as llama-server's public endpoints."""
+    cache scope. The chat page, its files and /health stay open, as llama-server's public endpoints. port 0: the system
+    picks a free port when the server binds; the "ui" (with ui) and "listening" log lines and server.httpd.server_address
+    name it (the default stays 8000)."""
     S = server
     lim = raise_open_files()                    # one descriptor per connection: soft limit up to the hard limit
     if lim is not None:
@@ -1560,6 +1562,9 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
 
     httpd = Listener((host, port), H)
     server.httpd = httpd                       # a front that gives up (runtime/front.py) stops serving through it
+    port = httpd.server_address[1]             # the bound port (port 0: the one the system picked)
+    if ui:
+        log(json.dumps(dict(event="ui", url=f"http://{host}:{port}/")))
     log(json.dumps(dict(event="listening", url=f"http://{host}:{port}/v1")))
     got = []
     main = threading.current_thread() is threading.main_thread()   # signal handlers exist only in the main thread

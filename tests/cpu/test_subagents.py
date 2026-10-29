@@ -4,14 +4,12 @@ full Claude ids from agent files). The server answers any model id, as llama-ser
 request log keeps the requested id and a per-subagent tag. Set MASHBOX_QWEN_UPSTREAM (tokenizer + chat template)."""
 import hashlib
 import json
-import socket
-import threading
-import time
 import urllib.request
 
 import pytest
 
 from test_agent_api import UP, Script
+import api_stub_engine as STUB
 
 
 def tag(x):
@@ -23,17 +21,13 @@ def logged():
     if not UP:
         pytest.skip("MASHBOX_QWEN_UPSTREAM not set")
     from mashbox.runtime.chat import Chat
-    from mashbox.runtime.server import Server, serve
+    from mashbox.runtime.server import Server
     chat = Chat(UP)
     eng = Script(chat, [])
     lines = []
     srv = Server(eng, chat, "qwen3-8-27b", {}, log=lines.append)
     srv.ready = True
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=serve, args=(srv, "127.0.0.1", port, lambda m: None), daemon=True).start()
-    time.sleep(0.3)
+    port = STUB.serve_on_free_port(srv)
     return eng, f"http://127.0.0.1:{port}", lines
 
 

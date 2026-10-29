@@ -12,16 +12,14 @@ import ast
 import json
 import pathlib
 import re
-import socket
-import threading
-import time
 import urllib.error
 import urllib.request
 
 import pytest
 
 from mashbox.runtime import openapi as O
-from mashbox.runtime.server import KNOBS, Server, serve
+from mashbox.runtime.server import KNOBS, Server
+import api_stub_engine as STUB
 
 RT = pathlib.Path(O.__file__).resolve().parent
 MODEL = "qwen3-8-27b"
@@ -84,17 +82,7 @@ def srv():
     eng = Script()
     s = Server(eng, CharChat(), MODEL, INFO, log=lambda m: None)
     s.ready = True
-    with socket.socket() as so:
-        so.bind(("127.0.0.1", 0))
-        port = so.getsockname()[1]
-    threading.Thread(target=serve, args=(s, "127.0.0.1", port, lambda m: None), daemon=True).start()
-    url = f"http://127.0.0.1:{port}"
-    for _ in range(100):
-        try:
-            urllib.request.urlopen(url + "/v1/health", timeout=1)
-            break
-        except OSError:
-            time.sleep(0.05)
+    url = f"http://127.0.0.1:{STUB.serve_on_free_port(s)}"
     return s, eng, url
 
 

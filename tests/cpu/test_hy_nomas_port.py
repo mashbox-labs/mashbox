@@ -5,7 +5,6 @@ import io
 import json
 import os
 import re
-import socket
 import sys
 import time
 import urllib.request
@@ -246,14 +245,6 @@ def test_cli_routes_to_model(capsys):
     assert "--preset" in capsys.readouterr().out
 
 
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
-
-
 def test_app_server_against_stub():
     from mashbox.models.hy_nomas import server as S
     try:
@@ -262,8 +253,8 @@ def test_app_server_against_stub():
         pytest.skip("imageio-ffmpeg not installed")
     eng = S.StubEngine(lambda *a: None, dit_s=0.2, dec_s=0.1, encode_s=0.0)
     live = S.Live(eng, lambda *a: None, hw="STUB", stub=True, buffer=0.2)
-    port = free_port()
-    srv = live.start(port)
+    srv = live.start(0)                 # port 0: the system's free port, bound by the server itself
+    port = srv.server_address[1]
     try:
         assert srv.server_address[0] == "127.0.0.1"
         base = "http://127.0.0.1:%d" % port
@@ -305,8 +296,8 @@ def test_app_server_same_machine_only_and_bad_seeds():
         pytest.skip("imageio-ffmpeg not installed")
     eng = S.StubEngine(lambda *a: None, dit_s=0.05, dec_s=0.02, encode_s=0.0)
     live = S.Live(eng, lambda *a: None, hw="STUB", stub=True, buffer=0.2)
-    port = free_port()
-    srv = live.start(port)
+    srv = live.start(0)
+    port = srv.server_address[1]
     base = "http://127.0.0.1:%d" % port
     tok = re.search(rb'<meta name="mbx-token" content="([^"]+)">', urllib.request.urlopen(base + "/", timeout=5).read()).group(1).decode()
 

@@ -781,15 +781,12 @@ def test_serve_split_exits_non_zero_with_the_workers_error(tmp_path):
     worker's own error on stderr, within a few seconds (not an endless 503)."""
     import subprocess
     code = ("import sys, api_stub_engine as S; from mashbox.runtime import front as F; "
-            "F.serve_split(S.IdChat(), 'stub-model', {}, 'api_stub_engine:make', dict(S=1), port=int(sys.argv[1]))")
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
+            "F.serve_split(S.IdChat(), 'stub-model', {}, 'api_stub_engine:make', dict(S=1), port=0)")
     env = dict(os.environ, PYTHONPATH=os.pathsep.join([HERE] + [p for p in sys.path if p.endswith("src")]
                                                       + [os.environ.get("PYTHONPATH", "")]),
                MASHBOX_FAULT="load:1:raise:99", MASHBOX_FAULT_STATE=str(tmp_path / "faults"), JAX_PLATFORMS="cpu")
     try:
-        p = subprocess.run([sys.executable, "-c", code, str(port)], env=env, capture_output=True, text=True, timeout=60)
+        p = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
         raise AssertionError("serve_split still serving 60 s after every worker load failed")
     assert p.returncode != 0 and "mashbox: " in p.stderr and "InjectedFault" in p.stderr, (p.returncode, p.stderr[-800:])

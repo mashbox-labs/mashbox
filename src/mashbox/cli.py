@@ -537,9 +537,7 @@ def cmd_run(a, argv=None):
         # serving a models.json model: this process is the HTTP front; the engine (load, warm-up, chip) runs in a
         # worker process that the front restarts by itself after a device fault, out of memory, a hung call or a kill
         # (runtime/front.py). A GGUF file is still served in this one process (below).
-        from .runtime.front import serve_cli
-        if a.ui:
-            log(json.dumps(dict(event="ui", url=f"http://{a.host}:{a.port}/")))
+        from .runtime.front import serve_cli          # serve() logs the "ui" url once the port is bound
         return serve_cli(a, sys.argv[1:] if argv is None else list(argv), keys, log, t0=time.time())
     m, eng, chat, info, t0 = load_gguf(a) if getattr(a, "gguf", None) else load(a)
     if a.prompt is not None:
@@ -566,9 +564,7 @@ def cmd_run(a, argv=None):
     watch_compiles()
     srv.ready = True
     log(json.dumps(dict(event="ready", seconds_since_start=round(time.time() - t0, 1))))
-    if a.ui:
-        log(json.dumps(dict(event="ui", url=f"http://{a.host}:{a.port}/")))
-    serve(srv, a.host, a.port, log, ui=a.ui, keys=keys)
+    serve(srv, a.host, a.port, log, ui=a.ui, keys=keys)       # it logs the "ui" url once the port is bound
 
 
 KEY_FILE = os.path.join(os.path.expanduser("~"), ".config", "mashbox", "api-key")
@@ -661,7 +657,8 @@ def build_parser():
             p.add_argument("--top-k", type=int, default=0, metavar="K", help="top-k cut for --prompt; 0 means none")
             p.add_argument("--seed", type=int, default=0, metavar="N", help="seed for sampled --prompt answers")
             p.add_argument("--host", default="127.0.0.1", metavar="H", help="server address; keep it on 127.0.0.1 and use an SSH tunnel")
-            p.add_argument("--port", type=int, default=8000, metavar="N", help="server port")
+            p.add_argument("--port", type=int, default=8000, metavar="N",
+                           help="server port; 0 picks a free one, named in the \"listening\" log line (and \"ui\" with --ui)")
             p.add_argument("--api-key-file", metavar="FILE",
                            help="require an API key from FILE on /v1 requests: one per line, a key or a key then its "
                                 "tenant's name; keys of one tenant share one prompt cache and one waiting queue, and a key "

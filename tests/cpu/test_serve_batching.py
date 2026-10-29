@@ -21,6 +21,7 @@ import urllib.request
 import pytest
 
 from mashbox.runtime import server as SV
+import api_stub_engine as STUB
 
 
 class IdChat:
@@ -107,17 +108,7 @@ def start(S=1, keys=None, log=None):
     eng = LiveEngine(S)
     srv = SV.Server(eng, IdChat(), "m", {}, log=log or (lambda m: None))
     srv.ready = True
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", port, lambda m: None), kwargs=dict(keys=keys),
-                     daemon=True).start()
-    for _ in range(200):
-        try:
-            socket.create_connection(("127.0.0.1", port)).close()
-            break
-        except OSError:
-            time.sleep(0.02)
+    port = STUB.serve_on_free_port(srv, keys=keys)
     return eng, srv, port
 
 

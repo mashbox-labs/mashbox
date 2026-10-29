@@ -3,12 +3,10 @@ is the tenant of the API key (an HMAC of the server's cache secret and the key, 
 same session-id + x-openai-subagent) are one owner, so they keep reusing their shared system prompt and tools; another
 key is another owner; without keys everything is one local owner. Session and agent headers never split the cache."""
 import json
-import socket
-import threading
-import time
 import urllib.request
 
 from mashbox.runtime import server as SV
+import api_stub_engine as STUB
 
 
 class CharChat:
@@ -41,17 +39,7 @@ def start(keys=None):
     eng = Eng()
     s = SV.Server(eng, CharChat(), "qwen3-8-27b", {}, log=lambda m: None)
     s.ready = True
-    with socket.socket() as so:
-        so.bind(("127.0.0.1", 0))
-        port = so.getsockname()[1]
-    threading.Thread(target=SV.serve, args=(s, "127.0.0.1", port, lambda m: None), kwargs=dict(keys=keys),
-                     daemon=True).start()
-    for _ in range(100):
-        try:
-            socket.create_connection(("127.0.0.1", port), timeout=1).close()
-            break
-        except OSError:
-            time.sleep(0.05)
+    port = STUB.serve_on_free_port(s, keys=keys)
     return eng, port
 
 

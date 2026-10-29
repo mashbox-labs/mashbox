@@ -522,8 +522,12 @@ def a_free_port():
 def test_held_port_is_free_again_right_after_its_session():
     """The port a session held and closed is taken again at once (the same URL as before), although the connections it
     relayed sit in TIME_WAIT on that port for a minute; a port another socket listens on is still refused."""
-    p = a_free_port()
+    hold = socket.socket()          # p stays bound here (SO_REUSEADDR, never listening) for the whole test: no other
+    hold.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)            # process can take it, and Port still binds it
+    hold.bind(("127.0.0.1", 0))
+    p = hold.getsockname()[1]
     lp = tpu.free_port(p)
+    assert lp.port == p
     c = socket.create_connection(("127.0.0.1", p), timeout=5)
     assert c.recv(1) == b""                             # no forward yet: our relay closes first, so TIME_WAIT is ours
     c.close()
@@ -538,6 +542,7 @@ def test_held_port_is_free_again_right_after_its_session():
         other.close()
     finally:
         again.close()
+        hold.close()
 
 
 def test_port_in_use_leaves_no_private_folder(tmp_path, monkeypatch):

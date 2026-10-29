@@ -5,7 +5,6 @@ import math
 import os
 import re
 import signal
-import socket
 import sys
 import threading
 import time
@@ -214,16 +213,7 @@ def test_metrics_count_a_worker_restart(tmp_path):
 
 
 def _serve_with_keys(srv, keys):
-    for _ in range(5):
-        with socket.socket() as s_:
-            s_.bind(("127.0.0.1", 0))
-            port = s_.getsockname()[1]
-        up = threading.Event()
-        threading.Thread(target=lambda: SV.serve(srv, "127.0.0.1", port, lambda m: up.set() if '"listening"' in str(m)
-                                                 else None, keys=keys), daemon=True).start()
-        if up.wait(30):
-            return port
-    raise RuntimeError("serve() did not start")
+    return STUB.serve_on_free_port(srv, keys=keys)
 
 
 @pytest.mark.parametrize("mode", ["one_process", "worker"])

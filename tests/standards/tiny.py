@@ -472,25 +472,16 @@ def serve(eng, chat, plan, stop_ids=(), cancel_at=None, secs=300):
 def serve_http(eng, chat, monkeypatch=None, keys=None, **caps):
     """the real server (runtime/server.py Server + serve) on a free local port, in a daemon thread -> (Server, port);
     caps: server module constants set through monkeypatch for this test only"""
-    import socket
     import threading
-    import time
     from mashbox.runtime import server as SV
     for k, v in caps.items():
         monkeypatch.setattr(SV, k, v)
     srv = SV.Server(eng, chat, "tiny", dict(weights="tiny"), log=lambda m: None)
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", port, lambda m: None), kwargs=dict(keys=keys),
-                     daemon=True).start()
-    for _ in range(500):
-        try:
-            socket.create_connection(("127.0.0.1", port)).close()
-            break
-        except OSError:
-            time.sleep(0.02)
-    return srv, port
+    up = threading.Event()                 # port 0: serve() binds the system's free port (never a number picked earlier)
+    threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", 0, lambda m: up.set() if '"listening"' in str(m) else None),
+                     kwargs=dict(keys=keys), daemon=True).start()
+    assert up.wait(60), "serve() is not listening"
+    return srv, srv.httpd.server_address[1]
 
 
 def post(port, path, body, timeout=120, key=None):

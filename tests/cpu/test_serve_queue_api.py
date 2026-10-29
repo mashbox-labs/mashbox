@@ -16,6 +16,8 @@ with the scripted engine in api_stub_engine.py:
 - a request a longest-queue drop refuses in the moment the loop takes it from the queue is never sent to the engine,
   in this process and behind a worker;
 - /health counts one moment of the prompt cache while the engine evicts and replaces entries;
+- a test server binds port 0 itself: a port picked, closed and then handed to serve() can be taken in between by
+  another process, and serve() then never listens;
 - the stop: a SIGTERM right after its handler is installed still closes the server, and the stop waits for a request
   still being written, so its client gets the whole shutdown error event.
 """
@@ -54,17 +56,7 @@ def start(S=1, keys=(KA, KB), outs=None, log=None):
     eng = STUB.StubEngine(S=S, outs=outs or [list(range(11, 21))])
     srv = SV.Server(eng, STUB.IdChat(), "m", {}, log=log or (lambda m: None))
     srv.ready = True
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", port, lambda m: None), kwargs=dict(keys=list(keys)),
-                     daemon=True).start()
-    for _ in range(200):
-        try:
-            socket.create_connection(("127.0.0.1", port)).close()
-            break
-        except OSError:
-            time.sleep(0.02)
+    port = STUB.serve_on_free_port(srv, keys=list(keys))
     return eng, srv, port
 
 
@@ -187,21 +179,31 @@ env = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path[:3]), JAX_PLATFORMS="
 fr = F.Front(STUB.IdChat(), "stub-model", {{}}, "api_stub_engine:make",
              dict(S=1, step_s={step_s}, outs=[list(range(11, 51))], log={str(tmp_path / 'engine.jsonl')!r}), env=env,
              log=lambda m: print(m, flush=True))
-SV.serve(fr, "127.0.0.1", int(sys.argv[1]), lambda m: print(m, flush=True))
+SV.serve(fr, "127.0.0.1", 0, lambda m: print(m, flush=True))
 """
 
 
+def listening_port(text):
+    """The port of serve()'s "listening" log line in `text` (a server started on port 0), or None before it."""
+    for ln in text.splitlines():
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(ev, dict) and ev.get("event") == "listening":
+            return int(ev["url"].rsplit(":", 1)[1].split("/", 1)[0])
+    return None
+
+
 def test_b3_sigint_mid_step_leaves_no_process_of_the_server(tmp_path):
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
     script = tmp_path / "front.py"
     script.write_text(_front_script(tmp_path, 3.0))      # each engine step takes 3 s: SIGINT lands mid-step
     out = open(tmp_path / "front.log", "w")
-    p = subprocess.Popen([sys.executable, str(script), str(port)], stdout=out, stderr=subprocess.STDOUT,
-                         start_new_session=True)
+    p = subprocess.Popen([sys.executable, str(script)], stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     try:
         assert until(lambda: '"ready"' in (tmp_path / "front.log").read_text(), 60), (tmp_path / "front.log").read_text()
+        port = listening_port((tmp_path / "front.log").read_text())
+        assert port, (tmp_path / "front.log").read_text()
         got = dict(lines=[])
         th = threading.Thread(target=read_stream, args=(port, "/v1/chat/completions", dict(model="stub-model",
                               max_tokens=40, stream=True, messages=[dict(role="user", content="1 2 3")]), got), daemon=True)
@@ -323,16 +325,7 @@ def test_a_stream_that_ends_with_no_event_still_gets_its_200_and_its_end(route):
     path, body, _ = ROUTES[route]
     srv = SV.Server(NoEventEngine(), STUB.IdChat(), "m", {}, log=lambda m: None)
     srv.ready = True
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", port, lambda m: None), daemon=True).start()
-    for _ in range(200):
-        try:
-            socket.create_connection(("127.0.0.1", port)).close()
-            break
-        except OSError:
-            time.sleep(0.02)
+    port = STUB.serve_on_free_port(srv)
     st, raw, hd = post(port, path, body(4), "x")
     assert st == 200 and hd.get("Content-Type") == "text/event-stream", (st, raw[:300])
     end = {"chat": "[DONE]", "anthropic": "message_stop", "responses": "response.completed"}[route]
@@ -363,11 +356,7 @@ def answer_of(engine, route, stream):
     path, body, _ = ROUTES[route]
     srv = SV.Server(engine, STUB.IdChat(), "m", {}, log=lambda m: None)
     srv.ready = True
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", port, lambda m: None), daemon=True).start()
-    assert until(lambda: _open(port), 4)
+    port = STUB.serve_on_free_port(srv)
     st, raw, _ = post(port, path, dict(body(4), stream=stream), "x")
     assert st == 200, (st, raw[:300])
     return (sse_answer(route, raw) if stream else json_answer(route, json.loads(raw))), raw
@@ -412,14 +401,6 @@ def test_an_answer_that_ends_with_no_event_keeps_its_text_and_finish(route, ids,
     assert ref_got == want and (ref_text != "") == bool(ids), (ref_text, ref_got)    # the reference is a real answer
     assert (text, got) == (ref_text, ref_got), raw[-400:]
 
-def _open(port):
-    try:
-        socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
-        return True
-    except OSError:
-        return False
-
-
 # ---- a request dropped in the moment the loop takes it ----------------------------------------------------------
 def _env():
     return dict(os.environ, PYTHONPATH=os.pathsep.join([HERE, os.path.abspath("src"), os.environ.get("PYTHONPATH", "")]),
@@ -461,12 +442,8 @@ def test_a_request_dropped_while_it_is_being_taken_is_never_sent_to_the_engine(m
                                    hold=dict(after=1, path=str(hold))), env=_env(), log=lambda m: None)
         release = hold.touch                             # A's first request keeps the one row until this file exists
     try:
-        with socket.socket() as s_:
-            s_.bind(("127.0.0.1", 0))
-            port = s_.getsockname()[1]
-        threading.Thread(target=SV.serve, args=(srv, "127.0.0.1", port, lambda m: None), kwargs=dict(keys=[KA, KB]),
-                         daemon=True).start()
-        assert until(lambda: srv.ready and _open(port), 60)
+        port = STUB.serve_on_free_port(srv, keys=[KA, KB])
+        assert until(lambda: srv.ready, 60)
         path, body, code = ROUTES["chat"]
         res = {}
 
@@ -497,6 +474,33 @@ def test_a_request_dropped_while_it_is_being_taken_is_never_sent_to_the_engine(m
         go.set()
         if front is not None:
             front.close()
+
+
+def test_a_test_server_listens_although_another_socket_takes_the_port_it_was_handed(monkeypatch):
+    """serve_on_free_port starts every test server here. If it picked a free port, closed it and handed the number to
+    serve(), another process could bind that port before serve() did (an outgoing connection's port, in T1 under
+    parallel load): serve() died on the bind and the test waited out its ready time, then failed (T1 core, 6 of ~88
+    gates on 2026-10-29, test_a_request_dropped_while_it_is_being_taken_is_never_sent_to_the_engine[worker]). Here a
+    plain socket, as an outgoing connection's, binds the port serve() is handed right before serve() binds it. Port 0
+    is the system's pick at the bind itself, so nothing can take it first."""
+    real, taken = SV.Listener.__init__, []
+
+    def first_another_socket_binds_it(self, addr, *a, **k):
+        if addr[1]:                                      # a number picked before the bind: someone else can hold it
+            s = socket.socket()
+            s.bind(addr)
+            taken.append(s)
+        real(self, addr, *a, **k)
+    monkeypatch.setattr(SV.Listener, "__init__", first_another_socket_binds_it)
+    srv = SV.Server(STUB.StubEngine(S=1, outs=[[11, 12]]), STUB.IdChat(), "m", {}, log=lambda m: None)
+    srv.ready = True
+    try:
+        port = STUB.serve_on_free_port(srv, wait_s=10)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=10) as r:
+            assert r.status == 200
+    finally:
+        for s in taken:
+            s.close()
 
 
 def test_the_whole_batch_loop_keeps_a_dropped_requests_refusal():

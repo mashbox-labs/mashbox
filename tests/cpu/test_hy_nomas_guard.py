@@ -28,23 +28,14 @@ class SeededStub(S.StubEngine):
         self.rng = np.random.RandomState(seed)
 
 
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
-
-
 @pytest.fixture
 def world():
     eng = SeededStub(lambda *a: None, dit_s=0.05, dec_s=0.01, encode_s=0.0)
     live = S.Live(eng, lambda *a: None, hw="STUB", stub=True, buffer=0.2)
     live.stream = types.SimpleNamespace(config=None, cl=threading.Lock(), clients=set())
     threading.Thread(target=live.producer, daemon=True).start()
-    port = free_port()
-    srv = live.serve(port)
-    yield live, port
+    srv = live.serve(0)                 # port 0: the system's free port, bound by the server itself
+    yield live, srv.server_address[1]
     srv.shutdown()
     srv.server_close()
 

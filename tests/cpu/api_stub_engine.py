@@ -167,32 +167,41 @@ def read_log(path):
         return [json.loads(ln) for ln in f if ln.strip()]
 
 
-def serve_on_free_port(srv, tries=5, wait_s=60):
-    """Start server.serve(srv) on a free loopback port in a daemon thread and return the port once serve() says it is
-    listening (its log line comes after the bind). A port that another process took between the pick and the bind ends
-    that serve thread; then a new port is tried."""
-    import socket
+def serve_on_free_port(srv, keys=None, host="127.0.0.1", wait_s=60):
+    """Start server.serve(srv) on port 0 in a daemon thread and return the port the system gave it, once serve() says it
+    is listening (its log line comes after the bind). The pick and the bind are one step, so no other process can take
+    the port in between. A test that picked a free port, closed it and handed its number to serve() left that gap:
+    under parallel load another process's socket took the port, serve() died on the bind and the test waited out its
+    ready time (T1 core, 6 of ~88 gates on 2026-10-29)."""
     from mashbox.runtime.server import serve
-    errs = []
-    for _ in range(tries):
-        with socket.socket() as s_:
-            s_.bind(("127.0.0.1", 0))
-            port = s_.getsockname()[1]
-        up = threading.Event()
+    up, errs = threading.Event(), []
 
-        def run(port=port, up=up):
-            try:
-                serve(srv, "127.0.0.1", port, lambda m: up.set() if '"listening"' in str(m) else None)
-            except Exception as e:                # noqa: BLE001 - reported below if every port fails
-                errs.append(f"{type(e).__name__}: {e}")
-        th = threading.Thread(target=run, daemon=True)
-        th.start()
-        t = time.time()
-        while not up.is_set() and th.is_alive() and time.time() - t < wait_s:
-            up.wait(0.05)
-        if up.is_set():
-            return port
-    raise RuntimeError(f"serve() did not start on {tries} ports: {errs}")
+    def run():
+        try:
+            serve(srv, host, 0, lambda m: up.set() if '"listening"' in str(m) else None, keys=keys)
+        except Exception as e:                    # noqa: BLE001 - reported below
+            errs.append(f"{type(e).__name__}: {e}")
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    t = time.time()
+    while not up.is_set() and th.is_alive() and time.time() - t < wait_s:
+        up.wait(0.05)
+    if not up.is_set():
+        raise RuntimeError(f"serve() is not listening: {errs or f'no error after {wait_s} s'}")
+    return srv.httpd.server_address[1]
+
+
+def held_port():
+    """A loopback port for a server that must be started on a number known beforehand (a child process or a CLI given
+    --port, a check told which port to look at). The returned socket keeps the port bound, with SO_REUSEADDR and never
+    listening, until it is closed: meanwhile the kernel gives that port to no other bind or outgoing connection, so
+    nothing takes it before the server binds it, and the server still can (http.server's servers, mashbox's Listener
+    and tpu.Port all bind with SO_REUSEADDR). Its port: .getsockname()[1]."""
+    import socket
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", 0))
+    return s
 
 
 # ---- the real engine on a tiny random Qwen3.8 model (the architecture of qwen3_8_27b_checks.py's tiny model) --------

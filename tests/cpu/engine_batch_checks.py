@@ -59,8 +59,9 @@ import jax                             # noqa: E402
 from mashbox.models import qwen3_8_27b as Q                  # noqa: E402
 from mashbox.models.qwen3_8_27b import weights as QW        # noqa: E402
 from mashbox.runtime.engine import Engine                   # noqa: E402
-from mashbox.runtime.server import Server, serve           # noqa: E402
+from mashbox.runtime.server import Server                   # noqa: E402
 from jax import monitoring                                  # noqa: E402
+import api_stub_engine as STUB                              # noqa: E402
 
 _COMPILES = [0]
 monitoring.register_event_duration_secs_listener(
@@ -158,11 +159,7 @@ class IdChat:
 def server(eng):
     srv = Server(eng, IdChat(), "tiny", {}, log=lambda m: None)
     srv.ready = True
-    with socket.socket() as k:          # a port free right now (a fixed port can hold another server: 404s)
-        k.bind(("127.0.0.1", 0))
-        port = k.getsockname()[1]
-    threading.Thread(target=serve, args=(srv, "127.0.0.1", port, lambda m: None), daemon=True).start()
-    time.sleep(0.5)
+    port = STUB.serve_on_free_port(srv)  # port 0: the system's free port (a fixed port can hold another server: 404s)
     return srv, port
 
 

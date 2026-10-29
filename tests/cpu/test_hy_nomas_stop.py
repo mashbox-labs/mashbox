@@ -19,12 +19,13 @@ import pytest
 pytest.importorskip("jax")
 
 
-def free_port():
+def held_port():
+    """A port kept bound here (SO_REUSEADDR, never listening) until closed: no other process can take it before the app
+    binds it, and the app (an http.server server, SO_REUSEADDR) still can (api_stub_engine.held_port)."""
     s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
+    return s
 
 
 def children(pid):
@@ -53,7 +54,8 @@ def start_app(ignore_sigint, terminal=False):
         pytest.skip("needs Linux /proc")
     src = os.path.dirname(os.path.dirname(os.path.abspath(mashbox.__file__)))
     env = dict(os.environ, PYTHONPATH=src + os.pathsep + os.environ.get("PYTHONPATH", ""), JAX_PLATFORMS="cpu")
-    port = free_port()
+    hold = held_port()                  # closed with this test process; it never listens, so a stopped app's port refuses
+    port = hold.getsockname()[1]
 
     def pre():
         if ignore_sigint:   # what `cmd &` in a script (and nohup from a script) hands the command

@@ -542,10 +542,13 @@ def test_no_short_folder_stops_before_ssh_and_frees_the_port(tmp_path, monkeypat
     long.mkdir(parents=True)
     monkeypatch.setattr(tpu.tempfile, "tempdir", str(long))
     monkeypatch.setattr(tpu, "SHORT_BASES", (str(long),))
-    p = a_free_port()
-    with pytest.raises(tpu.Stop, match="Set TMPDIR to a short folder"):
-        tpu.Port(p)
-    assert listener_could_bind(p)                                         # the port was given back
+    with socket.socket() as hold:   # p stays bound here (SO_REUSEADDR, never listening): no other process can take
+        hold.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)        # it before Port binds it, and Port still can
+        hold.bind(("127.0.0.1", 0))
+        p = hold.getsockname()[1]
+        with pytest.raises(tpu.Stop, match="Set TMPDIR to a short folder"):
+            tpu.Port(p)
+        assert listener_could_bind(p)                                     # the port was given back
 
 
 def test_ssh_saying_the_socket_path_is_too_long_stops_at_once(cloud, monkeypatch, capsys):

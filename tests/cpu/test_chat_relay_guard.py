@@ -14,12 +14,13 @@ import pytest
 from mashbox.ui.chat import __main__ as relay
 
 
-def free_port():
+def held_port():
+    """A port kept bound here (SO_REUSEADDR, never listening) until closed: no other process can take it before the relay
+    binds it, and the relay (an http.server server, SO_REUSEADDR) still can (api_stub_engine.held_port)."""
     s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
+    return s
 
 
 @pytest.fixture
@@ -48,7 +49,8 @@ def chat():
             pass
     up = ThreadingHTTPServer(("127.0.0.1", 0), Up)
     threading.Thread(target=up.serve_forever, daemon=True).start()
-    port = free_port()
+    hold = held_port()
+    port = hold.getsockname()[1]
     threading.Thread(target=relay.main, args=(["--api", "http://127.0.0.1:%d" % up.server_address[1], "--port", str(port)],),
                      daemon=True).start()
     for _ in range(100):
@@ -60,6 +62,7 @@ def chat():
     hits.clear()
     yield port, hits
     up.shutdown()
+    hold.close()
 
 
 def call(port, method, path, headers, body=None):

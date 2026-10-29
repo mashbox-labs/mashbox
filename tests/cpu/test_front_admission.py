@@ -5,7 +5,6 @@ joins at the next free row however long another owner's queue is. Old code: firs
 """
 import json
 import os
-import socket
 import sys
 import threading
 import time
@@ -13,7 +12,6 @@ import urllib.error
 import urllib.request
 
 from mashbox.runtime import front as F
-from mashbox.runtime import server as SV
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -62,11 +60,7 @@ def test_front_admits_round_robin_across_owners(tmp_path, capfd):
                  dict(S=1, step_s=0.3, outs=[list(range(11, 13))], log=str(tmp_path / "engine.jsonl")), env=env,
                  log=lines.append)
     try:
-        with socket.socket() as s_:
-            s_.bind(("127.0.0.1", 0))
-            port = s_.getsockname()[1]
-        threading.Thread(target=SV.serve, args=(fr, "127.0.0.1", port, lambda m: None), kwargs=dict(keys=[KA, KB]),
-                         daemon=True).start()
+        port = STUB.serve_on_free_port(fr, keys=[KA, KB])
         assert until(lambda: fr.ready, 60)
         order, codes, rid_of = [], [], {}
 

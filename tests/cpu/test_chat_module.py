@@ -22,10 +22,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import chat_stub  # noqa: E402
 
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+def held_port():
+    """A port kept bound here (SO_REUSEADDR, never listening) until closed: no other process can take it, and a server
+    given its number still binds it (api_stub_engine.held_port)."""
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", 0))
+    return s
 
 
 def get(port, path, method="GET", body=None):
@@ -99,14 +102,12 @@ class FakeServer:      # what runtime.server.serve reads from a loaded model, wi
 @pytest.mark.parametrize("ui", [True, False])
 def test_model_server_serves_the_page_with_ui(ui):
     from mashbox.runtime import server
-    port = free_port()
-    threading.Thread(target=server.serve, args=(FakeServer(), "127.0.0.1", port, lambda m: None), kwargs={"ui": ui}, daemon=True).start()
-    for _ in range(50):
-        try:
-            code, typ, body = get(port, "/")
-            break
-        except OSError:
-            time.sleep(0.05)
+    fake, up = FakeServer(), threading.Event()
+    threading.Thread(target=server.serve, args=(fake, "127.0.0.1", 0, lambda m: up.set() if '"listening"' in m else None),
+                     kwargs={"ui": ui}, daemon=True).start()
+    assert up.wait(60)
+    port = fake.httpd.server_address[1]
+    code, typ, body = get(port, "/")
     if ui:
         assert code == 200 and typ.startswith("text/html") and b'id="mbx-chat"' in body and b"Qwen3.8-27B" in body
         assert get(port, "/ui/chat/chat.js")[0] == 200 and get(port, "/ui/shell/fonts/ChakraPetch-700.woff2")[0] == 200
@@ -124,9 +125,61 @@ def test_cli_has_the_ui_flag(capsys):
     assert e.value.code == 0 and "--ui" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("ui", [True, False])
+def test_serve_logs_the_ui_url_with_the_bound_port(ui):
+    """--ui on port 0: serve() logs the "ui" url once the port is bound, with the port the system picked (never :0)."""
+    from mashbox.runtime import server
+    fake, up, lines = FakeServer(), threading.Event(), []
+
+    def log(m):
+        lines.append(m)
+        if '"listening"' in m:
+            up.set()
+    threading.Thread(target=server.serve, args=(fake, "127.0.0.1", 0, log), kwargs={"ui": ui}, daemon=True).start()
+    assert up.wait(60)
+    port = fake.httpd.server_address[1]
+    try:
+        assert port != 0
+        got = [json.loads(m) for m in lines if m.startswith("{") and json.loads(m).get("event") == "ui"]
+        assert got == ([dict(event="ui", url=f"http://127.0.0.1:{port}/")] if ui else [])
+    finally:
+        fake.httpd.shutdown()
+        fake.httpd.server_close()
+
+
+class _Ns:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+@pytest.mark.parametrize("gguf", [False, True])
+def test_run_with_port_0_logs_no_ui_url_before_the_bind(monkeypatch, gguf):
+    """`mashbox run MODEL --port 0 --ui`, the front (models.json) and the one-process server (GGUF): cmd_run itself logs
+    no "ui" url (it would name the requested port, http://127.0.0.1:0/); serve() logs it after the bind."""
+    from mashbox import cli
+    from mashbox.runtime import front, server
+    lines, calls = [], []
+    monkeypatch.setattr(cli, "log", lines.append)
+    monkeypatch.delenv("MASHBOX_API_KEY", raising=False)
+    monkeypatch.setattr(front, "serve_cli", lambda a, argv, keys, log, t0=None: calls.append((a.port, a.ui)))
+    monkeypatch.setattr(cli, "load_gguf", lambda a: (dict(id="stub"), _Ns(prefix_cache=False, S=1), None,
+                                                     dict(file="stub.gguf", device_bytes=0, bpw=8), 0.0))
+    monkeypatch.setattr(cli, "watch_compiles", lambda: None)
+    monkeypatch.setattr(server, "Server", lambda *a, **k: _Ns(ready=False))
+    monkeypatch.setattr(server, "serve", lambda srv, host, port, log, ui=False, keys=None: calls.append((port, ui)))
+    a = cli.build_parser().parse_args(["run", "stub.gguf" if gguf else "qwen3-8-27b", "--port", "0", "--ui", "--no-warm"])
+    if gguf:
+        a.gguf = dict(path="stub.gguf")
+    cli.cmd_run(a, [])
+    assert calls == [(0, True)]
+    assert [m for m in lines if '"ui"' in m] == []
+
+
 def test_standalone_page_streams_from_any_server():
-    sp, pp = free_port(), free_port()
-    httpd, log = chat_stub.serve(sp, model="stub-model")
+    httpd, log = chat_stub.serve(0, model="stub-model")
+    sp = httpd.server_address[1]
+    hold = held_port()                  # the page's --port: kept bound here until the page's own server binds it
+    pp = hold.getsockname()[1]
     from mashbox.ui.chat import __main__ as M
     threading.Thread(target=M.main, args=(["--api", f"http://127.0.0.1:{sp}", "--port", str(pp)],), daemon=True).start()
     for _ in range(50):

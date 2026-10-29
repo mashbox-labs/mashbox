@@ -17,6 +17,7 @@ import pytest
 
 from mashbox.runtime import server as SV
 from mashbox.runtime.chat import Chat
+import api_stub_engine as STUB
 
 UP = os.environ.get("MASHBOX_QWEN_UPSTREAM")
 SPECIAL = ["<|endoftext|>", "<|im_start|>", "<|im_end|>"]
@@ -162,16 +163,7 @@ def start(chat, host="127.0.0.1", keys=None, text="ok"):
     eng = Engine(chat, text)
     srv = SV.Server(eng, chat, "m", {}, log=lambda m: None)
     srv.ready = True
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=SV.serve, args=(srv, host, port, lambda m: None), kwargs=dict(keys=keys), daemon=True).start()
-    for _ in range(100):
-        try:
-            socket.create_connection(("127.0.0.1", port)).close()
-            break
-        except OSError:
-            time.sleep(0.02)
+    port = STUB.serve_on_free_port(srv, keys=keys, host=host)
     return eng, srv, port
 
 

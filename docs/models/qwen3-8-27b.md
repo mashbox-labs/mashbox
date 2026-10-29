@@ -90,7 +90,7 @@ Wait 10 s before you start it again ([why](../faq.md#how-do-i-stop-a-server-and-
 | `--top-k K` | `0` | top-k cut for --prompt; 0 means none |
 | `--seed N` | `0` | seed for sampled --prompt answers |
 | `--host H` | `127.0.0.1` | server address; keep it on 127.0.0.1 and use an SSH tunnel |
-| `--port N` | `8000` | server port |
+| `--port N` | `8000` | server port; 0 picks a free one, named in the "listening" log line (and "ui" with --ui) |
 | `--api-key-file FILE` |  | require an API key from FILE on /v1 requests: one per line, a key or a key then its tenant's name; keys of one tenant share one prompt cache and one waiting queue, and a key without a name is its own tenant; only you may read or write FILE (chmod 600). Also MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host a key made in ~/.config/mashbox/api-key |
 | `--ui` | off | also serve the MASHBOX Chat page at http://127.0.0.1:<port>/ |
 | `--ctx N` | `2048` | context per request in tokens (prompt plus answer) |

@@ -5,13 +5,13 @@ chat_template.jinja and generation_config.json (the model's upstream folder), ot
 import json
 import os
 import socket
-import threading
 import time
 import urllib.request
 
 import pytest
 
 from mashbox.runtime import agents as A
+import api_stub_engine as STUB
 
 UP = os.environ.get("MASHBOX_QWEN_UPSTREAM")
 TOOLS = [dict(type="function", function=dict(name="Bash", description="run", parameters=dict(
@@ -78,16 +78,12 @@ def server():
     if not UP:
         pytest.skip("MASHBOX_QWEN_UPSTREAM not set")
     from mashbox.runtime.chat import Chat
-    from mashbox.runtime.server import Server, serve
+    from mashbox.runtime.server import Server
     chat = Chat(UP)
     eng = Script(chat, [])
     srv = Server(eng, chat, "qwen3-8-27b", {}, log=lambda m: None)
     srv.ready = True
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=serve, args=(srv, "127.0.0.1", port, lambda m: None), daemon=True).start()
-    time.sleep(0.3)
+    port = STUB.serve_on_free_port(srv)
     return eng, f"http://127.0.0.1:{port}"
 
 
@@ -241,16 +237,12 @@ def slow_server():
     if not UP:
         pytest.skip("MASHBOX_QWEN_UPSTREAM not set")
     from mashbox.runtime.chat import Chat
-    from mashbox.runtime.server import Server, serve
+    from mashbox.runtime.server import Server
     chat = Chat(UP)
     eng = Slow(chat, [])
     srv = Server(eng, chat, "qwen3-8-27b", {}, log=lambda m: None)
     srv.ready = True
-    with socket.socket() as s_:
-        s_.bind(("127.0.0.1", 0))
-        port = s_.getsockname()[1]
-    threading.Thread(target=serve, args=(srv, "127.0.0.1", port, lambda m: None), daemon=True).start()
-    time.sleep(0.3)
+    port = STUB.serve_on_free_port(srv)
     return eng, f"http://127.0.0.1:{port}", port
 
 
