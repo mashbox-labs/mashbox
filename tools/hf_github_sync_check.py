@@ -55,6 +55,7 @@ Usage:
 Exit status: 0 in sync, 1 out of sync or invalid, 2 usage error.
 """
 import argparse
+import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import functools
 import hashlib
@@ -63,6 +64,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -176,19 +178,21 @@ def validate(reg, repo_root, problems, release=False):
                 if m["kind"] != "llm-gguf":
                     problems.add(where, f"chips.{chip}.status must be one of {CHIP_STATUS}")
                 continue
-            if c["status"] in ("passing", "failing") and not DATE_RE.match(str(c.get("date", ""))):
+            if c["status"] in ("passing", "failing") and not real_date(c.get("date", "")):
                 problems.add(where, f"chips.{chip} {c['status']} needs a date YYYY-MM-DD")
             if c["status"] == "failing" and not c.get("reason"):
                 problems.add(where, f"chips.{chip} 'failing' needs the measured reason")
             if "not_run_reason" in c and (c["status"] != "pending" or not str(c["not_run_reason"]).strip()):
                 problems.add(where, f"chips.{chip}.not_run_reason says why a pending chip has not been run: only on a "
                                     "pending chip, never empty")
+            for bad in chip_row_problems(m, chip):
+                problems.add(where, bad)
         for j, r in enumerate(m["results"]):
             for key in ("chip", "metric", "value", "date", "baseline"):
                 if not str(r.get(key, "")).strip():
                     problems.add(where, f"results[{j}].{key} is empty")
-            if r.get("date") and not DATE_RE.match(str(r["date"])):
-                problems.add(where, f"results[{j}].date is not YYYY-MM-DD")
+            if not real_date(r.get("date", "")):
+                problems.add(where, f"results[{j}].date is not a real YYYY-MM-DD date (not after tomorrow, UTC)")
         for j, r in enumerate(m["results"]):
             sh = r.get("short")
             if sh is None:
@@ -263,10 +267,12 @@ def validate(reg, repo_root, problems, release=False):
                 sts = [(m["chips"].get(c) or {}).get("status") for c in CHIPS]
                 if "passing" not in sts and (m["chips"].get("cpu") or {}).get("status") != "passing":
                     problems.add(where, "release: no chip passing (TPU, or the CPU for a CPU-only model)")
-                # a chip never run says "pending" with its not_run_reason, never a false "not supported"
+                # a released chip row is passing, not supported, or pending with its not_run_reason; a chip nobody ran
+                # reads "Not tested yet" on every page (pending, or "not supported" + note "Not tested yet" and no
+                # reason): chip_row_problems, every mode
                 if any(x in ("failing", None) or (x == "pending" and not not_run_reason(m, c)) for c, x in zip(CHIPS, sts)):
-                    problems.add(where, "release: every chip must be passing or not supported (with reason), or pending "
-                                        "with its not_run_reason")
+                    problems.add(where, "release: every chip must be passing, not supported, or pending with its "
+                                        "not_run_reason (a chip nobody ran reads 'Not tested yet')")
             for j, f in enumerate(m["files"]):
                 if f.get("variant") and not (f.get("quality") and f.get("speed") and f.get("date")):
                     problems.add(where, f"release: variant files[{j}] needs measured quality, speed and date")
@@ -286,7 +292,7 @@ UNQUANTIZED = ("F32", "F16", "BF16")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
-DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+DATED_RE = re.compile(r"\d{4}-\d{2}-\d{2}")    # a date anywhere in a string (DATE_RE is the whole-field form)
 
 
 def _dated(obj):
@@ -295,7 +301,7 @@ def _dated(obj):
         return any("date" in str(k).lower() or _dated(v) for k, v in obj.items())
     if isinstance(obj, (list, tuple)):
         return any(_dated(v) for v in obj)
-    return isinstance(obj, str) and bool(DATE_RE.search(obj))
+    return isinstance(obj, str) and bool(DATED_RE.search(obj))
 
 
 def _params_ok(p):
@@ -515,6 +521,100 @@ def not_run_reason(m, chip):
     """Why a pending chip has not been run (models.json chips.<chip>.not_run_reason), "" when it states none. A released
     row may say "pending" only with one; the pages print "Not tested yet", never "Not supported"."""
     return str((m["chips"].get(chip) or {}).get("not_run_reason") or "").strip()
+
+
+def real_date(s):
+    """True for a whole-field YYYY-MM-DD that is a calendar date no later than tomorrow (UTC): a run's date, never
+    9999-99-99, 2026-02-30, a date nobody has reached, or a date with words after it"""
+    s = str(s)
+    if not DATE_RE.match(s) or s != s.strip():
+        return False
+    try:
+        d = datetime.date.fromisoformat(s)
+    except ValueError:
+        return False
+    return d <= datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=1)
+
+
+def chip_rows_measured(m):
+    """The chips rows a results row of m was measured on: a result's chip names its row exactly (v6e-4, v5p-8) or by
+    its type (v6e-1 -> v6e, v5e-4 -> v5e)."""
+    out = set()
+    for r in m.get("results") or []:
+        if not real_date(r.get("date", "")):   # a result without a real date proves no run
+            continue
+        for t in CHIP_TOKEN_RE.findall(str(r.get("chip") or "").lower()):
+            out.add(t if t in CHIPS else t.split("-")[0])
+    return out
+
+
+def never_run(m, chip):
+    """True when nobody has run m on chips.<chip>: not passing or failing, no real date (a date of 'never' or
+    '9999-99-99' is not a run), and no results row on that chip"""
+    c = m["chips"].get(chip) or {}
+    return (c.get("status") not in ("passing", "failing") and not real_date(c.get("date", ""))
+            and chip not in chip_rows_measured(m))
+
+
+# a sentence saying nobody ran the chip ("not tested", "hasn't been tested", "yet to be tested", "not yet run", "has not
+# been run", "never run on this chip", "no run yet", "TBD"), never a run's finding that the model does not run there
+# ("does not run on a 16 GB chip", "XLA would not run the decoder", "will never run in 16 GB"); read after row_words()
+NOT_TESTED_RE = re.compile(
+    r"\b(?:untested|untried|tbd)\b"
+    r"|(?:\bnot|n't|\bnever)\s+(?:yet\s+)?(?:been\s+)?(?:yet\s+)?(?:tested|tried)\b"
+    r"|\b(?:yet\s+)?to\s+be\s+(?:tested|tried)\b|\byet\s+to\s+be\s+run\b"
+    r"|(?:\bnot|n't|\bnever)\s+(?:yet\s+)?been\s+run\b|\bnot\s+yet\s+run\b|(?<!does\s)(?<!did\s)(?<!do\s)\bnot\s+run\s+yet\b"
+    r"|\b(?:was|were|is|are|has|have|had)(?:\s+not|n't)\s+(?:yet\s+)?run\b"
+    r"|(?<!will\s)(?<!would\s)(?<!could\s)(?<!can\s)(?<!may\s)(?<!might\s)(?<!should\s)\bnever\s+run\b"
+    r"|\b(?:nobody|no\s+one)\s+(?:has\s+|have\s+)?(?:ran|run|tested|tried)\b|\bno\s+runs?\s+(?:yet|so\s+far)\b")
+NOT_SUPPORTED_RE = re.compile(r"\b(?:not\s+supported|unsupported)\b")
+ZERO_WIDTH_RE = re.compile("[\u00ad\u200b-\u200f\u2060-\u2064\ufeff]")
+
+
+def row_words(text):
+    """A chips row's text as the row rules read it, with the chip spellings our own docs and records use: NFKC (full-width letters, no-break spaces), zero-width characters dropped, a curly apostrophe made
+    straight, lower case, and the chip names our docs and records use made the catalog's own: v5litepod-4 -> v5e-4
+    (gcloud), TPU v6 lite -> v6e (the device kind), Trillium -> v6e, TPUv6e / TPU-v6e -> tpu v6e."""
+    s = ZERO_WIDTH_RE.sub("", unicodedata.normalize("NFKC", str(text or ""))).replace("\u2019", "'").lower()
+    s = re.sub(r"\bv5\s*lite\s*-?\s*pod", "v5e", s)
+    s = re.sub(r"\bv([56])\s*lite\b", r"v\1e", s)
+    s = re.sub(r"\btrillium\b", "v6e", s)
+    return re.sub(r"\btpu\s*-?\s*(?=v[56])", "tpu ", s)
+
+
+def chip_row_problems(m, chip):
+    """What a chips row may say, read through row_words(): its reason, note and accelerator speak for its own
+    chip type only (a v5e row never names v6e, v6e-1, v6e-4, Trillium or TPUv6e: 'runs on TPU v6e only' and every
+    paraphrase of it); its date, when it has one, is a real date; a reason states a finding, never that the chip was
+    not tested; a row nobody ran reads 'Not tested yet' on every page, carries no reason and prints 'Not supported'
+    nowhere (status, note, reason, not_run_reason)."""
+    c = m["chips"].get(chip) or {}
+    out, kind = [], chip.split("-")[0]
+    if "date" in c and c.get("status") not in ("passing", "failing") and not real_date(c["date"]):
+        out.append(f"chips.{chip}.date {c['date']!r} is not a real YYYY-MM-DD date (not after tomorrow, UTC): a row "
+                   "nobody ran has no date")
+    for key in ("reason", "note", "accelerator"):
+        other = sorted({t for t in CHIP_TOKEN_RE.findall(row_words(c.get(key))) if t.split("-")[0] != kind})
+        if other:
+            out.append(f"chips.{chip}.{key} names another chip ({', '.join(other)}): a row speaks for its own chip only")
+    if NOT_TESTED_RE.search(row_words(c.get("reason"))):
+        out.append(f"chips.{chip}.reason says the chip was not tested: a reason states what a run found; a chip "
+                   "nobody ran says 'Not tested yet' (note, or pending with its not_run_reason)")
+    if never_run(m, chip):
+        if chip_text(m, chip) != "Not tested yet":
+            out.append(f"chips.{chip} was never run (no date, no result on it) but reads {chip_text(m, chip)!r}: "
+                       "a chip nobody ran reads 'Not tested yet', never 'Not supported'")
+        if str(c.get("reason") or "").strip():
+            out.append(f"chips.{chip} was never run, so it carries no reason: there is no finding to state")
+    prints_not_tested = row_words(chip_text(m, chip)).lstrip().startswith("not tested yet")   # a note the pages print
+    if never_run(m, chip) or chip_cell(m, chip) == "Not tested yet" or prints_not_tested:
+        said = [k for k in ("note", "reason", "not_run_reason", "accelerator")
+                if NOT_SUPPORTED_RE.search(row_words(c.get(k)))]
+        if said:
+            out.append(f"chips.{chip} reads 'Not tested yet' but its {' and '.join(said)} says Not supported: the chips "
+                       "table prints the note and the chip label the accelerator; a chip nobody ran prints 'Not "
+                       "supported' nowhere")
+    return out
 
 
 def chip_cell(m, chip):
@@ -1713,12 +1813,15 @@ def only_chip_claims(m, piece):
                if any(not inside(c) for c in CHIP_TOKEN_RE.findall(r.get("chip") or ""))
                or (r.get("chip") or "").lower().startswith("cpu")]
         for key, c in (m.get("chips") or {}).items():
-            if key == row or inside(c.get("accelerator") or key):
+            acc = c.get("accelerator") or key   # a host of the row's own chip type (chip_row_problems)
+            if key == row or (inside(acc) and acc.split("-")[0] == key.split("-")[0]):
                 continue
             if c.get("status") == "passing":
                 why.append(f"its {key} chips row is passing")
             elif c.get("status") == "pending":
                 why.append(f"its {key} chips row is Not tested yet")
+            elif key in CHIPS and never_run(m, key):
+                why.append(f"its {key} chips row was never run")
         if why:
             out.append((said, "; ".join(dict.fromkeys(why))))
     return out

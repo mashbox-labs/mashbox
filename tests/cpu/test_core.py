@@ -706,8 +706,18 @@ def test_runs_only_on_claim_follows_measured_rows(tmp_path):
     only = [p for p in problems if "only on" in p]
     for i, s in enumerate(bad):
         assert any(f"docs/p{i}.md" in p for p in only), (s, only)
+    # v5e and v5p-8 were never run ("not supported" + note "Not tested yet"), so even the type-wide claim fails
+    assert any(f"docs/p{len(bad) + 1}.md" in p and "never run" in p for p in only), only
+    # with v5e and v5p-8 measured (dated rows), a chip covers its slices: "only on a TPU v6e" holds with v6e-1 and v6e-4
+    reg_ok = copy.deepcopy(reg)
+    for c in ("v5e", "v5p-8"):
+        next(x for x in reg_ok["models"] if x["id"] == "hy-nomas")["chips"][c] = {"status": "failing", "reason": "x",
+                                                                                 "date": "2026-10-28"}
+    problems_ok = sc.Problems()
+    sc.check_numbers(reg_ok, tmp_path, problems_ok)
+    only_ok = [p for p in problems_ok if "only on" in p]
     for i, s in enumerate(ok, len(bad)):
-        assert not any(f"docs/p{i}.md" in p for p in only), (s, only)
+        assert not any(f"docs/p{i}.md" in p for p in only_ok), (s, only_ok)
     assert any("src/mashbox/models/hy_nomas/__init__.py" in p and "docstring" in p for p in only), only
     assert any("TPU v6e-1 (one chip, 32 GB)" in p for p in only), only     # names the measured row it contradicts
     # a chip nobody has run the model on: "only" claims a result nobody measured

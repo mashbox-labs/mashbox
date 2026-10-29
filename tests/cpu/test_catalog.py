@@ -5,6 +5,7 @@ record behind each claim is checked by the maintainer-only test at the end (the 
 repository)."""
 import ast
 import copy
+import datetime
 import fnmatch
 import functools
 import hashlib
@@ -718,6 +719,47 @@ def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None)
     return out
 
 
+CODE_ID_RE = re.compile(r"code-.+\.json")
+SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def code_id_problems(e, listed, read, git_dir, what):
+    """A run's sealed code id (code-<tag>.json) binds its record to the code commit the evidence
+    names. When the seal lists one, the evidence cites it (code_id, path + sha256) and the seal lists no other; the cited
+    one is in the seal with its sha256 and is a JSON object whose code_sha is that commit, whose src_tree and
+    pyproject_blob are that commit's src/ tree and pyproject.toml blob (read with git from code_repo), and whose
+    wheel_content_sha256 is a sha256 equal to the evidence's (the wheel file's own sha256 changes with its zip
+    timestamps, so it is not compared). Which code counts as the same stays code set v1 (code_problems), with or
+    without a code id: src/ holds the packaged catalog, so its tree changes with every catalog row. A record from before
+    code ids has none in its seal and keeps the commit path alone."""
+    ids = sorted(p for p in listed if CODE_ID_RE.fullmatch(Path(p).name))
+    if "code_id" not in e:
+        return [f"{what}: the seal lists {Path(ids[0]).name}, and the evidence cites no code id"] if ids else []
+    out = [f"{what}: the seal lists {len(ids)} code ids"] if len(ids) > 1 else []
+    if listed.get(os.path.normpath(e["code_id"]["path"])) != e["code_id"]["sha256"]:
+        out.append(f"{what}: {Path(e['code_id']['path']).name} is not in the seal with its sha256")
+    cid = read(e["code_id"], f"{what} code id")
+    if cid is None:
+        return out
+    if not isinstance(cid, dict):
+        return out + [f"{what}: the code id is not a JSON object"]
+    commit = e["code"]["commit"]
+    if cid.get("code_sha") != commit:
+        out.append(f"{what}: the code id names {cid.get('code_sha')}, the evidence names {commit}")
+    elif git_dir:
+        for key, rev in (("src_tree", f"{commit}:src"), ("pyproject_blob", f"{commit}:pyproject.toml")):
+            want = (_git(git_dir, "rev-parse", "--verify", "-q", rev) or b"").decode().strip() or None
+            if want is None or cid.get(key) != want:
+                out.append(f"{what}: the code id's {key} is {cid.get(key)}, the code {commit[:12]} has {want}")
+    w = cid.get("wheel_content_sha256")
+    if not (isinstance(w, str) and SHA256_RE.fullmatch(w)):
+        out.append(f"{what}: the code id has no wheel_content_sha256")
+    elif w != e["code"].get("wheel_content_sha256"):
+        out.append(f"{what}: the code id's wheel_content_sha256 is {w[:16]}..., the evidence names "
+                   f"{str(e['code'].get('wheel_content_sha256'))[:16]}...")
+    return out
+
+
 def _md_cell(text, field):
     """table[COL=VALUE, ...].COLUMN: the first number in COLUMN of the first Markdown table row whose cells match"""
     mt = re.fullmatch(r"table\[(.+)\]\.(.+)", field)
@@ -824,8 +866,9 @@ def evidence_problems(reg, ev, repo, work=None):
     repo and revision are the ones file-*.sha256 and the plan name; the record ran this row's file, on the code commit and
     kq kernel commit the sidecar names (its code_sha), with nothing on the exact path when the row says kernel_path
     "bundle"; every number equals the value read from its record; that code commit's GGUF files (gguf_code_files) equal
-    this tree's (read with git from ev["code_repo"]); and the release bundle's manifest is built from the same kq commit
-    and has every quantized type of the file. Our models' parameter counts and their one number are read from records
+    this tree's (read with git from ev["code_repo"]); a run's sealed code id binds the record to that code commit
+    (code_id_problems); and the release bundle's manifest is built from the same kq commit and has every quantized type
+    of the file. Our models' parameter counts and their one number are read from records
     the same way. A GGUF chip row's record is the zero-flag run and its slots and context are this tree's fit re-run
     on the sealed header (run_problems; the sparse file goes under work, a new temporary folder when None)."""
     out = []
@@ -952,6 +995,7 @@ def evidence_problems(reg, ev, repo, work=None):
                 if g["base"] not in (base if isinstance(base, list) else [base]):
                     out.append(f"{what}: base {g['base']!r}, the pinned card says {base!r}")
             code, kq = e["code"]["commit"], (e.get("kernels") or {}).get("commit")
+            out += code_id_problems(e, listed, read, git_dir, what)
             rec = have["record"]
             if rec is not None and not isinstance(rec, dict):
                 out.append(f"{what}: the record is not a JSON record")
@@ -1362,8 +1406,9 @@ def _fake_records(base, edit=None):
     """A records root under base: one GGUF chip row's record, compare, file sha256, plan and seal, the git repo of the
     code it ran (this tree's GGUF code) and the release bundle's manifest; returns (reg, ev). edit(part, value) can
     change a part before it is written: "fixture" (the GGUF file the row is: qwen3-kquant, committed, or a fixture
-    tools/gguf_fixtures builds), "code" ({path: bytes}), "rec", "cmp", "file", "plan", "seal" (lines), "manifest", then
-    "reg" and "ev"."""
+    tools/gguf_fixtures builds), "code" ({path: bytes}), "rec", "cmp", "file", "plan", "code_id" (the run's sealed
+    code-<tag>.json; None leaves it out, as a record from before code ids), "seal" (lines), "manifest", then "reg" and
+    "ev"."""
     edit = edit or (lambda part, v: v)
     root = base / "records"
     (root / "row").mkdir(parents=True)
@@ -1376,10 +1421,14 @@ def _fake_records(base, edit=None):
     files = gguf_code_files(ROOT, fx.arch) + [ARCHS_SRC]
     code = {f: (ROOT / f).read_bytes() for f in files}
     code["models.json"] = json.dumps({"engine_kernels": [dict(BUNDLE)]}).encode()
+    code["pyproject.toml"] = (ROOT / "pyproject.toml").read_bytes()
     for f, data in edit("code", code).items():
         (root / "code" / f).parent.mkdir(parents=True, exist_ok=True)
         (root / "code" / f).write_bytes(data)
     commit, kq = _commit(root / "code"), "f" * 40
+    tree = {k: subprocess.run(["git", "-C", str(root / "code"), "rev-parse", "--verify", "-q", f"{commit}:{p}"],
+                              capture_output=True).stdout.decode().strip() or None
+            for k, p in (("src_tree", "src"), ("pyproject_blob", "pyproject.toml"))}
     btypes = sorted(fx.census()[0])
     quant = [n for n in btypes if n not in catalog.UNQUANTIZED]
     ids = {t.type_name: t.type for t in fx.tensors.values()}
@@ -1406,15 +1455,20 @@ def _fake_records(base, edit=None):
                              "impl": {n: "c" * 64 for n in quant}},
              "manifest": {"commit": kq, "impl": {n: "c" * 64 for n in quant}, "types": quant,
                           "type_ids": {n: ids[n] for n in quant}, "plane_bytes": planes},
-             "header": _header(path)}
+             "header": _header(path),
+             "code_id": {"code_sha": commit, **tree, "wheel_file": "mashbox-0.1.3-py3-none-any.whl",
+                         "wheel_sha256": "a" * 64, "wheel_content_sha256": "b" * 64}}
     names = {"rec": "rec.json", "cmp": "cmp.json", "file": "file-row.sha256", "plan": "plan-row.txt",
              "attestation": "attestation.json", "manifest": "manifest.json", "card": "card-api.json", "log": "run.log",
-             "header": "header-row.gguf"}
-    for k, n in names.items():
+             "header": "header-row.gguf", "code_id": "code-row.json"}
+    for k, n in list(names.items()):
         if k == "manifest":         # the manifest names the attestation written just before it, by sha256
             parts[k] = dict(parts[k], attestation={"path": names["attestation"],
                                                    "sha256": _sha(root / "row" / names["attestation"])})
         v = edit(k, parts[k])
+        if v is None:               # a part left out (a record from before code ids: no code-<tag>.json)
+            del names[k]
+            continue
         if isinstance(v, bytes):
             (root / "row" / n).write_bytes(v)
         else:
@@ -1424,7 +1478,7 @@ def _fake_records(base, edit=None):
         names["forced"] = "rec-forced.json"
         (root / "row" / names["forced"]).write_text(json.dumps(forced))
     seal = edit("seal", [f"{_sha(root / 'row' / names[k])}  {names[k]}" for k in ("rec", "cmp", "file", "plan", "card",
-                                                                                   "log", "header", "forced")
+                                                                                   "log", "header", "forced", "code_id")
                          if k in names])
     seal = [x.replace("@ROW@", str(root / "row")) for x in seal]
     (root / "row" / "SHA256SUMS").write_text("\n".join(seal) + "\n")
@@ -1446,7 +1500,9 @@ def _fake_records(base, edit=None):
               "numbers": {"decode_tok_s_1_user": dict(src("rec.json"), field="median(one[].new/decode_s)", round=2),
                           "decode_tok_s_8_users": dict(src("rec.json"), field="sum(eight[].new)/sum(eight[].decode_s)",
                                                        round=1)},
-              "code": {"commit": commit}, "kernels": {"commit": kq}}}}}
+              "code": {"commit": commit, "wheel_content_sha256": "b" * 64}, "kernels": {"commit": kq}}}}}
+    if "code_id" in names:
+        ev["gguf"][row["id"]]["v6e"]["code_id"] = src("code-row.json")
     if forced is not None:
         ev["gguf"][row["id"]]["v6e"]["forced"] = [src("rec-forced.json")]
     if settle is not None:
@@ -1953,6 +2009,77 @@ def test_record_guard_refuses_a_record_outside_the_records_root(tmp_path, spelli
     assert found and all("is not under" in x for x in found), found
 
 
+def _ev_code(fn):
+    """an edit of the row's evidence entry (its code, code_id and the rest) with fn"""
+    return _in_place("ev", lambda e: fn(e["gguf"][ROW["id"]]["v6e"]))
+
+
+def _no_code_id(p, v):
+    """an edit: the run has no code-<tag>.json, as a record from before code ids"""
+    return None if p == "code_id" else v
+
+
+# a record's sealed code-<tag>.json binds it to the code commit the evidence names; which code
+# counts as the same stays code set v1 (code_problems), with or without a code id
+CODE_ID_FORMS = {
+    "a code id of another commit": (_in_place("code_id", lambda c: c.update(code_sha="1" * 40)),
+                                    "the code id names 1111111111111111111111111111111111111111, the evidence names"),
+    "a code id with another src tree": (_in_place("code_id", lambda c: c.update(src_tree="2" * 40)),
+                                        "the code id's src_tree is 2222222222222222222222222222222222222222, the code"),
+    "a code id with another pyproject blob": (_in_place("code_id", lambda c: c.update(pyproject_blob="3" * 40)),
+                                              "the code id's pyproject_blob is 3333333333333333333333333333333333333333"),
+    "a code id with no src tree": (_in_place("code_id", lambda c: c.pop("src_tree")), "the code id's src_tree is None"),
+    "a code commit with no pyproject.toml": (_in_place("code", lambda c: c.pop("pyproject.toml")),
+                                             "the code id's pyproject_blob is None, the code"),
+    "a code id with no wheel content sha256": (_in_place("code_id", lambda c: c.pop("wheel_content_sha256")),
+                                               "the code id has no wheel_content_sha256"),
+    "a code id whose wheel content sha256 is not one": (_in_place("code_id", lambda c: c.update(
+        wheel_content_sha256="B" * 64)), "the code id has no wheel_content_sha256"),
+    "a code id whose wheel content is not the evidence's": (_ev_code(lambda x: x["code"].update(
+        wheel_content_sha256="c" * 64)), "the code id's wheel_content_sha256 is bbbbbbbbbbbbbbbb..., the evidence names "
+                                         "cccccccccccccccc..."),
+    "a code id that is not a JSON object": (_set("code_id", lambda c: [c]), "the code id is not a JSON object"),
+    "a sealed code id the evidence does not cite": (_ev_code(lambda x: x.pop("code_id")),
+                                                    "the seal lists code-row.json, and the evidence cites no code id"),
+    "a cited code id the seal does not list": (_set("seal", lambda s: [x for x in s if "code-row" not in x]),
+                                               "code-row.json is not in the seal with its sha256"),
+    "a cited code id with another sha256": (_ev_code(lambda x: x["code_id"].update(sha256="0" * 64)),
+                                            "code id: "),
+    "two code ids in the seal": (_set("seal", lambda s: s + [x.replace("code-row.json", "code-other.json")
+                                                             for x in s if "code-row" in x]),
+                                 "the seal lists 2 code ids"),
+}
+
+
+@pytest.mark.parametrize("form", sorted(CODE_ID_FORMS))
+def test_record_guard_names_each_bad_code_id(tmp_path, form):
+    """each way a record's sealed code id can fail to bind it to the evidence's code commit is caught, by its message"""
+    edit, words = CODE_ID_FORMS[form]
+    reg, ev = _fake_records(tmp_path, edit)
+    found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(words in x for x in found), found
+
+
+def test_record_guard_holds_a_record_from_before_code_ids_on_the_commit_path(tmp_path):
+    """a record whose seal has no code-<tag>.json keeps the commit path: it holds when its code is this tree's code
+    set, and a code set member that differs still fails it"""
+    reg, ev = _fake_records(tmp_path, _no_code_id)
+    assert "code_id" not in ev["gguf"][ROW["id"]]["v6e"]
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+    reg, ev = _fake_records(tmp_path / "b", _both(_no_code_id, _code(MODS["qwen3"], lambda b: b + b"# changed\n")))
+    assert any("dense.py differs" in x for x in evidence_problems(reg, ev, ROOT, tmp_path / "fit"))
+
+
+def test_a_code_id_does_not_replace_the_code_set(tmp_path):
+    """a sealed code id that binds the record to its commit does not stand in for the code set: the packaged catalog
+    (src/mashbox/models.json) is under src/, so the src tree differs with every catalog row, and a code set member that
+    differs fails the row whatever its code id says"""
+    reg, ev = _fake_records(tmp_path, _code(MODS["qwen3"], lambda b: b + b"# changed\n"))
+    assert "code_id" in ev["gguf"][ROW["id"]]["v6e"]
+    found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any("dense.py differs" in x for x in found) and not any("code id" in x for x in found), found
+
+
 def test_the_one_number_is_read_from_its_record(tmp_path):
     """a model's one number (catalog.number) equals the values its Markdown record states, on the chip it names"""
     root = tmp_path / "records"
@@ -2244,3 +2371,238 @@ def test_release_accepts_pending_on_a_released_row_only_with_its_not_run_reason(
     assert "Not supported" not in SC.chip_text(m, chip) + SC.chips_table(m).split(SC.CHIP_LABEL[chip], 1)[1].split("\n", 1)[0]
     m["chips"][chip]["note"] = "Runs on the host CPU"
     assert SC.chip_text(m, chip) == "Not tested yet"
+
+
+def _row_problems(model_id, chip, entry, release=False, results=None, tag=None):
+    """validate() problems of one model after replacing chips.<chip> (and optionally its results), filtered to tag"""
+    reg = copy.deepcopy(REG)
+    row = next(r for r in reg["models"] if r["id"] == model_id)
+    if entry is not None:
+        row["chips"][chip] = entry
+    if results is not None:
+        row["results"] = results
+    p = SC.Problems()
+    SC.validate(reg, ROOT, p, release=release)
+    return [x for x in p if re.match(rf"models\[\d+\] {re.escape(model_id)}: ", x) and (tag is None or tag in x)]
+
+
+def test_chip_and_result_dates_are_real_calendar_dates_never_in_the_future():
+    """DATE_RE was redefined without anchors further down the module, and the later definition is the
+    one validate() used, so '9999-99-99', '0000-00-00' and '2026-10-29 (never run)' passed as a run's date. A chips
+    row's date and a result's date are a real YYYY-MM-DD, never after tomorrow (UTC)."""
+    assert SC.DATE_RE.pattern.startswith("^") and SC.DATE_RE.match("2026-10-28 (never run)") is None
+    assert SC._dated({"x": "measured 2026-10-28 on a v6e-1"})      # _dated still finds a date inside a string
+    hy = next(m for m in REG["models"] if m["id"] == "hy-nomas")
+    good = {**hy["chips"]["v6e-4"]}
+    assert _row_problems("hy-nomas", "v6e-4", good, tag="date") == []
+    for bad in ("9999-99-99", "0000-00-00", "2026-02-30", "2099-01-01", "2026-10-29 (never run)", "26-10-29", ""):
+        assert _row_problems("hy-nomas", "v6e-4", {**good, "date": bad}, tag="date"), bad
+        res = copy.deepcopy(hy["results"])
+        res[0]["date"] = bad or "x"
+        assert _row_problems("hy-nomas", "v6e-4", None, results=res, tag="date"), bad
+
+
+NEVER_RUN_PARAPHRASES = ("runs on TPU v6e only (one chip or a v6e-4)", "only v6e", "needs a TPU v6e", "requires a v6e-4",
+                         "use a v6e-1 instead", "v6e only", "fits on v6e", "TPU v6e required", "works on the v6e-4 slice",
+                         "supported on v6e", "v6e-1 or v6e-4", "Runs on TPU v6e only: use a v6e-1")
+
+
+def test_a_chip_row_speaks_for_its_own_chip_and_a_never_run_row_reads_not_tested_yet():
+    """A never-run row may be stored as 'not supported' + note 'Not tested yet': a chips row's reason and note never
+    name another chip type (the old 'runs on TPU v6e only' on v5e, and every paraphrase of it, as reason
+    or note); a reason never says the chip was not tested; a row nobody ran (not passing or failing, no date, no result
+    on its chip) reads 'Not tested yet' and carries no reason. Today's rows pass, in both modes."""
+    tag = lambda x: "another chip" in x or "never run" in x or "not tested" in x
+    for release in (False, True):
+        for m in REG["models"]:
+            reg_p = _row_problems(m["id"], None, None, release=release)
+            assert [x for x in reg_p if tag(x)] == [], (m["id"], release)
+    nty = {"status": "not supported", "note": "Not tested yet"}
+    for ok in (nty, {"status": "pending", "not_run_reason": "CPU model: runs on the CPU, no TPU needed"}):
+        assert [x for x in _row_problems("hy-nomas", "v5e", ok) if tag(x)] == [], ok
+        m = copy.deepcopy(next(r for r in REG["models"] if r["id"] == "hy-nomas"))
+        m["chips"]["v5e"] = ok
+        assert SC.chip_text(m, "v5e") == "Not tested yet"
+    for release in (False, True):
+        assert any(tag(x) for x in _row_problems("hy-nomas", "v5e", {"status": "not supported"}, release=release))
+        for said in NEVER_RUN_PARAPHRASES + ("Not tested on this chip yet.",):
+            for entry in ({"status": "not supported", "reason": said}, {"status": "not supported", "note": said},
+                          {**nty, "reason": said}):
+                assert any(tag(x) for x in _row_problems("hy-nomas", "v5e", entry, release=release)), (entry, release)
+    ran = {"status": "not supported", "date": "2026-10-28"}
+    assert [x for x in _row_problems("hy-nomas", "v5e", {**ran, "reason": "too little memory: 16 GB of HBM per chip"})
+            if tag(x)] == []
+    for said in ("needs a TPU v6e", "use a v6e-1 instead", "Not tested on this chip yet.", "never run on this chip"):
+        assert any(tag(x) for x in _row_problems("hy-nomas", "v5e", {**ran, "reason": said})), said
+    qv5e = next(r for r in REG["models"] if r["id"] == "qwen3-8-27b")["chips"]["v5e"]
+    assert any("another chip" in x for x in _row_problems("qwen3-8-27b", "v5e", {**qv5e, "note": "faster on a v6e-1"}))
+
+
+def test_runs_only_on_counts_a_never_run_not_supported_row_like_pending():
+    """A gap in only_chip_claims: a chip nobody ran may be stored as 'not supported' + note 'Not tested yet',
+    not as 'pending', so 'runs only on a TPU v6e-4' passed while v5e and v5p-8 were never run."""
+    m = copy.deepcopy(next(r for r in REG["models"] if r["id"] == "hy-nomas"))
+    m["results"] = [r for r in m["results"] if "v6e-4" in r["chip"]]
+    m["chips"]["v6e"] = {"status": "not supported", "note": "Not tested yet"}
+    for c in ("v5e", "v5p-8"):
+        m["chips"][c] = {"status": "not supported", "note": "Not tested yet"}
+    got = SC.only_chip_claims(m, "Hy-Nomas runs only on a TPU v6e-4.")
+    assert got and all(c in got[0][1] for c in ("v5e", "v5p-8", "v6e ")), got
+    m["chips"]["v5e"] = {"status": "not supported", "date": "2026-10-28", "reason": "too little memory per chip"}
+    m["chips"]["v5p-8"] = {"status": "failing", "date": "2026-10-28", "reason": "x y"}
+    m["chips"]["v6e"] = {"status": "failing", "date": "2026-10-28", "reason": "x y"}
+    assert SC.only_chip_claims(m, "Hy-Nomas runs only on a TPU v6e-4.") == []
+
+
+MEASURED_DOES_NOT_RUN = ("the full pipeline does not run on a 16 GB chip: out of memory at load",
+                         "the compiled kernels do not run on this chip (kernel lowering error)",
+                         "XLA would not run the decoder: 16 GB of HBM is too little",
+                         "it will never run in 16 GB: the weights alone are 27 GB",
+                         "cannot run: the weights alone are 27 GB and a chip has 16 GB")
+SAYS_NOT_TESTED = ("Not tested on this chip yet.", "never run on this chip", "not yet run", "has not been run",
+                   "wasn't run", "untested", "never been tested", "not run yet", "nobody ran it")
+
+
+def test_a_measured_reason_may_say_the_model_does_not_run_there_but_never_that_nobody_ran_it():
+    """The not-tested words caught every 'not run' and 'never run', so a dated row's measured
+    finding ('does not run on a 16 GB chip: out of memory at load', 'will never run in 16 GB') failed as if nobody
+    had run the chip. A reason may state that the model does not run there; it never says the chip was not run."""
+    for status in ("not supported", "failing"):
+        ran = {"status": status, "date": "2026-10-28"}
+        for said in MEASURED_DOES_NOT_RUN:
+            assert _row_problems("hy-nomas", "v5e", {**ran, "reason": said}) == [], (status, said)
+        for said in SAYS_NOT_TESTED:
+            assert _row_problems("hy-nomas", "v5e", {**ran, "reason": said}, tag="not tested"), (status, said)
+
+
+def test_a_never_run_row_cannot_hide_behind_a_junk_date_or_carry_a_reason():
+    """never_run() took any date as a run, so a 'not supported' row nobody ran passed with
+    'date': 'never' or '9999-99-99' and its reason rendered as a finding ('Not supported: too little memory'). Any
+    chips row's date is a real date; a row without one is never run; a never-run row carries no reason even when its
+    note says 'Not tested yet'; a passing or failing row is a run whatever its date says."""
+    for junk in ("never", "9999-99-99", "2026-02-30", "2026-10-28 (never run)"):
+        for entry in ({"status": "not supported", "date": junk},
+                      {"status": "not supported", "date": junk, "reason": "too little memory"}):
+            for release in (False, True):
+                assert _row_problems("hy-nomas", "v5e", entry, release=release, tag="never run"), (entry, release)
+                assert _row_problems("hy-nomas", "v5e", entry, release=release, tag="chips.v5e.date"), (entry, release)
+    entry = {"status": "not supported", "note": "Not tested yet", "reason": "too little memory per chip"}
+    assert _row_problems("hy-nomas", "v5e", entry, tag="carries no reason"), entry
+    m = copy.deepcopy(next(r for r in REG["models"] if r["id"] == "hy-nomas"))
+    m["results"] = [r for r in m["results"] if "v6e-4" in r["chip"]]
+    for status in ("passing", "failing"):
+        m["chips"]["v5e"] = {"status": status}
+        assert not SC.never_run(m, "v5e"), status
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    assert SC.real_date(str(today + datetime.timedelta(days=1)))
+    assert not SC.real_date(str(today + datetime.timedelta(days=2)))
+    for bad in ("2026-10-28\n", " 2026-10-28", "2026-10-28 "):
+        assert not SC.real_date(bad), repr(bad)
+
+
+def test_a_chip_row_accelerator_is_its_own_chip_type_and_chip_names_are_read_in_any_case():
+    """A never-run v5e row with 'accelerator': 'v6e-4' rendered as 'TPU v5e (v6e-4)' and made
+    only_chip_claims skip it, so 'runs only on a TPU v6e-4' passed again; and 'Runs on TPU V6E only' in upper case was
+    not read as a chip name. A row's accelerator is a host of its own chip type; chip names are read in any case."""
+    nty = {"status": "not supported", "note": "Not tested yet"}
+    for release in (False, True):
+        assert _row_problems("hy-nomas", "v5e", {**nty, "accelerator": "v6e-4"}, release=release, tag="another chip")
+        assert _row_problems("hy-nomas", "v5e", {**nty, "accelerator": "v5e-4"}, release=release, tag="another chip") == []
+        for said in ("Runs on TPU V6E only", "needs a V6E-4"):
+            for key in ("reason", "note"):
+                assert _row_problems("hy-nomas", "v5e", {"status": "not supported", "date": "2026-10-28", key: said},
+                                     release=release, tag="another chip"), (key, said, release)
+    m = copy.deepcopy(next(r for r in REG["models"] if r["id"] == "hy-nomas"))
+    m["results"] = [r for r in m["results"] if "v6e-4" in r["chip"]]
+    m["chips"]["v6e"] = {"status": "not supported", "note": "Not tested yet"}
+    m["chips"]["v5p-8"] = {"status": "not supported", "note": "Not tested yet"}
+    m["chips"]["v5e"] = {**nty, "accelerator": "v6e-4"}
+    got = SC.only_chip_claims(m, "Hy-Nomas runs only on a TPU v6e-4.")
+    assert got and "its v5e chips row was never run" in got[0][1], got
+
+
+OUR_OTHER_CHIP_SPELLINGS = ("runs on Trillium only", "use a TPUv6e", "needs a TPU-v6e-4", "fits on TPU v6 lite x1",
+                            "v​6e only", "needs a v6e⁠-4", "ｖ６ｅ only", "needs a v5p-16 slice")
+SAYS_NOT_TESTED_TOO = ("hasn't been tested", "hasn’t been tested", "not yet been tested", "yet to be tested",
+                       "no run yet", "TBD", "not tested", "untried", "no one has tried it")
+
+
+def test_a_chip_row_reads_our_own_chip_spellings_and_not_tested_wordings_after_unicode_normalisation():
+    """Our own chip spellings, read after NFKC with zero-width characters dropped, and the common not-tested
+    wordings: a dated v5e row named v6e as 'Trillium', 'TPUv6e' or 'TPU v6 lite', or behind a
+    zero-width or full-width character, and said 'hasn't been tested' or 'yet to be tested', and passed. A v5e row's
+    own gcloud name (v5litepod-4) is its own chip."""
+    for release in (False, True):
+        ran = {"status": "not supported", "date": "2026-10-28"}
+        for said in OUR_OTHER_CHIP_SPELLINGS:
+            for key in ("reason", "note"):
+                assert _row_problems("hy-nomas", "v5e", {**ran, key: said}, release=release, tag="another chip"), (key, said)
+        for said in SAYS_NOT_TESTED_TOO:
+            assert _row_problems("hy-nomas", "v5e", {**ran, "reason": said}, release=release, tag="not tested"), said
+        for said in MEASURED_DOES_NOT_RUN:
+            assert _row_problems("hy-nomas", "v5e", {**ran, "reason": said}, release=release) == [], said
+        q = next(r for r in REG["models"] if r["id"] == "qwen3-8-27b")["chips"]["v5e"]
+        assert _row_problems("qwen3-8-27b", "v5e", {**q, "accelerator": "v5litepod-4"}, release=release) == []
+        assert _row_problems("qwen3-8-27b", "v6e", {"status": "not supported", "date": "2026-10-28",
+                                                    "reason": "fits a v5litepod-4 only"}, release=release, tag="another chip")
+
+
+def test_a_never_run_row_never_prints_not_supported_anywhere_note_column_included():
+    """A pending row's note prints in the chips table's Note column, so pending + note 'Not
+    supported' rendered '| Not tested yet | Not supported |' on the Hugging Face card with 0 problems. A row nobody ran
+    prints 'Not supported' nowhere: not in its status, note, reason or not_run_reason."""
+    pend = {"status": "pending", "not_run_reason": "CPU model: runs on the CPU, no TPU needed"}
+    for release in (False, True):
+        for entry in ({**pend, "note": "Not supported"}, {**pend, "note": "unsupported on this chip"},
+                      {"status": "pending", "not_run_reason": "Not supported here"},
+                      {"status": "not supported", "note": "Not tested yet. Not supported for now"}):
+            assert _row_problems("track2rig", "v5e", entry, release=release, tag="Not supported"), (entry, release)
+        assert _row_problems("track2rig", "v5e", pend, release=release, tag="Not supported") == []
+    m = copy.deepcopy(next(r for r in REG["models"] if r["id"] == "track2rig"))
+    m["chips"]["v5e"] = {**pend, "note": "Not supported"}
+    assert "| Not supported |" in SC.chips_table(m)      # what the rule keeps off the pages
+
+
+def test_a_row_that_reads_not_tested_yet_prints_not_supported_nowhere_and_only_a_dated_result_proves_a_run():
+    """A pending row with a date, or a pending row on a chip with a results row, skipped the never-run checks, so its
+    note 'Not supported' printed in the chips table next to 'Not tested yet'; an accelerator of 'not supported' printed
+    in the chip label ('TPU v5e (not supported)'); and a results row with a null date counted as a run on its chip."""
+    for release in (False, True):
+        for entry in ({"status": "pending", "not_run_reason": "Not run on this chip yet", "date": "2026-10-28",
+                       "note": "Not supported"},
+                      {"status": "pending", "not_run_reason": "CPU model: runs on the CPU, no TPU needed",
+                       "accelerator": "not supported"}):
+            assert _row_problems("track2rig", "v5e", entry, release=release, tag="Not supported"), (entry, release)
+        assert _row_problems("hy-nomas", "v6e", {"status": "pending", "not_run_reason": "the chip quota is not granted",
+                                                 "note": "Not supported"}, release=release, tag="Not supported")
+        hy = next(m for m in REG["models"] if m["id"] == "hy-nomas")
+        res = copy.deepcopy(hy["results"]) + [{**hy["results"][0], "chip": "TPU v5e", "date": None}]
+        got = _row_problems("hy-nomas", "v5e", {"status": "not supported"}, release=release, results=res)
+        assert any("date is not a real" in x for x in got) and any("never run" in x for x in got), got
+    m = copy.deepcopy(next(r for r in REG["models"] if r["id"] == "hy-nomas"))
+    m["results"].append({**m["results"][0], "chip": "TPU v5e", "date": None})
+    assert "v5e" not in SC.chip_rows_measured(m)
+
+
+def test_a_not_supported_row_that_prints_not_tested_yet_prints_not_supported_nowhere_dated_or_not():
+    """A chip nobody ran is stored as status 'not supported' with note 'Not tested yet', and the pages print the note.
+    With a real date on that row, or a dated results row on its chip, the row no longer counted as never run and its
+    cell is 'Not supported', so neither check read it: 'Not tested yet: not supported by this release' printed in the
+    chips table and 'TPU v5e (v5e-4, not supported)' in the chip label, with 0 problems. Whatever a row prints as
+    'Not tested yet', it prints 'Not supported' nowhere."""
+    base = {"status": "not supported", "note": "Not tested yet"}
+    hy = next(m for m in REG["models"] if m["id"] == "hy-nomas")
+    res = copy.deepcopy(hy["results"]) + [{**hy["results"][0], "chip": "TPU v5e-4", "date": "2026-10-28"}]
+    tag = "says Not supported"
+    for release in (False, True):
+        for entry in ({**base, "date": "2026-10-28", "note": "Not tested yet: not supported by this release"},
+                      {**base, "date": "2026-10-28", "accelerator": "v5e-4, not supported"},
+                      {**base, "date": "2026-10-28", "note": "NOT TESTED YET, unsupported"}):
+            assert _row_problems("hy-nomas", "v5e", entry, release=release, tag=tag), (entry, release)
+        for entry in ({**base, "accelerator": "not supported"}, {**base, "note": "Not tested yet: unsupported"}):
+            assert _row_problems("hy-nomas", "v5e", entry, release=release, results=res, tag=tag), (entry, release)
+        assert _row_problems("hy-nomas", "v5e", {**base, "date": "2026-10-28"}, release=release, tag=tag) == []
+        assert _row_problems("hy-nomas", "v5e", base, release=release, results=res, tag=tag) == []
+    m = copy.deepcopy(hy)
+    m["chips"]["v5e"] = {**base, "date": "2026-10-28", "note": "Not tested yet: not supported by this release"}
+    assert SC.chip_text(m, "v5e") == "Not tested yet: not supported by this release"   # what the rule keeps off the pages
