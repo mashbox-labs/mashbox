@@ -11,6 +11,7 @@ import pytest
 
 from mashbox import cli, hub
 from mashbox.runtime import drafter as DR
+from mashbox.runtime.drafters import select as SEL
 from mashbox.models import qwen3_8_27b as QM
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,10 +27,10 @@ def test_models_json_declares_the_mtp_drafter_and_no_unrecorded_pass():
     dr = DR.declared(m)
     assert dr["kind"] == "mtp" and dr["k_default"] == 2 and dr["k_max"] == 3 and dr["version"] == 1
     assert dr["sha256"] == hub.draft_row(m)["sha256"] and len(dr["sha256"]) == 64 and dr["revision"]
-    for chip, g in dr["gate"].items():      # a pass names the record, engine commit and component set it was made on
+    for chip, g in dr["gate"].items():      # a pass names the sealed record, engine commit and component set it was made on
         assert g["status"] in ("passed", "not_passed"), chip
         if g["status"] == "passed":
-            assert g.get("record") and g.get("engine_commit") and g.get("component_set_sha"), chip
+            assert SEL.sealed(g) and g.get("engine_commit") and g.get("component_set_sha"), chip
     for chip in dr.get("k_table") or {}:   # a measured draft-length table is valid for every chip it names
         DR.k_table(dr, chip)
     root = json.load(open(os.path.join(ROOT, "models.json")))
@@ -55,8 +56,25 @@ def test_key_changes_with_each_drafter_field():
 
 def gated(dr, chip="v6e-1", css="c" * 64, status="passed"):
     dr = copy.deepcopy(dr)
-    dr["gate"] = {chip: dict(status=status, record="release/engine/cert/x", engine_commit="abc", component_set_sha=css)}
+    dr["gate"] = {chip: dict(status=status, record="release/engine/cert/x", record_sha256="e" * 64, engine_commit="abc",
+                             component_set_sha=css)}
     return dr
+
+
+def test_unsealed_gate_entry_never_turns_speculation_on():
+    """a passed gate entry counts only with its sealed record (record + record_sha256, 64 hex): without the sha256, or
+    with a malformed one, the models.json drafter is not gated and no component set stands in for it"""
+    m = qwen_row()
+    dr = gated(DR.declared(m))
+    assert DR.gate(dr, "v6e-1", "c" * 64)[0] is True and DR.gated_css(dr, "v6e-1") == "c" * 64
+    for bad in (None, "", "e" * 63, "E" * 64, 7):
+        d = copy.deepcopy(dr)
+        if bad is None:
+            del d["gate"]["v6e-1"]["record_sha256"]
+        else:
+            d["gate"]["v6e-1"]["record_sha256"] = bad
+        ok, why = DR.gate(d, "v6e-1", "c" * 64)
+        assert ok is False and "not sealed" in why and DR.gated_css(d, "v6e-1") is None, (bad, why)
 
 
 def test_gate_rule():
@@ -299,6 +317,77 @@ def test_load_keeps_speculation_from_the_gate_only_for_its_own_component_set(run
     cli.deployment_keys(eng, m, "cfg", "lay", tp=1, gate_css=None)
     assert eng.dropped == 0 and eng.component_set_sha == on                 # the drafter is in the key while it runs
     assert spec(m, mtp=0) == {}
+
+
+def test_health_reason_from_every_plain_path_of_the_models_json_load(run, monkeypatch):
+    """The reason while decoding is plain (Engine.spec_health reads the engine's spec_why): every path of
+    speculation() that leaves it off sets a.spec_why to its why line (no gate entry, --mtp 0, a forced failure), which
+    cli.load hands to the engine; the deployment-keys drop and the GGUF gate drop set the engine's spec_why"""
+    call, fetched, logs = run
+    m = qwen_row()
+
+    def spec(mm, mtp=None):
+        a = argparse.Namespace(mtp=mtp, mtp_file=None)
+        return a, cli.speculation(a, mm, None, 1, later=True, model=QM)
+    a, out = spec(m)
+    assert out == {} and getattr(a, "spec_why", None) == json.loads(logs[-1])["reason"] and "not gated" in logs[-1]
+    a, out = spec(m, mtp=0)
+    assert out == {} and getattr(a, "spec_why", None) == json.loads(logs[-1])["reason"] == "--mtp 0"
+    monkeypatch.setenv("MASHBOX_FORCE_FAIL", "speculation")
+    a, out = spec(m)
+    assert out == {} and getattr(a, "spec_why", None) == "forced failure (MASHBOX_FORCE_FAIL=speculation): plain decoding"
+    monkeypatch.delenv("MASHBOX_FORCE_FAIL")
+    dr = DR.declared(m)
+    mm = copy.deepcopy(m)
+    mm["drafter"] = {k: v for k, v in gated(dr, css="d" * 64).items() if k in mm["drafter"]}
+    _, out = spec(mm)
+    eng = StandIn(out["draft_k"])
+    cli.deployment_keys(eng, mm, "cfg", "lay", tp=1, gate_css=out["gate_css"])
+    assert eng.DK == 0 and getattr(eng, "spec_why", None) == "gated on v6e-1 for another component set: plain decoding"
+    eng, keys = StandIn(2), []
+    eng.component_set_sha = "e" * 64
+    cli.gguf_spec_gate(eng, "d" * 64, lambda: keys.append(1))
+    assert eng.DK == 0 and keys == [1] and getattr(eng, "spec_why", None) == json.loads(logs[-1])["reason"]
+    assert "another component set" in eng.spec_why
+
+
+@pytest.mark.parametrize("path,says", (("no gate entry", "not gated on this chip (v6e-1)"), ("--mtp 0", "--mtp 0"),
+                                       ("forced failure", "forced failure (MASHBOX_FORCE_FAIL=speculation)")))
+def test_load_hands_the_speculation_why_line_to_the_engine(run, monkeypatch, tmp_path, path, says):
+    """cli.load (the models.json path) builds its Engine with spec_why = the why line its own speculation() logged, so
+    Engine.spec_health says why decoding is plain from the first request. The speculation rule is the real one; the files, the
+    weights and the Engine are stand-ins, and the stand-in Engine stops the load once it has its arguments (the
+    deployment keys and the namespace after it are other rows' checks)"""
+    from mashbox.models.qwen3_8_27b import weights as QW
+    from mashbox.runtime import engine as E
+    call, fetched, logs = run
+    m, built = qwen_row(), []
+
+    class Built(Exception):
+        pass
+
+    def engine(*args, **kw):
+        built.append(kw)
+        raise Built
+    monkeypatch.setattr(hub, "model_entry", lambda model_id: m)
+    monkeypatch.setattr(hub, "upstream_dir", lambda mm, log=print: str(tmp_path))
+    monkeypatch.setattr(hub, "weights_file", lambda mm, name=None, path=None, log=print: str(tmp_path / "w.bshj"))
+    monkeypatch.setattr(hub, "compile_cache", lambda mm, cache_dir, log=print: None)
+    monkeypatch.setattr(cli, "setup_cache", lambda d=None: str(tmp_path / "xla"))
+    monkeypatch.setattr(cli, "tensor_parallel", lambda n: 1)
+    monkeypatch.setattr(cli, "fit_check", lambda a, mm, d, tp: None)
+    monkeypatch.setattr(QM, "Config", lambda d: "cfg")
+    monkeypatch.setattr(QW, "load", lambda w, c, log=None: ({}, dict(file="w.bshj", load_s=0.0, device_bytes=0, bpw=8.0)))
+    monkeypatch.setattr(E, "Engine", engine)
+    argv = ["run", "qwen3-8-27b", "--no-kernels", "--prompt", "hi"] + (["--mtp", "0"] if path == "--mtp 0" else [])
+    if path == "forced failure":
+        monkeypatch.setenv("MASHBOX_FORCE_FAIL", "speculation")
+    a = cli.build_parser().parse_args(argv)
+    with pytest.raises(Built):
+        cli.load(a)
+    why = [json.loads(x) for x in logs if x.startswith("{") and '"speculation"' in x]
+    assert fetched == [] and len(built) == 1 and len(why) == 1 and why[0]["used"] is False, (built, why)
+    assert says in (why[0]["reason"] or "") and built[0].get("spec_why") == why[0]["reason"] == a.spec_why, (built[0].get("spec_why"), why)
 
 
 def test_mtp_draft_k_takes_1_to_k_max(run):

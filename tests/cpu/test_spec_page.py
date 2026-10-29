@@ -102,8 +102,9 @@ def _test_archs(path, pattern):
 def test_where_it_runs_names_tested_and_untested_architectures():
     """copy from the conversation: tested = the families tests/cpu/test_drafters.py runs it on; not tested = every
     other architecture whose module has a verify pass (SPEC_VERIFY), less the mixture-of-experts names the page's
-    limits list. A draft model (when built): tested = the draft architectures its tests write; not tested = the rest of
-    archs.drafting(). Nothing on the page calls any of them not supported."""
+    limits list. A draft model (when built), for the model it drafts for and for the draft file apart: tested = the
+    target architectures its tests run and the draft architectures they write; not tested = the rest of those verify
+    architectures and the rest of archs.drafting(). Nothing on the page calls any of them not supported."""
     table = _section("Where it runs")
     tree = ast.parse(open(os.path.join(ROOT, "tests", "cpu", "test_drafters.py")).read())
     fam = next(n.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "FAMILIES")
@@ -113,10 +114,17 @@ def test_where_it_runs_names_tested_and_untested_architectures():
     _, on, off = _row(table, "Copy from the conversation")
     assert _ticked(on) == tested and _ticked(off) == verify - tested, (on, off, tested, verify)
     if "draft_model" in D.MODULES:
+        # test_draft_model.py writes its target and its draft with write_dense; test_draft_model_cli.py builds its
+        # target (target = FXT.build) and writes its draft with write_dense
         dtested = (_test_archs("tests/cpu/test_draft_model.py", r'write_dense\([^)]*arch="([a-z0-9]+)"')
                    | _test_archs("tests/cpu/test_draft_model_cli.py", r'write_dense\([^)]*arch="([a-z0-9]+)"'))
+        ttested = (_test_archs("tests/cpu/test_draft_model.py", r'write_dense\([^)]*arch="([a-z0-9]+)"')
+                   | _test_archs("tests/cpu/test_draft_model_cli.py", r'target = FXT\.build\("([a-z0-9]+)-'))
         _, on, off = _row(table, "A smaller model with the same tokenizer")
-        assert dtested and _ticked(on) == dtested and _ticked(off) == set(ARCHS.drafting()) - dtested, (on, off)
+        on_t, _, on_d = on.partition(" GGUF model with ")
+        off_t, _, off_d = off.rpartition("; ")
+        assert dtested and _ticked(on_d) == dtested and _ticked(off_d) == set(ARCHS.drafting()) - dtested, (on, off)
+        assert ttested and _ticked(on_t) == ttested and _ticked(off_t) == verify - ttested, (on, off, ttested, verify)
     assert "not supported" not in PAGE.lower()
 
 

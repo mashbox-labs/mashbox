@@ -160,7 +160,8 @@ class Engine:
 
     def __init__(self, cfg, W, model, CTX=2048, S=8, K=8, decode_kernels=None, chunk=512, tokens_per_call=2048,
                  prefix_cache=False, attn_bytes=2e9, cache_ram=8 << 30, ckpts=8, ckpt_step=8192, budget_busy=128,
-                 budget_idle=1024, trace=False, mtp=None, draft_k=0, spec_rounds=None, k_table=None, drafter=None):
+                 budget_idle=1024, trace=False, mtp=None, draft_k=0, spec_rounds=None, k_table=None, drafter=None,
+                 spec_why=None):
         self.c, self.W, self.CTX, self.S, self.K = cfg, W, CTX, S, K
         self.chunk, self.tokens_per_call = chunk, tokens_per_call
         self.prefix_cache, self.attn_bytes = prefix_cache, attn_bytes
@@ -202,7 +203,7 @@ class Engine:
         # a row bucket at k = 0 decodes with the plain program (_spec_call). A drafter that allows no plain call between
         # its calls (plain_ok False: the MTP head carries every committed token) is not turned on with such a table:
         # plain decoding, and spec_why says why
-        self.spec_why = None
+        self.spec_why = None if self.DK else spec_why      # why decoding is plain (the load's reason from cli), Engine.spec_health
         if self.DK and not getattr(self.drafter, "plain_ok", False) and 0 in self.k_table.values():
             self.spec_why = (f"speculation off: the {getattr(self.drafter, 'kind', None)} drafter needs every committed "
                              f"token, so it cannot run a row bucket at k = 0 (k_table {self.k_table}): plain decoding")
@@ -1261,7 +1262,25 @@ class Engine:
         self.spec_off = True
         self.spec_why = f"speculation off after a failed speculation call (plain decoding): {type(e).__name__}: {e}"[:400]
         self.spec_stats["faults"] = self.spec_stats.get("faults", 0) + 1
+        import json
+        import sys
+        print(json.dumps(dict(event="speculation", used=False, reason=self.spec_why, faults=self.spec_stats["faults"])),
+              file=sys.stderr, flush=True)       # the startup log's speculation line, for a fault mid-run
         return True
+
+    def spec_health(self):
+        """The engine's speculation state: on (a drafter is built and no speculation call failed), its method, draft length
+        and measured k_table, why decoding is plain when it is (spec_why: the load's reason, the k = 0 rule, a drop before
+        the warm-up or a failed call), a copy of spec_stats (rounds, tokens, faults, plain calls, back-offs, the accepted
+        length histogram) and the spec_step version. A server that fell back to plain mid-run shows it here."""
+        from .spec_step import SPEC_STEP_VERSION
+        st = {k: (list(v) if isinstance(v, list) else v) for k, v in self.spec_stats.items()}
+        st.setdefault("faults", 0)
+        on = bool(self.DK) and not self.spec_off
+        return dict(on=on, method=getattr(self.drafter, "kind", None) if self.DK else None, draft_k=self.DK,
+                    k_table={str(b): k for b, k in sorted(self.k_table.items())},
+                    reason=None if on else (self.spec_why or "no drafter: plain decoding"), stats=st,
+                    spec_step_version=SPEC_STEP_VERSION)
 
     def spec_programs(self, ck, cv):
         """Every speculation program a request can reach, as warm() lists its calls (kind, jitted function, arguments after
@@ -1303,7 +1322,7 @@ class Engine:
         the plain slot state (no extra K/V group), the drafter's weights released. RuntimeError once a speculation program
         ran, except failed=True (cli.warm: a speculation program failed to compile or run before ready), which is allowed
         while no row is live: the slot states, their snapshots and the host cache, which may hold the drafter's K/V, are
-        made again without it."""
+        made again without it. spec_why says why; cli.load sets its own reason after the call."""
         if not self.DK:
             return
         if failed and any(self.rows):       # the failed call's rows end (their streams get the error)
@@ -1316,6 +1335,8 @@ class Engine:
             if self.host is not None:
                 h, h.ns = HostCache(self.host.cap), self.host.ns
                 self.host = h
+        self.spec_why = ("speculation off: a speculation program failed before ready" if failed
+                         else "speculation off before the warm-up")
         cfg, S, CTX, model = self.c, self.S, self.CTX, self.model
         self.DK, self.NR, self.k_table, self.drafter, self.dstate, self.dpf, self.sstep = 0, 1, {}, None, None, None, None
         self._dhid = False

@@ -2,15 +2,17 @@
 
 Each kind implements Drafter below (DRAFTER_ABI 2); runtime/drafter.py holds the models.json declaration and the gate.
 
-Order of choice (select.py): the model's own MTP head, then a draft model from the catalog with the same tokenizer, then
-n-gram over the row's own text. Chosen from metadata and records, never from a model name.
+Order of choice (select.py): a trained drafter declared for this target (drafter.json: its target's tokenizer hash and
+shape), then the model's own MTP head, then a draft model from the catalog with the same tokenizer, then n-gram over the
+row's own text. Chosen from metadata and records, never from a model name.
 """
 from ..spec_step import SPEC_STEP_VERSION
 
 DRAFTER_ABI = 2      # the drafter interface (class Drafter below; runtime/drafters/<kind>.py implement it)
-ORDER = ("mtp", "draft_model", "ngram")      # every drafter kind, in the order of choice (select.py)
+ORDER = ("trained", "mtp", "draft_model", "ngram")      # every drafter kind, in the order of choice (select.py)
 
-MODULES = {"mtp": "mashbox.runtime.drafters.mtp", "ngram": "mashbox.runtime.drafters.ngram"}
+MODULES = {"mtp": "mashbox.runtime.drafters.mtp", "draft_model": "mashbox.runtime.drafters.draft_model",
+           "ngram": "mashbox.runtime.drafters.ngram"}
 
 
 def key_base(kind, ident, weights_sha256, params, k):

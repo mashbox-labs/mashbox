@@ -25,6 +25,7 @@ CPU, no network.
 Slow rows (the step mutants, 64 users) run with MASHBOX_SPEC_SLOW=1, where speculation code changes (SPEC_SLOW below).
 """
 import importlib.util
+import json
 import os
 from types import SimpleNamespace
 
@@ -306,11 +307,14 @@ def test_ngram_on_hybrid_bshj_model(tmp_path):
 def test_st_s9_pick_from_metadata_only(fams):
     c, W, A = fams["qwen3-f32"]
     m = SEL.meta_of(A, c, "gguf", 0)
-    assert set(m) == {"format", "verify", "mtp_head", "experts", "mtp_layers"} and m["verify"] and not m["mtp_head"]
+    assert set(m) == {"format", "verify", "mtp_head", "experts", "mtp_layers", "draft_given", "trained", "trained_why",
+                      "draft_models"} \
+        and m["verify"] and not m["mtp_head"]
+    assert m["trained"] == m["trained_why"] == m["draft_models"] == []     # detection: nothing declared for this file
     from mashbox.models import qwen3_8_27b as Q
     assert SEL.meta_of(Q, SimpleNamespace(), "bshj", 1)["mtp_head"]
     css = "c" * 64
-    ok = dict(status="passed", record="r", component_set_sha=css, spec_step_version=SS.SPEC_STEP_VERSION, k_table={"8": 3})
+    ok = dict(status="passed", record="r", record_sha256="e" * 64, component_set_sha=css, spec_step_version=SS.SPEC_STEP_VERSION, k_table={"8": 3})
     rec = {"ngram": {"v6e-1": ok}}
     assert SEL.pick(m, "v6e-1", rec, css=css)[:2] == ("ngram", True)
     kind, g, why, _ = SEL.pick(m, "v6e-1", None)
@@ -323,7 +327,8 @@ def test_st_s9_pick_from_metadata_only(fams):
     assert SEL.pick(q, "v6e-1", rec2, css=css)[0] == "mtp"
     g2 = dict(m, mtp_layers=1)
     k2, _, why2, _ = SEL.pick(g2, "v6e-1", rec2, css=css)
-    assert k2 == "ngram" and why2[0].startswith("mtp: the file has an MTP head, but no MTP implementation")
+    assert k2 == "ngram" and why2[0].startswith("trained: no trained drafter declares this target")   # trained is ranked first
+    assert why2[1].startswith("mtp: the file has an MTP head, but no MTP implementation")
     assert SEL.pick(dict(m, experts=8), "v6e-1", rec)[0] is None
     assert SEL.pick(dict(m, verify=False), "v6e-1", rec)[0] is None
 
@@ -420,7 +425,7 @@ def test_st_s10_gate_needs_component_set_step_version_and_k(fams, monkeypatch):
     from mashbox import cli
     from mashbox.gguf import open_model
     css = "c" * 64
-    ok = dict(status="passed", record="r", component_set_sha=css, spec_step_version=SS.SPEC_STEP_VERSION, k_table={"1": 3, "8": 0})
+    ok = dict(status="passed", record="r", record_sha256="e" * 64, component_set_sha=css, spec_step_version=SS.SPEC_STEP_VERSION, k_table={"1": 3, "8": 0})
     assert SEL.gated({"v6e-1": ok}, "v6e-1", css)[0]
     for bad, word in ((dict(ok, component_set_sha="d" * 64), "another component set"),
                       (dict(ok, spec_step_version=SS.SPEC_STEP_VERSION + 1), "step version"),
@@ -492,6 +497,26 @@ def test_st_s11_compile_error_before_ready_decodes_plain(fams, monkeypatch):
     for p in loop_prompts(c.V, 3, 12):
         assert drive(spec, [(0, dict(ids=p, max_new=24))])[0]["ids"] == drive(base, [(0, dict(ids=p, max_new=24))])[0]["ids"]
 
+
+
+def test_spec_health_reason_after_a_program_failed_before_ready(fams, monkeypatch):
+    """The reason (spec_why) after a speculation program failed before ready: cli.warm's why line (the error named), and
+    the engine's own reason for drop_speculation(failed=True) when no cli sets one"""
+    from mashbox import cli
+    c = fams["llama-f32"][0]
+    _, spec = engines(fams["llama-f32"])
+    lines = []
+    monkeypatch.setattr(cli, "log", lines.append)
+    broken_step(spec, c)
+    p0 = loop_prompts(c.V, 1, 4)[0]
+    cli.warm(spec, SimpleNamespace(chat_ids=lambda msgs: p0))
+    why = [json.loads(x)["reason"] for x in lines if x.startswith('{"event": "speculation"')]
+    h = spec.spec_health()
+    assert h["on"] is False and why and h["reason"] == why[-1], (h, why)
+    assert h["reason"].startswith("a speculation program failed before ready: ")
+    _, eng = engines(fams["llama-f32"])
+    eng.drop_speculation(failed=True)
+    assert eng.spec_health()["reason"] == "speculation off: a speculation program failed before ready"
 
 # ST-S3: each mutant changes one line of runtime/spec_step.py; a mutant is killed when a row's output differs from the
 # plain engine's on a batched schedule or the n-gram state holds a token the row did not commit
@@ -676,7 +701,7 @@ def test_st_s9_renamed_file_gives_the_same_pick(fams, tmp_path, monkeypatch):
     open(dst, "wb").write(bytes(data))
     assert _gguf_name(dst) == "z" * len(old) != old.decode()
     monkeypatch.setattr(DR, "chip_key", lambda: "v6e-1")
-    ok = dict(status="passed", record="r", component_set_sha="c" * 64, spec_step_version=SS.SPEC_STEP_VERSION,
+    ok = dict(status="passed", record="r", record_sha256="e" * 64, component_set_sha="c" * 64, spec_step_version=SS.SPEC_STEP_VERSION,
               k_table={"1": 3, "8": 2})
     seen = []
     for path in (src, dst):
@@ -693,20 +718,21 @@ def test_st_s9_renamed_file_gives_the_same_pick(fams, tmp_path, monkeypatch):
 
 
 def test_st_s9_order_on_files_that_have_each(tmp_path, bshj):
-    """the order on real files: a GGUF file with an MTP layer (nextn) reads rank 1 first (no GGUF MTP implementation
-    in this version), then draft_model, then n-gram, which it picks; the BSHJ model with its MTP head picks mtp"""
+    """the order on real files: a GGUF file with an MTP layer (nextn) reads trained (none declared for it), then mtp (no
+    GGUF MTP implementation in this version), then draft_model, then n-gram, which it picks; the BSHJ model with its MTP
+    head reads trained, then picks mtp"""
     from mashbox.gguf import open_model
     css = "c" * 64
-    ok = dict(status="passed", record="r", component_set_sha=css, spec_step_version=SS.SPEC_STEP_VERSION, k_table={"1": 2})
+    ok = dict(status="passed", record="r", record_sha256="e" * 64, component_set_sha=css, spec_step_version=SS.SPEC_STEP_VERSION, k_table={"1": 2})
     rec = {k: {"v6e-1": ok} for k in DRS.ORDER}
     _, A, c = open_model(FXT.build("qwen35-mtp", str(tmp_path)), act=jnp.float32)
     m = SEL.meta_of(A, c, "gguf", getattr(c, "nextn", 0))
     assert m["mtp_layers"] > 0 and not m["mtp_head"] and m["verify"]
     kind, g, why, _ = SEL.pick(m, "v6e-1", rec, css=css)
-    assert (kind, g) == ("ngram", True) and [w.split(":")[0] for w in why] == ["mtp", "draft_model", "ngram"]
+    assert (kind, g) == ("ngram", True) and [w.split(":")[0] for w in why] == ["trained", "mtp", "draft_model", "ngram"]
     T, cfg, _ = bshj
     kind, g, why, _ = SEL.pick(SEL.meta_of(T.Q, cfg, "bshj", 1), "v6e-1", rec, css=css)    # config: 1 MTP layer
-    assert (kind, g) == ("mtp", True) and len(why) == 1
+    assert (kind, g) == ("mtp", True) and [w.split(":")[0] for w in why] == ["trained", "mtp"]
 
 
 def test_moe_refused_from_both_config_forms(tmp_path, monkeypatch):
@@ -875,15 +901,136 @@ def test_low_acceptance_switches_rows_to_plain(fams):
     assert st["rounds"] <= tokens // 2, (st["rounds"], tokens)
 
 
+# -------------------------------------------------------------------------------------------------
+def sealed_entry(css, k_table, chip="v6e-1"):
+    return {chip: dict(status="passed", record="release/engine/cert/r", record_sha256="e" * 64, component_set_sha=css,
+                       spec_step_version=SS.SPEC_STEP_VERSION, k_table=k_table)}
+
+
+def test_unsealed_gguf_gate_entry_is_not_gated():
+    """select.gated counts a passed entry only with its sealed record (record + record_sha256)"""
+    ent = sealed_entry("c" * 64, {"1": 3})["v6e-1"]
+    assert SEL.gated({"v6e-1": ent}, "v6e-1", "c" * 64)[0] is True
+    for k in ("record_sha256", "record"):
+        bad = {x: v for x, v in ent.items() if x != k}
+        ok, why = SEL.gated({"v6e-1": bad}, "v6e-1", "c" * 64)
+        assert ok is False and "not sealed" in why, (k, why)
+
+
+def test_catalog_records_match_the_file_identity_never_a_name():
+    """the gguf[] row is matched on repo + revision + file (a Hub file) or sha256, never on a name: a renamed file of
+    the same repo, another revision or a row of another repo gives no records"""
+    rec = dict(ngram=sealed_entry("c" * 64, {"1": 3}))
+    reg = dict(gguf=[dict(repo="org/m-GGUF", revision="r1", file="m-Q4_K_M.gguf", sha256="a" * 64, speculation=rec)])
+    hub_file = dict(repo="org/m-GGUF", revision="r1", file="m-Q4_K_M.gguf", path="/x/m-Q4_K_M.gguf")
+    assert SEL.catalog_records(reg, hub_file) == rec
+    assert SEL.catalog_records(reg, dict(repo=None, file="m-Q4_K_M.gguf", path="/y/m-Q4_K_M.gguf")) == {}
+    assert SEL.catalog_records(reg, dict(hub_file, revision="r2")) == {}
+    assert SEL.catalog_records(reg, dict(hub_file, repo="other/m-GGUF")) == {}
+    assert SEL.catalog_records(reg, dict(repo=None, file="renamed.gguf", sha256="a" * 64)) == rec
+    assert SEL.catalog_records({}, hub_file) == {} and SEL.catalog_records(dict(gguf=[]), hub_file) == {}
+
+
+def test_gguf_load_turns_ngram_on_with_no_flag_only_from_a_sealed_catalog_record(fams, tmp_path, monkeypatch):
+    """The sealed-record path through cli.load_gguf: no flag, a TPU chip key, and the catalog's gguf[] row for this file with a passed,
+    sealed n-gram record for this deployment's component set -> n-gram on with the record's k_table; the same row with
+    the record unsealed, or no row -> plain decoding with a why line. (The chip key is set; the engine runs on CPU.)"""
+    from mashbox import cli, hub
+    from mashbox.gguf import resolve as GR
+    monkeypatch.setenv("MASHBOX_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("MASHBOX_GGUF_KERNELS", "off")
+    monkeypatch.setattr(DR, "chip_key", lambda: "v6e-1")
+    path = PATHS["llama-f32"]
+    lines = []
+    monkeypatch.setattr(cli, "log", lambda s: lines.append(s))
+
+    def load(reg, extra=()):
+        monkeypatch.setattr(hub, "registry", lambda: reg)
+        a = cli.build_parser().parse_args(["run", path, "--prompt", "hi", "--ctx", "128", "--slots", "2", "--steps", "4",
+                                           "--cache-dir", str(tmp_path / "xla")] + list(extra))
+        a.gguf = dict(GR.resolve(path, log=cli.log), repo="org/llama-GGUF", revision="r1")
+        return cli.load_gguf(a)[1]
+    css = load({}, ["--speculation", "ngram", "--draft-k", "3"]).component_set_sha    # this deployment's set, n-gram on
+    row, kt = dict(repo="org/llama-GGUF", revision="r1", file=os.path.basename(path), sha256="0" * 64), {"1": 3, "2": 2}
+    eng = load(dict(gguf=[dict(row, speculation=dict(ngram=sealed_entry(css, kt)))]))
+    assert eng.DK == 3 and eng.drafter is not None and eng.drafter.kind == "ngram" and eng.k_table == {1: 3, 2: 2}
+    assert eng.component_set_sha == css
+    eng = load(dict(gguf=[dict(row, speculation=dict(ngram=sealed_entry("d" * 64, kt)))]))
+    assert eng.DK == 0 and eng.drafter is None          # a sealed record for another component set: plain decoding
+    unsealed = sealed_entry(css, {"1": 3})
+    del unsealed["v6e-1"]["record_sha256"]
+    for reg in (dict(gguf=[dict(row, speculation=dict(ngram=unsealed))]), dict(gguf=[]), {}):
+        lines.clear()
+        eng = load(reg)
+        assert eng.DK == 0 and eng.drafter is None, reg
+        why = [json.loads(x) for x in lines if x.startswith("{") and '"speculation"' in x]
+        assert why and why[-1]["used"] is False, lines
+
+
+def test_spec_health_names_the_speculation_state(fams, capsys):
+    """The speculation block (Engine.spec_health): while speculation runs, on with its method, draft
+    length, rounds and faults 0 (a copy: reading it changes no counter); after a call that failed before it took the
+    slot state, off with the fault's why line, faults 1 and one log line; a plain engine names the load's reason, and
+    drop_speculation's why reaches it"""
+    c, W, A = fams["llama-f32"]
+    plan = [(j, dict(ids=p, max_new=40)) for j, p in enumerate(loop_prompts(c.V, 3, 31))]
+    _, eng = engines(fams["llama-f32"])
+    h = eng.spec_health()
+    assert (h["on"], h["method"], h["draft_k"], h["reason"]) == (True, "ngram", 3, None)
+    assert h["stats"]["faults"] == 0 and h["stats"]["rounds"] == 0 and h["spec_step_version"] == SS.SPEC_STEP_VERSION
+    drive(eng, plan)
+    h = eng.spec_health()
+    assert h["on"] is True and h["stats"]["rounds"] > 0 and h["stats"]["faults"] == 0, h
+    h["stats"]["hist"].append(99)
+    assert eng.spec_health()["stats"]["hist"] == eng.spec_stats["hist"] and 99 not in eng.spec_stats["hist"]
+    _, bad = engines(fams["llama-f32"])
+    raise_at(bad, 2)
+    capsys.readouterr()
+    drive(bad, plan, faults_ok=True)
+    h = bad.spec_health()
+    assert h["on"] is False and h["stats"]["faults"] == 1 and "failed speculation call" in h["reason"], h
+    lines = [json.loads(x) for x in capsys.readouterr().err.splitlines() if x.startswith('{"event": "speculation"')]
+    assert [(x["used"], x["faults"]) for x in lines] == [(False, 1)] and lines[0]["reason"] == h["reason"], lines
+    plain = Engine(c, W, A, CTX=128, S=4, K=4, spec_why="no passed gate record on this chip")
+    h = plain.spec_health()
+    assert (h["on"], h["method"], h["draft_k"], h["reason"]) == (False, None, 0, "no passed gate record on this chip")
+    assert Engine(c, W, A, CTX=128, S=4, K=4).spec_health()["reason"] == "no drafter: plain decoding"
+    _, drop = engines(fams["llama-f32"])
+    drop.drop_speculation()
+    assert (drop.spec_health()["on"], drop.spec_health()["reason"]) == (False, "speculation off before the warm-up")
+
+
+def test_spec_health_reason_through_load_gguf(fams, tmp_path, monkeypatch):
+    """through cli.load_gguf with no flag and no catalog row: plain decoding, and Engine.spec_health's reason is the load's
+    speculation why line"""
+    from mashbox import cli, hub
+    from mashbox.gguf import resolve as GR
+    monkeypatch.setenv("MASHBOX_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("MASHBOX_GGUF_KERNELS", "off")
+    monkeypatch.setattr(DR, "chip_key", lambda: "v6e-1")
+    monkeypatch.setattr(hub, "registry", lambda: {})
+    lines = []
+    monkeypatch.setattr(cli, "log", lambda s: lines.append(s))
+    path = PATHS["llama-f32"]
+    a = cli.build_parser().parse_args(["run", path, "--prompt", "hi", "--ctx", "128", "--slots", "2", "--steps", "4",
+                                       "--cache-dir", str(tmp_path / "xla")])
+    a.gguf = dict(GR.resolve(path, log=cli.log), repo="org/llama-GGUF", revision="r1")
+    eng = cli.load_gguf(a)[1]
+    why = [json.loads(x) for x in lines if x.startswith("{") and '"speculation"' in x]
+    h = eng.spec_health()
+    assert eng.DK == 0 and h["on"] is False and why and why[-1]["used"] is False and h["reason"] == why[-1]["reason"], (h, why)
+
+
 def test_speculation_draft_is_refused_on_both_load_paths(tmp_path, monkeypatch):
     """--speculation draft stops with an error on a models.json model (cli.forced_drafter, before any file is read) and on
-    a GGUF file (cli.gguf_speculation), as docs/speculation.md says: this release does not run draft models"""
+    a GGUF file without a draft model (cli.gguf_speculation), as docs/speculation.md says: a draft model runs on a GGUF
+    file, given with --draft-model"""
     from mashbox import cli
     from mashbox.gguf import GGUFError, open_model
     from mashbox.models import qwen3_8_27b as Q
     monkeypatch.setattr(cli, "log", lambda *a: None)
-    with pytest.raises(SystemExit, match="--speculation draft: draft models are not in this version"):
+    with pytest.raises(SystemExit, match="--speculation draft runs on a GGUF file in this version"):
         cli.forced_drafter("draft", None, 1, Q, SimpleNamespace())
     _, A, c = open_model(FXT.build("llama-f32", str(tmp_path)), act=jnp.float32)
-    with pytest.raises(GGUFError, match="--speculation draft: draft_model: not built in this version"):
+    with pytest.raises(GGUFError, match=r"--speculation draft: draft_model: no draft model given \(--draft-model\)"):
         cli.gguf_speculation(SimpleNamespace(speculation="draft", draft_k=None), c, A)

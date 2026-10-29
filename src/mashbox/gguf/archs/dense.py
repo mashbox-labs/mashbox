@@ -39,6 +39,7 @@ f32, bf16 = jnp.float32, jnp.bfloat16
 # the Models label (docs/gguf.md) of each architecture ARCHS maps to this module; catalog reads it with ast
 MODELS = {"llama": "Llama 3.x", "qwen2": "Qwen2.5", "qwen3": "Qwen3", "exaone": "EXAONE 3.5", "granite": "Granite 3.3"}
 SPEC_VERIFY = True       # forward(verify=True) and the identity commit (runtime/spec_step.py)
+SPEC_DRAFT = True        # every layer is full attention: a file of this module can be a draft model (--draft-model)
 NEG = -1e30
 NEOX = ("qwen2", "qwen3", "exaone")      # rope on halves; llama, granite: adjacent pairs
 

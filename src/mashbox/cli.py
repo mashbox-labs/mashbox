@@ -95,8 +95,9 @@ def cmd_download(a):
     b, _ = hub.kernel_bundle(m, log) if not a.no_kernels else (None, None)
     from .runtime import drafter as DR
     dr, dl = None, DR.declared(m)
-    if dl and any((g or {}).get("status") == "passed" for g in (dl.get("gate") or {}).values()):
-        try:                            # only a drafter that passed its gate on some chip turns on without a flag
+    if dl and any(DR.gate(dl, chip, (g or {}).get("component_set_sha"))[0] for chip, g in (dl.get("gate") or {}).items()):
+        try:                            # only a drafter that run's no-flag gate can turn on: DR.gate (passed, sealed, k > 0)
+                                        # with the record's own component set standing in, as cli.load does
             dr = hub.draft_file(m, log=log)
         except SystemExit:
             raise
@@ -144,7 +145,8 @@ def speculation(a, m, cfg, tp, component_set_sha=None, later=False, model=None):
     if sv is not None and k is not None:
         raise SystemExit("--mtp K is the short form of --speculation mtp --draft-k K: give one of them")
     if os.environ.get("MASHBOX_FORCE_FAIL") == "speculation":
-        log(json.dumps(dict(event="speculation", used=False, reason="forced failure (MASHBOX_FORCE_FAIL=speculation): plain decoding")))
+        a.spec_why = "forced failure (MASHBOX_FORCE_FAIL=speculation): plain decoding"
+        log(json.dumps(dict(event="speculation", used=False, reason=a.spec_why)))
         return {}
     if sv == "off":
         k = 0
@@ -160,6 +162,7 @@ def speculation(a, m, cfg, tp, component_set_sha=None, later=False, model=None):
 
     def off(why):
         log(json.dumps(dict(event="speculation", used=False, reason=why)))
+        a.spec_why = why            # the reason Engine.spec_health gives while decoding is plain (Engine spec_why)
         return {}
     if k == 0:
         return off("--speculation off" if sv == "off" else "--mtp 0")
@@ -233,12 +236,23 @@ def drafter_identity(m, dr, path, k, kmax, mfile=None):
     return DR.key(dict(base, sha256=checked or tenancy.file_sha256(path)))
 
 
-def draft_refusal(a):
-    """--speculation draft: this version builds no draft model, so every run path stops with this line before any file
-    is fetched or loaded or the server starts (main before the model row, cmd_run before the API keys, load() and
-    cmd_gguf/load_gguf first); else None"""
-    if getattr(a, "speculation", None) == "draft":
-        return "--speculation draft: draft models are not in this version; use ngram or mtp"
+DRAFT_GGUF_ONLY = "--speculation draft runs on a GGUF file in this version; for a models.json model use ngram or mtp"
+
+
+def draft_refusal(a, gguf=None):
+    """--speculation draft / --draft-model FILE: a draft model drafts for a GGUF target only, given with --draft-model
+    (--draft-model alone means --speculation draft). Where that does not hold every run path stops with this line before
+    any file is fetched or loaded or the server starts (main before the model row, cmd_run before the API keys, load()
+    and cmd_gguf/load_gguf first); else None. gguf: whether the target is a GGUF file (default: a.gguf is set)."""
+    sv, dm = getattr(a, "speculation", None), getattr(a, "draft_model", None)
+    if dm and sv not in (None, "auto", "draft"):
+        return f"--draft-model is the draft model of --speculation draft, not of --speculation {sv}"
+    if sv != "draft" and not dm:
+        return None
+    if not (bool(getattr(a, "gguf", None)) if gguf is None else gguf):
+        return DRAFT_GGUF_ONLY
+    if not dm:
+        return "--speculation draft needs --draft-model FILE: a smaller GGUF file or repo with the same tokenizer"
     return None
 
 
@@ -248,7 +262,7 @@ def forced_drafter(kind, k, tp, model, cfg):
     from .runtime.drafters import select as SEL
     from .runtime.spec_step import SPEC_STEP_VERSION
     if kind == "draft":
-        raise SystemExit("--speculation draft: draft models are not in this version; use ngram or mtp")
+        raise SystemExit(DRAFT_GGUF_ONLY)
     k = 3 if k is None else k
     if not 1 <= k <= 8:
         raise SystemExit(f"--draft-k {k}: use 1 to 8")
@@ -264,10 +278,11 @@ def forced_drafter(kind, k, tp, model, cfg):
     return dict(drafter=NGram(k), draft_k=k)
 
 
-def gguf_speculation(a, c, A, records=None):
+def gguf_speculation(a, c, A, records=None, f=None):
     """Engine arguments for speculative decoding on a GGUF file, picked from its metadata (runtime/drafters/select.py):
     auto (no flag) runs only a drafter with a passed gate record on this chip (records {kind: {chip: entry}}), else plain
-    decoding with the why lines; --speculation <kind> forces one where it applies; --speculation off and
+    decoding with the why lines; --speculation <kind> forces one where it applies (--draft-model FILE: the draft model,
+    loaded by gguf_draft against the target file f, which stops with its line when the file cannot draft for it); --speculation off and
     MASHBOX_FORCE_FAIL=speculation decode plain. A gated pick carries the record's component_set_sha as gate_css:
     load_gguf checks the built engine's against it before the warm-up (gguf_spec_gate)."""
     from .gguf import GGUFError
@@ -275,16 +290,18 @@ def gguf_speculation(a, c, A, records=None):
     from .runtime.drafters import select as SEL
     from .runtime.spec_step import SPEC_STEP_VERSION
     sv, k = getattr(a, "speculation", None), getattr(a, "draft_k", None)
-    forced = "draft_model" if sv == "draft" else sv
+    given = getattr(a, "draft_gguf", None)
+    forced = "draft_model" if sv == "draft" or (given and sv in (None, "auto")) else sv
 
     def off(why):
         log(json.dumps(dict(event="speculation", used=False, reason=why)))
+        a.spec_why = why            # the reason Engine.spec_health gives while decoding is plain (Engine spec_why)
         return {}
     if os.environ.get("MASHBOX_FORCE_FAIL") == "speculation":
         return off("forced failure (MASHBOX_FORCE_FAIL=speculation): plain decoding")
     chip = DR.chip_key()
-    kind, gated, why, gcss = SEL.pick(SEL.meta_of(A, c, "gguf", getattr(c, "nextn", 0)), chip, records=records,
-                                      forced=forced, later=True)
+    kind, gated, why, gcss = SEL.pick(SEL.meta_of(A, c, "gguf", getattr(c, "nextn", 0), draft_given=bool(given)), chip,
+                                      records=records, forced=forced, later=True)
     if kind is None:
         if forced not in (None, "auto", "off"):
             raise GGUFError(f"mashbox: --speculation {sv}: {why[-1] if why else 'does not apply'}")
@@ -300,16 +317,50 @@ def gguf_speculation(a, c, A, records=None):
     k = 3 if k is None else k
     if not 1 <= k <= 8:
         raise GGUFError(f"mashbox: --draft-k {k}: use 1 to 8")
-    try:
-        from .runtime.drafters.ngram import NGram
-        dr = NGram(k)
-    except Exception as e:      # the base model serves as without a drafter
-        return off(f"the drafter could not be built: {type(e).__name__}: {e}"[:300])
+    if kind == "draft_model":       # a draft model you gave stops with its line when it cannot draft for this file
+        dr = gguf_draft(a, f, c, k)
+    else:
+        try:
+            from .runtime.drafters.ngram import NGram
+            dr = NGram(k)
+        except Exception as e:      # the base model serves as without a drafter
+            return off(f"the drafter could not be built: {type(e).__name__}: {e}"[:300])
     if not gated:
         log("speculation: not gated on this chip")
     log(json.dumps(dict(event="speculation", used=True, method=kind, draft_k=k, k_table=kt, gated=gated, reason=why[-1],
                         spec_step_version=SPEC_STEP_VERSION)))
     return dict(drafter=dr, draft_k=k, k_table=kt, **({"gate_css": gcss} if gcss is not None else {}))
+
+
+def gguf_draft(a, f, c, k):
+    """The draft-model drafter (runtime/drafters/draft_model.py) for --draft-model on a GGUF target (f, c): the draft file
+    a.draft_gguf opened as the target is, on its own architecture module, which must declare SPEC_DRAFT (full attention
+    in every layer, so its cache needs no rollback), with the target's tokenizer (the same tokenizer.ggml.tokens) and no
+    experts; its weights loaded on this chip. Its identity in the deployment's component set is the draft file's sha256
+    (every shard), as gguf_deployment keys the target. Anything else stops with one line (GGUFError)."""
+    from . import gguf as G
+    from .runtime.drafters.draft_model import DraftModel
+    d = a.draft_gguf
+    f2, A2, c2 = G.open_model(d["path"], repo=d["repo"], quant=d["tag"])
+    if not getattr(A2, "SPEC_DRAFT", False):
+        raise G.GGUFError(f"mashbox: --draft-model: a {f2.arch} file cannot draft: a draft model needs full attention in "
+                          f"every layer (GGUF {', '.join(sorted(G.archs.drafting()))})")
+    if f is None or list(f2.get("tokenizer.ggml.tokens") or []) != list(f.get("tokenizer.ggml.tokens") or []) \
+            or int(c2.V) != int(c.V):
+        raise G.GGUFError("mashbox: --draft-model: its tokenizer is not the target's (a draft model needs the same tokens)")
+    if getattr(c2, "E", 0) or getattr(c2, "moe", False):
+        raise G.GGUFError("mashbox: --draft-model: a mixture-of-experts draft model is not supported")
+    line, warn = G.plan(f2, c2, kernel_types=frozenset() if a.no_kernels else None)
+    log(json.dumps(dict(event="draft_plan", **line)))
+    if warn:
+        from . import ops
+        ops.warn(warn.replace("mashbox: ", "mashbox: --draft-model: ", 1))
+    W2, info = A2.load(f2, c2, use_kernels=not a.no_kernels, log=lambda i: log(json.dumps(dict(event="draft_weights", **i))))
+    sha, _ = gguf_file_sha(d)
+    ident = f"{d['repo']}/{d['file']}" if d.get("repo") else d["file"]
+    log(json.dumps(dict(event="draft_model", file=ident, sha256=sha, arch=f2.arch, layers=c2.L,
+                        gb=round(info["device_bytes"] / 1e9, 2))))
+    return DraftModel(A2, c2, W2, k, declared=dict(id=ident, weights_sha256=sha))
 
 
 def gguf_spec_gate(eng, gate_css, keys):
@@ -318,9 +369,10 @@ def gguf_spec_gate(eng, gate_css, keys):
     decoding, one why line) and keys() makes the deployment keys again."""
     if gate_css is None or not getattr(eng, "DK", 0) or eng.component_set_sha == gate_css:
         return
+    why = "the gate record is for another component set than this deployment's: plain decoding"
     eng.drop_speculation()
-    log(json.dumps(dict(event="speculation", used=False,
-                        reason="the gate record is for another component set than this deployment's: plain decoding")))
+    eng.spec_why = why                  # the reason Engine.spec_health gives
+    log(json.dumps(dict(event="speculation", used=False, reason=why)))
     keys()
 
 
@@ -343,6 +395,7 @@ def deployment_keys(eng, m, config_sha, layout_sha, kernel_bundle_sha=None, tp=1
     if gate_css is not None and getattr(eng, "DK", 0) and eng.component_set_sha != gate_css:
         log(json.dumps(dict(event="speculation", used=False, reason=f"gated on {DR.chip_key()} for another component set")))
         eng.drop_speculation()
+        eng.spec_why = f"gated on {DR.chip_key()} for another component set: plain decoding"     # Engine.spec_health's reason
         key, eng.deployment_id, eng.component_set_sha = keys()
     return key
 
@@ -445,7 +498,7 @@ def load(a):
         W, info = QW.load(w, cfg, log=lambda i: log(json.dumps(dict(event="weights", **i))))
     spec = speculation(a, m, cfg, tp, later=True, model=model)
     gate_css, drafter = spec.pop("gate_css", None), spec.pop("drafter_key", None)
-    eng = Engine(cfg, W, model, CTX=a.ctx, S=a.slots, K=a.steps, decode_kernels=dk, **spec,
+    eng = Engine(cfg, W, model, CTX=a.ctx, S=a.slots, K=a.steps, decode_kernels=dk, spec_why=getattr(a, "spec_why", None), **spec,
                  prefix_cache=a.prompt is None and not a.no_prefix_cache,
                  cache_ram=max(0, a.cache_ram) << 20, ckpts=a.ctx_checkpoints, ckpt_step=a.checkpoint_min_step,
                  attn_bytes=2e9 if a.ctx <= 8192 else 5e8,       # long context: smaller prefill chunks, less HBM
@@ -522,13 +575,15 @@ def load_gguf(a):
     setup_cache(a.cache_dir)
     W, info = A.load(f, c, use_kernels=not a.no_kernels, log=lambda i: log(json.dumps(dict(event="weights", **i))))
     info["file"] = r["file"]
-    spec = gguf_speculation(a, c, A)
+    from . import hub
+    from .runtime.drafters import select as SEL
+    spec = gguf_speculation(a, c, A, records=SEL.catalog_records(hub.registry(), r), f=f)   # the catalog's sealed chip records
     gate_css = spec.pop("gate_css", None)
     eng = Engine(c, W, A, CTX=a.ctx, S=a.slots, K=a.steps, decode_kernels=None,
                  prefix_cache=a.prompt is None and not a.no_prefix_cache,
                  cache_ram=max(0, a.cache_ram) << 20, ckpts=a.ctx_checkpoints, ckpt_step=a.checkpoint_min_step,
                  attn_bytes=2e9 if a.ctx <= 8192 else 5e8,
-                 trace=os.environ.get("MASHBOX_TRACE") == "1", **spec)   # trace: per-token logit hashes for checks, as load()
+                 trace=os.environ.get("MASHBOX_TRACE") == "1", spec_why=getattr(a, "spec_why", None), **spec)   # trace: per-token logit hashes for checks, as load()
     gguf_deployment(eng, f, r, W)
     gguf_spec_gate(eng, gate_css, lambda: gguf_deployment(eng, f, r, W))
     log(json.dumps(dict(event="loaded", weights_s=info["load_s"], gb=round(info["device_bytes"] / 1e9, 2), bpw=info["bpw"],
@@ -547,18 +602,25 @@ def file_identity(path):
     return tenancy.file_sha256(path), "read"
 
 
+def gguf_file_sha(r):
+    """-> (the sha256 of a resolved GGUF file r: of its bytes, or for a split file of its shards' sha256s, [(sha256, how
+    it was found) per shard])"""
+    import hashlib
+    from .gguf import resolve as GR
+    shards = GR.shards(os.path.basename(r["path"]))
+    paths = [os.path.join(os.path.dirname(r["path"]), s) for s in shards] if len(shards) > 1 else [r["path"]]
+    ids = [file_identity(p) for p in paths]
+    return (ids[0][0] if len(ids) == 1 else hashlib.sha256(" ".join(i[0] for i in ids).encode()).hexdigest()), ids
+
+
 def gguf_deployment(eng, f, r, W):
     """The GGUF file's deployment, as load() makes one for a models.json model (runtime/compile_key.py): deployment id
     and component set (/health, the startup log), and the prefix cache namespace. The file's sha256 (every shard of a
     split file) stands for its weights, tokenizer and chat template, which it all holds."""
     import hashlib
-    from .gguf import resolve as GR
     from .runtime import tenancy, compile_key as CK
     t = time.time()
-    shards = GR.shards(os.path.basename(r["path"]))
-    paths = [os.path.join(os.path.dirname(r["path"]), s) for s in shards] if len(shards) > 1 else [r["path"]]
-    ids = [file_identity(p) for p in paths]
-    fsha = ids[0][0] if len(ids) == 1 else hashlib.sha256(" ".join(i[0] for i in ids).encode()).hexdigest()
+    fsha, ids = gguf_file_sha(r)
     log(json.dumps(dict(event="gguf_identity", sha256=fsha, shards=len(ids), how=sorted({i[1] for i in ids}),
                         seconds=round(time.time() - t, 1))))
     mid = r["repo"] or r["file"]
@@ -630,6 +692,7 @@ def warm(eng, chat):
         if isinstance(e, programs.TableFailed) or not getattr(eng, "DK", 0):
             raise               # a table program's failure ends this process, which never warms a second time (A13)
         eng.drop_speculation(failed=True)
+        eng.spec_why = f"a speculation program failed before ready: {type(e).__name__}: {e}"[:300] + "; plain decoding"
         log(json.dumps(dict(event="speculation", used=False,
                             reason=f"a speculation program failed before ready: {type(e).__name__}: {e}"[:300] + "; plain decoding")))
         w = run()
@@ -824,13 +887,17 @@ def build_parser():
                            help="a local draft .bshj file instead of the download (its sha256 is still checked)")
             p.add_argument("--speculation", choices=("auto", "off", "mtp", "ngram", "draft"),
                            help="speculative decoding. auto (default): the first drafter that applies to the model file, in this "
-                                "order: 1 the model's own MTP head; 2 a smaller draft model with the same tokenizer (not in "
-                                "this release); 3 n-gram over the request's own text (llama, qwen2, qwen3 and qwen35 GGUF "
-                                "files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head "
+                                "order: 1 a trained drafter made for this model (not in this release); 2 the model's own MTP "
+                                "head; 3 a smaller draft model with the same tokenizer (only one you give with --draft-model); "
+                                "4 n-gram over the request's own text (llama, qwen2, qwen3 and qwen35 GGUF files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head "
                                 "only); off; or force one kind (then it says 'not gated on this chip'). One chip only")
             p.add_argument("--draft-k", type=int, metavar="K",
-                           help="drafts per verify pass for a drafter you pick: ngram 1 to 8 (default 3); mtp 1 to the head's "
-                                "k_max (Qwen3.8-27B: 1 to 3, default 2)")
+                           help="drafts per verify pass for a drafter you pick: ngram 1 to 8 (default 3); draft 1 to 8 (default 3); "
+                                "mtp 1 to the head's k_max (Qwen3.8-27B: 1 to 3, default 2)")
+            p.add_argument("--draft-model", metavar="FILE",
+                           help="--speculation draft with this draft model: a smaller GGUF file or repo (as the model argument) "
+                                "with the same tokenizer, a llama, qwen2, qwen3, exaone or granite file; for a GGUF model "
+                                "only. Its weights and cache take chip memory next to the model's")
             p.add_argument("--tensor-parallel-size", "-tp", type=int, default=0, metavar="N",
                            help="chips to split the model across, as vLLM (1, 2 or 4); default: the chips of this host, at most 4 "
                                 "(1 on a TPU v6e-1, 4 on a TPU v5e-4 or v6e-4)")
@@ -896,9 +963,11 @@ def cmd_gguf(a):
             raise GGUFError("mashbox: --weights is for models.json models; pass the .gguf file as the model")
         if getattr(a, "mtp", None) or getattr(a, "mtp_file", None):
             raise GGUFError("mashbox: --mtp and --mtp-file are for models.json models; for a GGUF file use --speculation")
-        if a.cmd != "download" and draft_refusal(a):
-            raise GGUFError(f"mashbox: {draft_refusal(a)}")     # before the file is fetched
+        if a.cmd != "download" and draft_refusal(a, gguf=True):
+            raise GGUFError(f"mashbox: {draft_refusal(a, gguf=True)}")     # before the file is fetched
         a.gguf = GR.resolve(a.model, log=log)
+        if getattr(a, "draft_model", None):
+            a.draft_gguf = GR.resolve(a.draft_model, log=log)
         if a.cmd == "download":
             log(json.dumps(dict(event="downloaded", path=a.gguf["path"])))
             return 0

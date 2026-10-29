@@ -4,6 +4,7 @@ it on by default, and its part of the deployment key.
 models.json, on the model row (absent = no drafter = speculation off):
     "drafter": {"kind": "mtp", "id": "...", "version": 1, "file": "<files[] name>", "k_default": 2, "k_max": 3,
                 "gate": {"<chip key, e.g. v6e-1>": {"status": "passed" | "not_passed", "record": "<dated record>",
+                                                    "record_sha256": "<the sealed record's sha256>",
                                                     "engine_commit": "<sha>", "component_set_sha": "<hex>"}},
                 "k_table": {"<chip key>": {"<row bucket>": k}}}      # optional: measured draft length per row bucket
 A chip's k_table gives the draft length per decode row bucket (0 = verify without drafts) from a measured record; buckets
@@ -74,8 +75,9 @@ def gated_css(dr, chip):
     """The component_set_sha the drafter's gate on this chip passed for, or None where it has not passed (cli.load turns
     speculation on with it before the engine exists, then compares it with the built engine's component_set_sha and
     turns speculation off on a mismatch, before the warm-up)."""
+    from .drafters.select import sealed
     g = ((dr or {}).get("gate") or {}).get(chip) or {} if chip else {}
-    return g.get("component_set_sha") if g.get("status") == "passed" else None
+    return g.get("component_set_sha") if (g.get("status") == "passed" and sealed(g)) else None
 
 
 def gate(dr, chip, css):
@@ -86,9 +88,12 @@ def gate(dr, chip, css):
         return False, "no drafter for this model"
     if chip is None:
         return False, "not on a TPU"
+    from .drafters.select import sealed
     g = (dr.get("gate") or {}).get(chip) or {}
     if g.get("status") != "passed":
         return False, f"not gated on this chip ({chip})"
+    if not sealed(g):
+        return False, f"not gated on this chip ({chip}): the record is not sealed (record and record_sha256)"
     if css is None:
         return False, f"gated on {chip}, but this deployment's component_set_sha is not known"
     if g.get("component_set_sha") != css:

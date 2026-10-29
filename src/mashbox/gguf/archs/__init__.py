@@ -43,6 +43,12 @@ def held(arch, path=None, repo=None, quant=None):
     return unsupported(arch, path, repo, quant)
 
 
+def drafting():
+    """the architectures whose module declares SPEC_DRAFT (full attention in every layer): what a draft model
+    (--draft-model) can be"""
+    return [a for a, m in ARCHS.items() if getattr(importlib.import_module(m), "SPEC_DRAFT", False)]
+
+
 def module(arch, path=None, repo=None, quant=None):
     if arch not in ARCHS:
         raise GGUFError(unsupported(arch, path, repo, quant))

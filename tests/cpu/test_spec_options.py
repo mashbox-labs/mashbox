@@ -70,14 +70,14 @@ def test_draft_stops_before_any_file_on_the_models_json_path(monkeypatch):
     for name in ("setup_cache", "tensor_parallel", "fit_check"):
         monkeypatch.setattr(cli, name, sentinel(name, seen))
     a = cli.build_parser().parse_args(["run", "qwen3-8-27b", "--speculation", "draft", "--prompt", "hi"])
-    with pytest.raises(SystemExit, match="--speculation draft: draft models are not in this version"):
+    with pytest.raises(SystemExit, match="--speculation draft runs on a GGUF file in this version"):
         cli.load(a)
     assert seen == []
 
 
 def test_draft_stops_before_the_gguf_file_is_fetched_or_loaded(monkeypatch, tmp_path, capsys):
-    """a GGUF run with --speculation draft stops (exit 2, one line) before the file is resolved or downloaded, and
-    load_gguf itself stops before the file is opened"""
+    """a GGUF run with --speculation draft and no --draft-model stops (exit 2, one line) before the file is resolved or
+    downloaded, and load_gguf itself stops before the file is opened"""
     from mashbox import gguf as G
     from mashbox.gguf import resolve as GR
     seen = []
@@ -88,8 +88,8 @@ def test_draft_stops_before_the_gguf_file_is_fetched_or_loaded(monkeypatch, tmp_
     a = SimpleNamespace(cmd="run", model="x.gguf", weights=None, mtp=None, mtp_file=None, speculation="draft",
                         host="127.0.0.1")
     assert cli.cmd_gguf(a) == 2
-    assert seen == [] and "--speculation draft: draft models are not in this version" in logs[-1], logs
-    with pytest.raises(G.GGUFError, match="--speculation draft: draft models are not in this version"):
+    assert seen == [] and "--speculation draft needs --draft-model FILE" in logs[-1], logs
+    with pytest.raises(G.GGUFError, match="--speculation draft needs --draft-model FILE"):
         cli.load_gguf(SimpleNamespace(gguf=dict(path=str(tmp_path / "x.gguf"), repo=None, tag=None, file="x.gguf"),
                                       speculation="draft"))
     assert seen == []
@@ -138,7 +138,8 @@ def test_public_run_with_draft_stops_before_the_model_row_keys_and_server(monkey
         monkeypatch.setattr(cli, name, sentinel(name, seen))
     assert cli.main(["run", "qwen3-8-27b", "--speculation", "draft", "--host", "0.0.0.0"]) == 2
     assert seen == []
-    assert logs == ["mashbox: --speculation draft: draft models are not in this version; use ngram or mtp"], logs
+    assert logs == ["mashbox: --speculation draft runs on a GGUF file in this version; for a models.json model use ngram "
+                    "or mtp"], logs
     assert not (tmp_path / ".config").exists()
 
 
@@ -180,3 +181,24 @@ def test_speculation_help_names_every_drafter_in_the_order_of_choice():
     assert [int(n) for n, _ in listed] == list(range(1, len(D.ORDER) + 1)), listed
     for (n, bold), kind in zip(listed, D.ORDER):
         assert bold.startswith(PAGE_NAME[kind].rstrip(".")), (kind, bold)
+
+
+def test_download_fetches_the_draft_only_for_a_gate_run_can_use(monkeypatch, capsys):
+    """download fetches the draft file only where run's no-flag gate (DR.gate: passed, sealed, k > 0 at a row bucket)
+    can turn it on: a passed entry without its sealed record, or one with k = 0 at every row bucket, fetches nothing"""
+    import copy
+    import json
+    m0, fetched = hub.model_entry("qwen3-8-27b"), []
+    monkeypatch.setattr(cli, "log", lambda s: None)
+    monkeypatch.setattr(hub, "draft_file", lambda m, path=None, log=None: fetched.append(1) or "/draft.bshj")
+    sealed = dict(status="passed", record="release/engine/cert/x", record_sha256="e" * 64, component_set_sha="c" * 64)
+    unsealed = {k: v for k, v in sealed.items() if k != "record_sha256"}
+    for gate, kt, want in ((unsealed, None, None), (sealed, {"v6e-1": {"1": 0, "8": 0}}, None), (sealed, None, "/draft.bshj")):
+        m = copy.deepcopy(m0)
+        m["drafter"]["gate"] = {"v6e-1": gate}
+        if kt is not None:
+            m["drafter"]["k_table"] = kt
+        monkeypatch.setattr(cli, "files", lambda a, m=m: (m, "/up", "/w.bshj"))
+        fetched.clear()
+        cli.cmd_download(argparse.Namespace(no_kernels=True))
+        assert json.loads(capsys.readouterr().out)["draft"] == want and fetched == ([1] if want else []), (gate, kt)
