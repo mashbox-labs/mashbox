@@ -20,7 +20,9 @@ attention layer with its own K/V group; there is no linear-attention state, so t
 around is one zero value per slot. `act` is the activation dtype: bfloat16 to serve, float32 for the CPU test against
 llama.cpp's CPU logits.
 
-Not handled (refused at load with a message): rope scaling other than linear, a fused qkv tensor, routed experts,
+Rope scaling: linear, and YaRN (archs/rope.py: per-pair angle factors and a cos/sin scale, as llama.cpp's rope_yarn).
+
+Not handled (refused at load with a message): rope scaling other than linear and YaRN, a fused qkv tensor, routed experts,
 per-layer head counts, key_length != value_length.
 """
 import numpy as np
@@ -31,10 +33,11 @@ from jax import lax
 from ... import ops
 from ..reader import GGUFError
 from .qwen35 import rms, kv_write, _T
+from . import rope as yarn_rope
 
 f32, bf16 = jnp.float32, jnp.bfloat16
 # the Models label (docs/gguf.md) of each architecture ARCHS maps to this module; catalog reads it with ast
-MODELS = {"llama": "Llama 3.x", "qwen2": "Qwen2.5", "qwen3": "Qwen3"}
+MODELS = {"llama": "Llama 3.x", "qwen2": "Qwen2.5", "qwen3": "Qwen3", "exaone": "EXAONE 3.5", "granite": "Granite 3.3"}
 NEG = -1e30
 NEOX = ("qwen2", "qwen3", "exaone")      # rope on halves; llama, granite: adjacent pairs
 
@@ -59,11 +62,13 @@ class Config:
         self.eps = float(k("attention.layer_norm_rms_epsilon"))
         self.RD = int(k("rope.dimension_count", self.HD))
         self.theta = float(k("rope.freq_base", 10000.0))
-        sc = k("rope.scaling.type")
+        sc, self.mscale = k("rope.scaling.type"), 1.0
         if sc in (None, "none"):
             self.fscale = 1.0
         elif sc == "linear":
             self.fscale = 1.0 / float(k("rope.scaling.factor", 1.0) or 1.0)
+        elif sc == "yarn":
+            self.fscale, self.mscale = yarn_rope.yarn(k, self.RD, self.theta, int(k("context_length", 0) or 0))
         else:
             raise no(f"rope scaling '{sc}'")
         self.scale = float(k("attention.scale", 0.0) or 0.0) or self.HD ** -0.5
@@ -238,6 +243,8 @@ def make_forward(c, decode_kernels=None):
         fq = jnp.asarray(inv) / W["freqs"] if "freqs" in W else jnp.asarray(inv)
         fr = pos.astype(f32)[..., None] * fq * np.float32(c.fscale)
         cos, sin = jnp.cos(fr)[:, :, None], jnp.sin(fr)[:, :, None]
+        if c.mscale != 1.0:                         # YaRN's cos/sin scale
+            cos, sin = cos * np.float32(c.mscale), sin * np.float32(c.mscale)
         m2 = (jnp.arange(T)[None, :, None] >= jnp.arange(T)[None, None, :]) & valid[:, None, :]
         if Tc:
             m1 = jnp.broadcast_to((jnp.arange(Tc)[None, :] < p0[:, None])[:, None, :], (B, T, Tc))

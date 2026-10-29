@@ -146,7 +146,7 @@ def _header_only(path, arch, extra=(), tensors=("token_embd.weight",)):
 
 
 @pytest.mark.parametrize("arch,extra,tensors,words", [
-    ("qwen2", [("rope.scaling.type", "yarn")], ("token_embd.weight",), "rope scaling 'yarn'"),
+    ("qwen2", [("rope.scaling.type", "longrope")], ("token_embd.weight",), "rope scaling 'longrope'"),
     ("llama", [], ("token_embd.weight", "blk.0.ffn_gate_exps.weight"), "routed experts"),  # gitleaks:allow
     ("llama", [], ("token_embd.weight", "blk.0.attn_qkv.weight"), "a fused qkv tensor"),  # gitleaks:allow
     ("qwen3", [], ("token_embd.weight",), "no q/k norms")])

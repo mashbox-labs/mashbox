@@ -193,7 +193,7 @@ DENSE = dict(llama=dict(D=256, F=384, H=8, KV=2, HD=32, theta=5e5, eps=1e-5, ctx
              qwen3=dict(D=256, F=512, H=8, KV=4, HD=64, theta=1e6, eps=1e-6, ctx=4096, pre="qwen2", qknorm=True))
 
 
-def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None):
+def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None, rope=None):
     """Write a tiny random dense-attention GGUF (llama / qwen2 / qwen3) in llama.cpp's conventions: llama with a
     rope_freqs tensor (Llama 3.1 style frequency factors) and q/k/v/output biases, qwen2 with q/k/v biases, qwen3 with
     per-head q/k norms and a head size that is not embedding_length / head_count. quant, override: as write_qwen35."""
@@ -217,6 +217,8 @@ def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None)
     w.add_layer_norm_rms_eps(c["eps"])
     w.add_rope_dimension_count(HD)
     w.add_rope_freq_base(c["theta"])
+    for key, v in (rope or {}).items():          # rope scaling keys (the YaRN fixtures)
+        (w.add_string if isinstance(v, str) else w.add_float32 if isinstance(v, float) else w.add_uint32)(f"{arch}.rope.scaling.{key}", v)
     w.add_tokenizer_model("gpt2")
     w.add_tokenizer_pre(c["pre"])
     w.add_token_list(toks)
@@ -380,7 +382,7 @@ def write(name, path, override=None, quant=True):
     if fx["arch"] == "gemma4":
         return write_gemma4(path, seed=fx["seed"], layers=fx["layers"], quant=q, override=override)
     if fx["arch"] in DENSE:
-        return write_dense(path, fx["arch"], seed=fx["seed"], layers=fx["layers"], quant=q, override=override)
+        return write_dense(path, fx["arch"], seed=fx["seed"], layers=fx["layers"], quant=q, override=override, rope=fx.get("rope"))
     return write_qwen35(path, seed=fx["seed"], layers=fx["layers"], quant=q, nextn=fx.get("nextn", False),
                         override=override, moe=fx.get("moe"))
 
@@ -405,6 +407,10 @@ FIXTURES = {
     "qwen3-kquant": dict(arch="qwen3", seed=14, layers=4, make="llama-quantize", base="Q4_K_M",
                          tensor_types=["ffn_down=q6_k", "ffn_up=q5_k", "attn_v=iq4_nl", "attn_output=iq4_xs",
                                        "attn_q=q8_0", "output=q6_k"]),
+    "qwen3-yarn-f32": dict(arch="qwen3", seed=15, layers=4, make="gguf-py", quant=None,
+                           rope=dict(type="yarn", factor=4.0, original_context_length=64)),
+    "llama-yarn-f32": dict(arch="llama", seed=16, layers=4, make="gguf-py", quant=None,
+                           rope=dict(type="yarn", factor=8.0, original_context_length=128)),
     "gemma4-f32": dict(arch="gemma4", seed=20, layers=6, make="gguf-py", quant=None),
     "gemma4-kquant": dict(arch="gemma4", seed=21, layers=6, make="llama-quantize", base="Q4_K_M",
                           tensor_types=["ffn_down=q6_k", "attn_v=q6_k", "attn_output=q5_k", "attn_q=q8_0"]),

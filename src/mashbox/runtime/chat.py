@@ -29,6 +29,8 @@ class Chat:
         def raise_exception(m):
             raise jinja2.exceptions.TemplateError(m)
         env.globals["raise_exception"] = raise_exception
+        import datetime
+        env.globals["strftime_now"] = lambda fmt: datetime.datetime.now().strftime(fmt)   # as transformers and llama.cpp
         env.filters["tojson"] = lambda x, ensure_ascii=False, indent=None, separators=None, sort_keys=False: json.dumps(
             x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
         self.template = env.from_string(open(os.path.join(model_dir, "chat_template.jinja")).read())

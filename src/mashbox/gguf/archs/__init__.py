@@ -12,6 +12,8 @@ ARCHS = {
     "qwen3": "mashbox.gguf.archs.dense",
     "gemma4": "mashbox.gguf.archs.gemma4",
     "gemma3": "mashbox.gguf.archs.gemma3",
+    "exaone": "mashbox.gguf.archs.dense",
+    "granite": "mashbox.gguf.archs.dense",
 }
 REQUEST = "https://github.com/mashbox-labs/mashbox/issues"
 

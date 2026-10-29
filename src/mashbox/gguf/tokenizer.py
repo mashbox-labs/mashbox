@@ -4,7 +4,8 @@ reads (tokenizer.json, chat_template.jinja, generation_config.json), written onc
 
 GGUF stores a byte-level BPE vocabulary (`tokenizer.ggml.model` = "gpt2") with its merges, token types and a
 pre-tokenizer name (`tokenizer.ggml.pre`); llama.cpp maps the name to a split regex (src/llama-vocab.cpp). The names
-below map to the same regex in Hugging Face `tokenizers` form. A name not listed stops with a clear message.
+below map to the same regex in Hugging Face `tokenizers` form; pretok.py adds more names and the vocabulary layout with
+control tokens first. A name not listed stops with a clear message.
 
 Gemma 4 files store `tokenizer.ggml.model` = "gemma4": BPE merges over raw UTF-8 (no byte-level remap), every space
 written as U+2581 first, the text split only into runs of newlines and runs of anything else, and byte-fallback tokens
@@ -14,6 +15,7 @@ import hashlib
 import json
 import os
 
+from . import pretok
 from .reader import GGUFError, llama_cpp_command
 
 # tokenizer.ggml.pre -> (normalizer, split regex), as the model's own tokenizer.json on the Hub
@@ -26,6 +28,7 @@ LLAMA3_RE = (r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}|
 # name -> (normalizer or None, split regex, ignore_merges: a word that is one vocabulary entry is taken whole, as
 # llama.cpp's LLAMA3 pre-tokenizer type and Llama 3's own tokenizer.json do)
 PRE = {"qwen35": (None, QWEN35_RE, False), "qwen2": ("NFC", QWEN2_RE, False), "llama-bpe": (None, LLAMA3_RE, True)}
+PRE.update(pretok.table(QWEN2_RE, LLAMA3_RE))
 CONTROL, USER_DEFINED, UNUSED = 3, 4, 5
 EOG_NAMES = ("<|endoftext|>", "<|im_end|>", "<|eot_id|>", "<|end|>", "<end_of_turn>", "<eos>", "<turn|>",
              "<|tool_response>")   # as llama.cpp's EOG scan
@@ -54,22 +57,24 @@ def files_dict(f, path=None):
     merges = list(f.get("tokenizer.ggml.merges", []))
     norm, regex, ignore_merges = PRE[pre]
     # Hugging Face `tokenizers` numbers added tokens after the BPE vocabulary, so the vocabulary must be ids 0..N-1 and
-    # every control, user-defined and unused (padding) token an added token from N on; anything else is refused
+    # every control, user-defined and unused (padding) token an added token from N on; a file with control tokens first
+    # or among the normal ones keeps every token at its file id (pretok.vocab_layout)
     added, vocab = [], {}
     for i, (t, ty) in enumerate(zip(tokens, types)):
         if ty in (CONTROL, USER_DEFINED, UNUSED):
             added.append(dict(id=i, content=t, single_word=False, lstrip=False, rstrip=False, normalized=False,
                               special=ty != USER_DEFINED))
         elif added:
-            raise GGUFError(f"mashbox: token {i} ({t!r}) follows control tokens in this file's vocabulary; this tokenizer "
-                            f"layout is not read by this version. llama.cpp runs it: {llama_cpp_command(path)}")
+            added, vocab, merges = pretok.vocab_layout(tokens, types, path, merges)
+            break
         else:
             vocab[t] = i
     bl = dict(type="ByteLevel", add_prefix_space=False, trim_offsets=False, use_regex=False)
     tj = dict(version="1.0", truncation=None, padding=None, added_tokens=added,
               normalizer=dict(type=norm) if norm else None,
               pre_tokenizer=dict(type="Sequence", pretokenizers=[
-                  dict(type="Split", pattern=dict(Regex=regex), behavior="Isolated", invert=False), bl]),
+                  *[dict(type="Split", pattern=dict(Regex=r), behavior="Isolated", invert=False) for r in pretok.splits(regex)],
+                  bl]),
               post_processor=bl, decoder=bl,
               model=dict(type="BPE", dropout=None, unk_token=None, continuing_subword_prefix="", end_of_word_suffix="",
                          fuse_unk=False, byte_fallback=False, ignore_merges=ignore_merges, vocab=vocab, merges=merges))
@@ -142,17 +147,16 @@ def bos_template(f, tokens, tmpl):
     add_bos_token it strips one leading BOS from the result and adds BOS when tokenizing: one BOS at the start either way.
     Chat renders without those names, so they are set at the top of the template here, and with add_bos_token a template
     that never writes bos_token gets the BOS text in front. Files without a BOS id (Qwen) are unchanged."""
-    head = ""
+    head, (bos_id, add_bos) = "", pretok.bos(f)
     for name in ("bos", "eos"):
-        i = f.get(f"tokenizer.ggml.{name}_token_id")
+        i = bos_id if name == "bos" else f.get("tokenizer.ggml.eos_token_id")
         if i is not None and 0 <= int(i) < len(tokens):
             head += "{%- set " + name + "_token = " + json.dumps(tokens[int(i)]) + " %}"
     if not head:
         return tmpl
     if tmpl[:1] == "\n":
         head += "\n"                   # trim_blocks removes the first newline after a block tag: keep the template's own
-    i = f.get("tokenizer.ggml.bos_token_id")
-    if f.get("tokenizer.ggml.add_bos_token") and i is not None and "bos_token" not in tmpl:
+    if add_bos and bos_id is not None and "bos_token" not in tmpl:
         head += "{{ bos_token }}"
     return head + tmpl
 
