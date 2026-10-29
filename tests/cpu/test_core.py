@@ -674,3 +674,63 @@ def test_chip_note_replaces_not_supported():
     assert hy["chips"]["v6e"]["status"] == "not supported"
     assert sc.chip_text(hy, "v6e").startswith(
         "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video.")
+
+
+def test_runs_only_on_claim_follows_measured_rows(tmp_path):
+    """A page or docstring that says a model runs only on one chip is wrong when the model was measured on another chip
+    (a results row or a passing chips row) or has a chip row nobody has run it on yet ("Not tested yet"). AGENTS.md said
+    "Hy-Nomas ... runs only on a TPU v6e-4" while the full pipeline was measured on one v6e chip (2.46 s of compute per
+    second of video), and no check read "only"."""
+    import copy
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    reg = json.loads((ROOT / "models.json").read_text())
+    hy = next(x for x in reg["models"] if x["id"] == "hy-nomas")
+    assert any("v6e-1" in r["chip"] for r in hy["results"])    # the measured one-chip run the old line contradicted
+    bad = ["Hy-Nomas (a video world model in the browser) runs only on a TPU v6e-4 ($10.80 an hour).",
+           "Hy-Nomas only runs on a v6e-4.", "Hy-Nomas works only on TPU v6e-4.", "Hy-Nomas runs on a TPU v6e-4 only.",
+           "Hy-Nomas fits only on one v6e-4.", "Hy-Nomas: only on a TPU v6e-4.", "Hy-Nomas runs only\non a TPU v6e-4.",
+           "Hy-Nomas runs only on TPU v5p-8.", "Qwen3.8-27B runs only on a TPU v6e-1."]
+    ok = ["Hy-Nomas runs on a TPU v6e-4.", "Hy-Nomas runs only on a TPU v6e (one chip or a v6e-4).",
+          "Hy-Nomas runs not only on a v6e-4: one v6e chip holds it too."]
+    (tmp_path / "docs").mkdir()
+    for i, s in enumerate(bad + ok):
+        (tmp_path / "docs" / f"p{i}.md").write_text(s + "\n")
+    pkg = tmp_path / "src" / "mashbox" / "models" / "hy_nomas"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text('"""The Hy-Nomas port. Runs only on a TPU v6e-4."""\n')
+    problems = sc.Problems()
+    sc.check_numbers(reg, tmp_path, problems)
+    only = [p for p in problems if "only on" in p]
+    for i, s in enumerate(bad):
+        assert any(f"docs/p{i}.md" in p for p in only), (s, only)
+    for i, s in enumerate(ok, len(bad)):
+        assert not any(f"docs/p{i}.md" in p for p in only), (s, only)
+    assert any("src/mashbox/models/hy_nomas/__init__.py" in p and "docstring" in p for p in only), only
+    assert any("TPU v6e-1 (one chip, 32 GB)" in p for p in only), only     # names the measured row it contradicts
+    # a chip nobody has run the model on: "only" claims a result nobody measured
+    reg2 = copy.deepcopy(reg)
+    hy2 = next(x for x in reg2["models"] if x["id"] == "hy-nomas")
+    hy2["results"] = [r for r in hy2["results"] if r["chip"] == "TPU v6e-4"]
+    hy2["chips"]["v6e"] = {"status": "failing", "reason": "x", "date": "2026-10-28"}
+    hy2["chips"]["v5e"] = {"status": "pending", "not_run_reason": "Not tested on this chip yet."}
+    hy2["chips"]["v5p-8"] = {"status": "failing", "reason": "x", "date": "2026-10-28"}
+    for f in (tmp_path / "docs").iterdir():
+        f.unlink()
+    (pkg / "__init__.py").write_text('"""The Hy-Nomas port."""\n')
+    (tmp_path / "docs" / "q.md").write_text("Hy-Nomas runs only on a TPU v6e-4.\n")
+    problems = sc.Problems()
+    sc.check_numbers(reg2, tmp_path, problems)
+    assert any("docs/q.md" in p and "v5e" in p for p in problems if "only on" in p), problems
+    hy2["chips"]["v5e"] = {"status": "failing", "reason": "x", "date": "2026-10-28"}    # every other chip measured failing
+    problems = sc.Problems()
+    sc.check_numbers(reg2, tmp_path, problems)
+    assert not [p for p in problems if "only on" in p], problems
+    # the repo's own pages and docstrings make no such claim (pages read with their markers, as the sync check reads them)
+    nmap = sc.load_numbers(ROOT)
+    problems = sc.Problems()
+    sc.check_numbers(reg, ROOT, problems, nmap["pages"] if nmap else None)
+    assert not [p for p in problems if "only on" in p], problems
+    assert "runs only on a TPU v6e-4" not in (ROOT / "AGENTS.md").read_text()
