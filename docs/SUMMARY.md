@@ -28,6 +28,7 @@
 * [TPU v6e and v5e](chips.md)
 * [TPU or GPU: price and bandwidth](tpu-vs-gpu.md)
 * [Command line](cli.md)
+* [Speculative decoding](speculation.md)
 * [Server API](server-api.md)
 * [Glossary](glossary.md)
 * [Licence](licence.md)

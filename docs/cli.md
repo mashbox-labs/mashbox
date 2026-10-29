@@ -42,6 +42,8 @@ mashbox run MODEL [options]
 | `--steps N` | `8` | decode steps per device call |
 | `--mtp K` |  | speculative decoding with the model's own multi-token-prediction head: K drafts per verify pass (1 to 3; 0 = off). Default: on only on chips where it passed its checks, else off. Uses the model's draft file (Qwen3.8-27B: --mtp 2); one chip only |
 | `--mtp-file FILE` |  | a local draft .bshj file instead of the download (its sha256 is still checked) |
+| `--speculation SPECULATION` |  | speculative decoding. auto (default): the first drafter that applies to the model file, in this order: 1 the model's own MTP head; 2 a smaller draft model with the same tokenizer (not in this release); 3 n-gram over the request's own text (llama, qwen2, qwen3 and qwen35 GGUF files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head only); off; or force one kind (then it says 'not gated on this chip'). One chip only (`auto`, `off`, `mtp`, `ngram`, `draft`) |
+| `--draft-k K` |  | drafts per verify pass for a drafter you pick: ngram 1 to 8 (default 3); mtp 1 to the head's k_max (Qwen3.8-27B: 1 to 3, default 2) |
 | `--tensor-parallel-size N` | `0` | chips to split the model across, as vLLM (1, 2 or 4); default: the chips of this host, at most 4 (1 on a TPU v6e-1, 4 on a TPU v5e-4 or v6e-4) |
 | `--cache-dir DIR` |  | compile cache (default ~/.cache/mashbox/xla, or JAX_COMPILATION_CACHE_DIR) |
 | `--no-warm` | off | skip compiling the first request's programs before ready |

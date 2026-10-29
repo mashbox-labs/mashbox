@@ -130,7 +130,8 @@ def for_engine(eng, model_id, config_sha, weights_layout_sha, kernel_bundle_sha=
              "attn_bytes": eng.attn_bytes, "budget_busy": eng.budget_busy, "budget_idle": eng.budget_idle,
              "prefix_cache": bool(eng.prefix_cache), "host_cache": getattr(eng, "host", None) is not None,
              "kv_block": eng.kv_block, "trace": bool(eng.trace), "tp": tp,
-             "spec_method": None if not getattr(eng, "DK", 0) else f"mtp@{eng.DK}x{getattr(eng, 'NR', 1)}"}
+             "spec_method": None if not getattr(eng, "DK", 0) else
+             f"{getattr(getattr(eng, 'drafter', None), 'kind', 'mtp')}@{eng.DK}x{getattr(eng, 'NR', 1)}"}
     model = {"model_id": model_id, "config_sha": config_sha, "weights_layout_sha": weights_layout_sha}
     fl = flags() if flags_ is None else flags_
     cs = component_set(model, comps, activation_edits, fl, drafter)

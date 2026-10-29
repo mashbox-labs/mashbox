@@ -12,7 +12,9 @@ The weights' sha256, repo and revision live once, on the files[] row the drafter
 them. Only the drafter gate's record sets a status to "passed", for one engine commit and component set.
 """
 
-DRAFTER_ABI = 1      # the interface a model's spec module implements (models/<model>/spec.py DRAFTER_ABI)
+HEAD_ABI = 1         # the interface a model's MTP head module implements (its SPEC_MTP_HEAD module's HEAD_ABI)
+# The drafter interface (Drafter, DRAFTER_ABI) and the order of choice (ORDER) are in runtime/drafters/__init__.py, the
+# pick in runtime/drafters/select.py: this file holds the declaration and the gate only.
 
 
 def declared(m):
@@ -57,12 +59,15 @@ def k_table(dr, chip):
 
 
 def key(dr):
-    """The drafter's part of component_set_sha (INTERFACES-v1 §6): kind, id@version, weights sha256 and k rule. None
-    (speculation off) for no drafter."""
+    """The drafter's part of component_set_sha (INTERFACES-v1 §6): kind, id@version, weights sha256, k rule and the
+    speculation step version (runtime/spec_step.py SPEC_STEP_VERSION: a passed gate never covers a step it did not
+    measure). None (speculation off) for no drafter."""
     if dr is None:
         return None
+    from .spec_step import SPEC_STEP_VERSION
     return {"kind": dr["kind"], "id": f"{dr['id']}@{dr['version']}", "weights_sha256": dr["sha256"],
-            "k": {"k_default": dr["k_default"], "k_max": dr["k_max"], "k_table": dr.get("k_table") or {}}}
+            "k": {"k_default": dr["k_default"], "k_max": dr["k_max"], "k_table": dr.get("k_table") or {}},
+            "spec_step_version": SPEC_STEP_VERSION}
 
 
 def gated_css(dr, chip):
@@ -75,7 +80,8 @@ def gated_css(dr, chip):
 
 def gate(dr, chip, css):
     """-> (passed, reason). Passed only when the drafter's gate on this chip has status "passed" for this deployment's
-    component_set_sha (css: the sha with this drafter on, or None when it is not known)."""
+    component_set_sha (css: the sha with this drafter on, or None when it is not known), and this chip's k_table, when
+    it has one, has k > 0 at one or more row buckets (k = 0 at every bucket: never faster than plain, so not eligible)."""
     if dr is None:
         return False, "no drafter for this model"
     if chip is None:
@@ -87,4 +93,7 @@ def gate(dr, chip, css):
         return False, f"gated on {chip}, but this deployment's component_set_sha is not known"
     if g.get("component_set_sha") != css:
         return False, f"gated on {chip} for another component set"
+    kt = (dr.get("k_table") or {}).get(chip)
+    if isinstance(kt, dict) and kt and not any(isinstance(k, int) and not isinstance(k, bool) and k > 0 for k in kt.values()):
+        return False, f"not gated on this chip ({chip}): the k_table has k = 0 at every row bucket"
     return True, f"gated on {chip} ({g.get('record')})"

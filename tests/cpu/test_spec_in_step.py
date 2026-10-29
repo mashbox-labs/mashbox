@@ -1,12 +1,12 @@
-"""Speculative decoding inside the batched step (Engine._spec_step, models/qwen3_8_27b/spec.py make_step) on tiny random
+"""Speculative decoding inside the batched step (Engine._spec_step, runtime/spec_step.py make_step with the MTP drafter) on tiny random
 models of the Qwen3.8-27B architecture, CPU. The drafter gate's CPU forms (engine interfaces §10.3,
 batching spec §13.13):
-  G-D1  one user alone, greedy, MTP on (K = 1, 2, 3), the tie-aware replay (same precedent as the
-        batching rule "batched may differ"): every committed token, teacher-forced through the plain forward, is its argmax
+  G-D1  one user alone, greedy, MTP on (K = 1, 2, 3), the tie-aware replay (the G-D1 rule; batched output may
+        differ from alone): every committed token, teacher-forced through the plain forward, is its argmax
         or within one bf16 step of its top logit; the near-tie count (committed tokens that are not the argmax) is
         recorded. Token-for-token MTP on == off is information here, not the gate: exact on the near-bigram model; on the
         random model 2 of 4 prompts differ at a bf16 tie (top-2 gap 0 or one bf16 step: the verify width and the one-token
-        decode width round differently; measured on CPU), kept as an xfail for a later opt-in exact mode (fixed-order
+        decode width round differently, on CPU), kept as an xfail for a later opt-in exact mode (fixed-order
         verify ops, not built); not strict, because whether a tie flips depends on the runner's CPU rounding, so these
         rows pass on some runners and fail on others.
   G-D2  rows that join and leave while others decode, with different k (0 for draft=False rows), a stop token and a
@@ -149,7 +149,7 @@ def prompts(n, seed=5, lo=3, hi=60):
     return [rng.integers(1, V, int(rng.integers(lo, hi))).tolist() for _ in range(n)]
 
 
-EXACT_TIE = pytest.mark.xfail(strict=False, reason="exact mode (not G-D1): bf16 ties flip greedy tokens "
+EXACT_TIE = pytest.mark.xfail(strict=False, reason="exact mode (not the G-D1 rule): bf16 ties flip greedy tokens "
                                "between verify and decode widths (random model, prompts of 3 and 7 tokens, gap 0.0625 and 0.0; "
                                "same on main's whole-batch MTP); needs fixed-order ops at the verify widths (batching "
                                "spec §6 risk), a later opt-in mode; outcome depends on the runner (whether a tie flips "
@@ -243,7 +243,7 @@ def test_gd2_batched_rows_base_rule(tiny, tag, users, S, ctx, record_property):
     flip) drafts were accepted, a stop ended a row (8 and 64 users), and every row also equals the same schedule without
     speculation (the cancelled row: one answer is a prefix of the other); that
     is what fails when a draft is committed unchecked, the linear state is not rolled back, the bonus token comes from the
-    wrong verify position or the cursor is one short. RECORDED, not gated (batched may differ): rows
+    wrong verify position or the cursor is one short. RECORDED, not gated (batched output may differ from alone; the tie rule): rows
     equal to the schedule without speculation on the random model, and the tie-aware replay of every row (not the argmax,
     beyond one bf16 step, largest gap in bf16 steps) with speculation on and off."""
     t = tiny[tag]
@@ -361,7 +361,7 @@ def test_cancel_mid_draft_then_slot_reused(tiny):
 
 ROLL_WIDTH = pytest.mark.xfail(strict=True, reason="bit-equal slot state (spec §6) as written: on the random model the full-attention "
                                "K at the first generated position differs by one bf16 step in 18 of 7,168 values (verify width 4 vs "
-                               "decode width 1 round differently; measured on CPU); same cause as the exact-mode ties")
+                               "decode width 1 round differently, on CPU); same cause as the exact-mode ties")
 
 
 @pytest.mark.parametrize("tag", [pytest.param("random", marks=ROLL_WIDTH), "bigram"])
@@ -387,12 +387,12 @@ def test_rollback_leaves_no_trace(tiny, tag):
 def test_gd3_no_spec_compiles_after_warm(tiny):
     _, spec = engines(tiny["bigram"], 2, CTX=256, S=4, K=4)
     spec.warm(workers=1)
-    before = (spec.sstep._cache_size(), spec.mtp_pf._cache_size())
+    before = (spec.sstep._cache_size(), spec.dpf._cache_size())
     ps = prompts(6, seed=23, hi=120)
     plan = [(j, dict(ids=p, max_new=20 + j, samp=dict(temperature=0.7, seed=j) if j == 2 else None, draft=j != 4))
             for j, p in enumerate(ps)]
     drive(spec, plan)
-    assert (spec.sstep._cache_size(), spec.mtp_pf._cache_size()) == before
+    assert (spec.sstep._cache_size(), spec.dpf._cache_size()) == before
 
 
 def test_drop_speculation_before_warm_is_the_plain_engine(tiny):
@@ -402,7 +402,7 @@ def test_drop_speculation_before_warm_is_the_plain_engine(tiny):
     speculation program has run, turning it off is refused."""
     plain, spec = engines(tiny["bigram"], 2, CTX=256, S=4, K=4)
     spec.drop_speculation()
-    assert (spec.DK, spec.Wm, spec.ph, spec.k_table) == (0, None, None, {})
+    assert (spec.DK, spec.drafter, spec.dstate, spec.k_table) == (0, None, None, {})
     shapes = lambda e: [(x.shape, x.dtype) for x in jax.tree.leaves(e.new_state())]
     assert shapes(spec) == shapes(plain)
     assert spec.spec_programs(*spec.new_state()) == []

@@ -38,6 +38,7 @@ from . import rope as yarn_rope
 f32, bf16 = jnp.float32, jnp.bfloat16
 # the Models label (docs/gguf.md) of each architecture ARCHS maps to this module; catalog reads it with ast
 MODELS = {"llama": "Llama 3.x", "qwen2": "Qwen2.5", "qwen3": "Qwen3", "exaone": "EXAONE 3.5", "granite": "Granite 3.3"}
+SPEC_VERIFY = True       # forward(verify=True) and the identity commit (runtime/spec_step.py)
 NEG = -1e30
 NEOX = ("qwen2", "qwen3", "exaone")      # rope on halves; llama, granite: adjacent pairs
 
@@ -224,7 +225,10 @@ def rope(x, cos, sin, RD, neox):
 def make_forward(c, decode_kernels=None):
     """-> forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, keep=None, verify=False,
     hidden=False) -> dict(ck, cv, nxt, lg), the contract of models/qwen3_8_27b/model.make_forward. keep has nothing to
-    protect here (no linear-attention state). verify (speculative decoding) is not offered for these files."""
+    protect here (no linear-attention state). verify (speculative decoding, runtime/spec_step.py): the T tokens of each
+    contiguous row at p0..p0+T-1 in one pass -> tgt (B, T) the argmax at every position (of the head's output, as
+    one-token decode takes it), lg (B, T, V) f32, rec {} (full attention only: the commit is the identity, since K/V
+    written past a row's accepted tokens sit past its position, masked by the next pass and written over)."""
     D, H, KV, HD, RD, act = c.D, c.H, c.KV, c.HD, c.RD, c.act
     G, scale, eps, neox = H // KV, c.scale, c.eps, c.neox
     inv = (1.0 / (np.float32(c.theta) ** (np.arange(0, RD, 2, dtype=np.int64).astype(np.float32) / np.float32(RD)))).astype(np.float32)
@@ -234,8 +238,6 @@ def make_forward(c, decode_kernels=None):
 
     def forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, keep=None, verify=False,
                 hidden=False):
-        if verify:
-            raise NotImplementedError("speculative verify is not offered for GGUF dense-attention files")
         B, T = toks.shape
         Kc, Vc = ck
         pos = p0[:, None] + jnp.arange(T, dtype=jnp.int32)[None]
@@ -298,6 +300,10 @@ def make_forward(c, decode_kernels=None):
         out = dict(ck=(Kc, Vc), cv=cv)
         if hidden:
             out["hid"] = rms(x, W["norm"], eps)
+        if verify:
+            lv = ls(lin_(rms(x, W["norm"], eps), W["head"]))     # the logits plain decode gives (its logit scale too)
+            out.update(tgt=jnp.argmax(lv, -1).astype(jnp.int32), lg=lv.astype(f32), rec={})
+            return out
         if all_logits:
             out["lg"] = ls(lin_(rms(x, W["norm"], eps), W["head"])).astype(f32)
             return out

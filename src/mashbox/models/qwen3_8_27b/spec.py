@@ -9,13 +9,16 @@ One round (all rows at once, K drafts):
   verify  the target reads [t, d1..dK] at positions p..p+K (model.forward verify=True: full attention writes its K/V, the
           linear-attention layers run K+1 exact one-token steps and keep their inputs, nothing is committed)
   accept  greedy: the longest prefix of drafts equal to the target's argmax, then the target's own token (a + 1 tokens);
-          sampled: standard rejection sampling (Leviathan et al. 2023, Chen et al. 2023), exact in distribution
+          sampled and penalised: the coupled draw (runtime/spec_step.py coupled): at each answer index the target draws
+          with the key plain decoding uses there, so a committed token is the token plain decoding draws; make_spec and
+          accept_sampled below (rejection sampling) are references the engine's step does not run
   commit  replay the a + 1 accepted steps of every linear-attention layer from the old state (model.gated_delta_commit); the
           conv tails take the matching window. Full-attention K/V past p + a are masked by position and written over later.
   draft   the MTP head reads the accepted tokens with the target's hidden states (positions p..p+a), then K - 1 more steps on
           its own output -> the next K drafts.
 
-Inside the batched engine (make_step, Engine._spec_step) the same round runs per row, in the order draft, verify, accept,
+Inside the batched engine (runtime/spec_step.py make_step with runtime/drafters/mtp.py, Engine._spec_step) the
+same round runs per row, in the order draft, verify, accept,
 commit, so a row that joined at this step and a row that has decoded for a while share one program: each row carries its
 carried MTP input (the tokens it committed last round, their positions and the target's hidden states there; for a new row
 its first token and the prompt's last hidden state). Each row has its own draft cap kc = min(k_row, remaining - 1): rows
@@ -31,13 +34,14 @@ from jax import lax
 
 from . import model as M
 from ... import bshj
-from ...runtime import sampler as SP
+from ...runtime import sampler as SP, spec_step as SS
+from ...runtime.drafters.mtp import make_draft
 
 f32, bf16, i32 = jnp.float32, jnp.bfloat16, jnp.int32
 
 
 # ---------------------------------------------------------------------------------------------------------------- weights
-DRAFTER_ABI = 1      # runtime/drafter.py DRAFTER_ABI: the engine refuses a spec module with another value
+HEAD_ABI = 1         # runtime/drafter.py HEAD_ABI: the MTP drafter refuses a head module with another value
 KIND = "mtp"
 
 
@@ -169,30 +173,7 @@ def accept_sampled(tlg, dlg, d, sp, step0, kcap=None):
     return a, jnp.where(greedy, jnp.take_along_axis(targ, a[:, None], 1)[:, 0], bonus)
 
 
-def coupled(tlg, tgt, d, cnt, seen, sp, step0, kc):
-    """The coupled draw (Daliri, Musco, Suresh, arXiv 2408.07978). The target at answer
-    index step0 + j is the draw the non-speculative sampled program makes there: the same penalties (counts and seen
-    tokens that include the drafts before j, as plain decode would have counted them), the same transform and the same
-    Gumbel key (seed, index) through runtime/sampler.py sample(); greedy rows take the same argmax. Drafts are accepted
-    while they equal the targets. Every committed token is then a target, so the output equals non-speculative output for
-    any k and drafter; no rejection sampling. tlg (B, K+1, V) f32 verify logits, tgt (B, K+1) their argmax, d (B, K)
-    drafts, cnt (B, V) f32 / seen (B, V) bool the row's counts before this round, step0 (B,) answer index of the first new
-    token, kc (B,) draft caps -> (targets (B, K+1), a (B,) accepted drafts)."""
-    B, K1, _ = tlg.shape
-    K = K1 - 1
-    b_ = jnp.arange(B)
-    plain = SP.no_penalty(sp)
-    tg = []
-    for j in range(K1):
-        x = SP.penalise(tlg[:, j], cnt, seen, sp)
-        for i in range(j):     # drafts before j as counted tokens: same elementwise penalty at their ids, with their counts
-            v = d[:, i]
-            c_ = cnt[b_, v] + jnp.sum((d[:, :j] == v[:, None]).astype(f32), 1)
-            x = x.at[b_, v].set(SP.penalise(tlg[b_, j, v][:, None], c_[:, None], jnp.ones((B, 1), bool), sp)[:, 0])
-        tg.append(SP.sample(x, sp, step0 + j, greedy_tok=jnp.where(plain, tgt[:, j], jnp.argmax(x, -1).astype(i32))))
-    tg = jnp.stack(tg, 1)
-    ok = (d == tg[:, :K]) & (jnp.arange(K)[None] < kc[:, None])
-    return tg, jnp.sum(jnp.cumprod(ok.astype(i32), 1), 1)
+coupled = SS.coupled      # the coupled draw lives in runtime/spec_step.py (every drafter, every architecture)
 
 
 # ---------------------------------------------------------------------------------------------------------------- rounds
@@ -205,26 +186,7 @@ def make_spec(c, fwd, mtp):
     N rounds of verify / accept / commit / draft; round i emits out[i, b, :cnt[i, b]]."""
     rep = c.HV // c.HK
 
-    def draft(W, Wm, ck, toks, hid, p0, lens, Tc, K, sp=None, step0=None):
-        B = toks.shape[0]
-        slots = jnp.arange(B, dtype=i32)
-        h, lg, ck = mtp(W, Wm, ck, toks, hid, p0, lens, slots, Tc)
-        h = h[jnp.arange(B), jnp.maximum(lens - 1, 0)]
-        p = p0 + lens - 1
-        ds, ls = [], []
-        for k in range(K):
-            lgf = lg.astype(f32)
-            if sp is None:
-                t = jnp.argmax(lg, -1).astype(i32)
-            else:       # the shared sampler's draw at answer index step0 + k (Gumbel key (seed, index)): a draw from the
-                t = SP.sample(lgf, sp, step0 + k)       # draft distribution, coupled to the target's draw at that index
-            ds.append(t)
-            ls.append(lgf)
-            if k + 1 < K:
-                p = p + 1
-                hx, lg, ck = mtp(W, Wm, ck, t[:, None], h[:, None], p, jnp.ones((B,), i32), slots, Tc)
-                h = hx[:, 0]
-        return jnp.stack(ds, 1), jnp.stack(ls, 1), ck
+    draft = make_draft(mtp)
 
     def rounds(W, Wm, ck, cv, tok, d, dlg, pos, Tc, K, N, sp=None, step0=None):
         B = tok.shape[0]
@@ -254,70 +216,3 @@ def make_spec(c, fwd, mtp):
         ck, cv, tok, d, dlg, pos, _, out, cnt = lax.fori_loop(0, N, one, init)
         return out, cnt, ck, cv, tok, d, dlg, pos
     return draft, rounds
-
-
-# ---------------------------------------------------------------------------------------------------------------- batched step
-def make_step(c, fwd, mtp):
-    """-> step(W, ck, cv, Wm, ph, pt, pp, pn, tok, pos, kr, rem, sp, step0, cnt, seen, Tc, K, N, trace)
-          -> (out (N,B,K+1), ck, cv, ph, n (N,B), tok, pos, cnt, seen, tr)
-    N rounds of draft / verify / accept / commit for rows 0..B-1 of the slot state (one engine step). Per row b:
-      ph (S, P, D) bf16 carried hidden states (rows 0..B-1 used; P >= K + 1), pt (B, P) carried tokens, pp (B,) their first
-      position, pn (B,) how many (0 = padding: the row commits nothing); tok / pos the row's last token and its position
-      (CTX for padding: its K/V writes fall past the cache and are dropped); kr (B,) the row's own draft cap (0..K); rem (B,)
-      tokens it may still emit (0 = padding); sp / step0 / cnt / seen the sampled program's settings, first answer index and
-      penalty counts (None for the greedy program).
-    out[i, b, :n[i, b]] are the tokens row b committed in round i. A row with kc = min(kr, rem - 1) <= 0 drafts nothing and
-    commits its plain next token. Sampled and penalised rows verify by the coupled draw (coupled()): each committed token
-    is the shared sampler's draw at its answer index with its penalties (same key as the non-speculative sampled
-    program), so their output does not depend on speculation either. trace=True also returns, per committed
-    position, the verify logits' hash and top-1 / top-2 gap (N,B,K+1) each."""
-    draft, _ = make_spec(c, fwd, mtp)
-    rep = c.HV // c.HK
-
-    def step(W, ck, cv, Wm, ph, pt, pp, pn, tok, pos, kr, rem, sp, step0, cnt, seen, Tc, K, N, trace=False):
-        from ...runtime.engine import logit_hash, top2_gap
-        B, P = pt.shape
-        K1 = K + 1
-        slots, b_ = jnp.arange(B, dtype=i32), jnp.arange(B)
-        pad = lambda x: jnp.concatenate([x, jnp.zeros((B, P - K1) + x.shape[2:], x.dtype)], 1) if P > K1 else x
-
-        def one(i, carry):
-            ck, cv, h, pt, pp, pn, tok, pos, rem, st, out, cn, cnt, seen, tr = carry
-            d, dlg, ck = draft(W, Wm, ck, pt, h, pp, pn, Tc, K, sp, st)
-            r = fwd(W, ck, cv, jnp.concatenate([tok[:, None], d], 1), pos, jnp.full((B,), K1, i32), slots, Tc, contig=True,
-                    verify=True)
-            kc = jnp.clip(jnp.minimum(kr, rem - 1), 0, K)
-            if sp is None:
-                tgt = r["tgt"]
-                a = jnp.minimum(jnp.sum(jnp.cumprod((d == tgt[:, :K]).astype(i32), 1), 1), kc)
-                bonus = jnp.take_along_axis(tgt, a[:, None], 1)[:, 0]
-            else:       # the coupled draw: every committed token is the plain sampler's draw at its answer index
-                tg, a = coupled(r["lg"], r["tgt"], d, cnt, seen, sp, st, kc)
-                bonus = jnp.take_along_axis(tg, a[:, None], 1)[:, 0]
-            n = jnp.where(rem > 0, a + 1, 0)
-            emit = jnp.where(jnp.arange(K1)[None] < a[:, None], jnp.concatenate([d, d[:, :1]], 1), bonus[:, None])
-            R, C = r["cv"]
-            R = M.gated_delta_commit(R, r["rec"], n, rep)
-            C = M.conv_commit(C, r["rec"]["x"], n)
-            if sp is not None:
-                for j in range(K1):
-                    m = j < n
-                    cnt = cnt.at[b_, emit[:, j]].add(m.astype(f32))
-                    seen = seen.at[b_, emit[:, j]].set(seen[b_, emit[:, j]] | m)
-            if trace:
-                lg = r["lg"].reshape(B * K1, -1)
-                tr = (tr[0].at[i].set(logit_hash(lg).reshape(B, K1)), tr[1].at[i].set(top2_gap(lg).reshape(B, K1)))
-            go = n > 0
-            h = jnp.where(go[:, None, None], pad(r["hid"].astype(h.dtype)), h)
-            pt = jnp.where(go[:, None], pad(emit), pt)
-            pp, pn = jnp.where(go, pos, pp), jnp.where(go, n, pn)
-            tok = jnp.where(go, bonus, tok)
-            out = out.at[i].set(jnp.where(jnp.arange(K1)[None] < n[:, None], emit, -1))
-            return (r["ck"], (R, C), h, pt, pp, pn, tok, pos + n, rem - n, None if st is None else st + n, out, cn.at[i].set(n),
-                    cnt, seen, tr)
-        tr0 = (jnp.zeros((N, B, K1), jnp.uint32), jnp.zeros((N, B, K1), f32)) if trace else None
-        init = (ck, cv, ph[:B], pt, pp, pn, tok, pos, rem, step0, jnp.zeros((N, B, K1), i32), jnp.zeros((N, B), i32), cnt, seen,
-                tr0)
-        ck, cv, h, pt, pp, pn, tok, pos, rem, _, out, cn, cnt, seen, tr = lax.fori_loop(0, N, one, init)
-        return out, ck, cv, ph.at[:B].set(h), cn, tok, pos, cnt, seen, tr
-    return step

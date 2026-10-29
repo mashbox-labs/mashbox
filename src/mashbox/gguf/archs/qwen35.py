@@ -34,6 +34,7 @@ from ..reader import GGUFError
 f32, bf16 = jnp.float32, jnp.bfloat16
 # the Models label (docs/gguf.md) of each architecture ARCHS maps to this module; catalog reads it with ast
 MODELS = {"qwen35": "Qwen3.5, Qwen3.6, Qwen3.8 (dense)", "qwen35moe": "Qwen3.5, Qwen3.6 (mixture of experts)"}
+SPEC_VERIFY = True       # forward(verify=True) with gated_delta_commit / conv_commit (runtime/spec_step.py)
 NEG = -1e30
 ARCH = "qwen35"
 HI = lax.Precision.HIGHEST
