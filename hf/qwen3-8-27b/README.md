@@ -111,6 +111,7 @@ Each chart names the hardware on both sides.
 | `Qwen3.8-27B-BQ8_R.bshj` | BSHJ | 26.94 | 8.01 | mean KL 0.00065, top-1 agreement 99.72% vs bf16 (8 prompts x 32 tokens) | 38.6 tokens/s for 1 request, 269 tokens/s for 8 (TPU v6e-1) |
 | `Qwen3.8-27B-MTP-BQ8_R.bshj` | BSHJ | 0.43 | 8.01 | draft head for speculative decoding (every token is checked by the main weights); greedy output identical to decoding without it on 5 of 8 test prompts | 74.84 tokens/s for 1 request (37.77 without), 436.87 tokens/s for 8 (244.69 without) |
 | `xla-cache/v6e-jax0.11.2-libtpu0.0.48.1.tar` | XLA compile cache (tar) | 0.68 | n/a | n/a (compiled programs, not weights) | first start on TPU v6e-1, weights on disk: ready in 69.6 s with it, 326.6 s without it |
+| `xla-cache/v6e4-jax0.11.2-libtpu0.0.48.1.tar` | XLA compile cache (tar) | 0.98 | n/a | n/a (compiled programs, not weights) | first start on TPU v6e-4, weights on disk: ready in 63.55 s with it, 229.75 s without it |
 
 ## Chips
 

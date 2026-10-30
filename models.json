@@ -240,7 +240,7 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "392a8fe6a025627276c11c2c918c9794e8f9079b",
+      "hf_revision": "14238985d7468db70510b09b1a5e3ed7499a214e",
       "card_release": "0.1.5",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
@@ -645,6 +645,27 @@
           "libtpu": "0.0.48.1",
           "quality": "n/a (compiled programs, not weights)",
           "speed": "first start on TPU v6e-1, weights on disk: ready in 69.6 s with it, 326.6 s without it",
+          "date": "2026-10-30"
+        },
+        {
+          "name": "xla-cache/v6e4-jax0.11.2-libtpu0.0.48.1.tar",
+          "kind": "xla-cache",
+          "accelerator": "v6e-4",
+          "tp": 4,
+          "format": "XLA compile cache (tar)",
+          "default": false,
+          "variant": false,
+          "bytes": 981831680,
+          "sha256": "c69c715b03c2b3fb69cd403f8462427cc304120086c87b3ad6c469d0025d141f",
+          "gb": 0.98,
+          "chips": [
+            "v6e"
+          ],
+          "jax": "0.11.2",
+          "jaxlib": "0.11.2",
+          "libtpu": "0.0.48.1",
+          "quality": "n/a (compiled programs, not weights)",
+          "speed": "first start on TPU v6e-4, weights on disk: ready in 63.55 s with it, 229.75 s without it",
           "date": "2026-10-30"
         }
       ],
