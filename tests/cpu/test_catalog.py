@@ -688,10 +688,11 @@ def _git(git_dir, *args):
     return r.stdout if r.returncode == 0 else None
 
 
-def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None):
+def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None, equiv=()):
     """the record's code commit (in git_dir) against this tree: ARCHS maps the arch to the same module, every file of
     gguf_code_files holds the same code (_code_only: comments, docstrings and import lines never void a record, as for
-    a CPU record), and no ops/ file the record ran is missing here"""
+    a CPU record) or, for a file that differs, a sealed equivalence that holds (equiv, from equivalence_problems) ran
+    this tree's code of it (equivalent_file), and no ops/ file the record ran is missing here"""
     if _git(git_dir, "cat-file", "-e", f"{commit}^{{commit}}") is None:
         return [f"{what}: the code the record ran ({commit[:12]}) is not in {git_dir}"]
     out = []
@@ -708,7 +709,7 @@ def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None)
         if old is None:
             out.append(f"{what}: {f} is not in the code the record ran ({commit[:12]})")
         elif _code_only(f, old) != _code_only(f, (repo / f).read_bytes()):
-            out.append(f"{what}: {f} differs from the code the record ran ({commit[:12]})")
+            out += equivalent_file(repo, git_dir, f, commit, equiv, what)
     if chip_of is not None:     # models.json's engine_kernels rows pick the kernel package the loader runs (rule 2a)
         try:
             then_k = json.loads(_git(git_dir, "show", f"{commit}:models.json") or b"{}").get("engine_kernels") or []
@@ -721,6 +722,98 @@ def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None)
     out += [f"{what}: {f} ran in the record and is not in this tree" for f in then_ops
             if f.endswith(".py") and not (repo / f).is_file()]
     return out
+
+
+EQUIV_PROMPTS = 16     # the record's sealed prompts (ids-<tag>.json), every one run at 1 user and at 8 users
+EQUIV_MIN_TOKENS = 64
+IDS_RE = re.compile(r"ids-.+\.json")
+
+
+def equivalence_problems(g, e, listed, read, root, git_dir, what):
+    """(problems, held): each sealed equivalence the evidence cites (e["equivalence"]: sha256sums, ids, a, c) holds
+    only when its seal lists the ids file and both run records with their sha256s; the ids file is byte for byte the one
+    the record's own seal lists (the record's 16 prompts); run A ran the record's commit and run C a commit in code_repo,
+    each run's code_files are its commit's files; both ran the row's file with no MASHBOX_ variable, the same N (at least
+    64) on the same jax, device, host and group; and every one of the 16 prompts gave the same ids in A and C at 1 user
+    and at 8 users, read from the id lists (never from a summary). held lists (C's commit, the files both runs hashed)
+    for each equivalence that holds."""
+    out, held = [], []
+    for n, q in enumerate(e.get("equivalence") or []):
+        w, bad = f"{what} equivalence[{n}]", []
+        if any(k not in q for k in ("sha256sums", "ids", "a", "c")):
+            out.append(f"{w}: the evidence needs sha256sums, ids, a and c")
+            continue
+        sums = read(q["sha256sums"], f"{w} sha256sums")
+        if sums is None:
+            continue
+        mine = _sums(sums)
+        bad += seal_problems(sums, root, w)
+        for k in ("ids", "a", "c"):
+            if mine.get(os.path.normpath(q[k]["path"])) != q[k]["sha256"]:
+                bad.append(f"{w}: {q[k]['path']} is not in {sums.name} with its sha256")
+        ids, a, c = (read(q[k], f"{w} {k}") for k in ("ids", "a", "c"))
+        if not all(isinstance(x, dict) for x in (ids, a, c)):
+            out += bad + [f"{w}: the ids file and both run records must be JSON objects"]
+            continue
+        rids = [p for p in listed if IDS_RE.fullmatch(Path(p).name)]
+        if len(rids) != 1:
+            bad.append(f"{w}: the record's seal lists {len(rids)} ids files, so its prompts are not pinned")
+        elif listed[rids[0]] != q["ids"]["sha256"]:
+            bad.append(f"{w}: the equivalence's prompt ids are not the record's ({Path(rids[0]).name})")
+        if len(ids.get("ids") or []) != EQUIV_PROMPTS:
+            bad.append(f"{w}: the ids file has {len(ids.get('ids') or [])} prompts, not {EQUIV_PROMPTS}")
+        if a.get("commit") != e["code"]["commit"]:
+            bad.append(f"{w}: run A ran {str(a.get('commit'))[:12]}, the record ran {e['code']['commit'][:12]}")
+        for t, r in (("A", a), ("C", c)):
+            commit, files = str(r.get("commit")), r.get("code_files")
+            if _git(git_dir, "cat-file", "-e", f"{commit}^{{commit}}") is None:
+                bad.append(f"{w}: run {t}'s commit {commit[:12]} is not in {git_dir}")
+            if not isinstance(files, dict) or not files:
+                bad.append(f"{w}: run {t} names no code_files")
+                continue
+            for f, h in sorted(files.items()):
+                blob = _git(git_dir, "show", f"{commit}:{f}")
+                if h != (None if blob is None else hashlib.sha256(blob).hexdigest()):
+                    bad.append(f"{w}: run {t}'s {f} is not the code of its commit {commit[:12]}")
+            if r.get("file_sha256") != g["sha256"]:
+                bad.append(f"{w}: run {t} ran another file than the row's ({str(r.get('file_sha256'))[:16]}...)")
+            if r.get("env") != {}:
+                env = r.get("env") if isinstance(r.get("env"), dict) else {"env": r.get("env")}
+                bad.append(f"{w}: run {t} ran with {' '.join(f'{k}={v}' for k, v in sorted(env.items()))}")
+        for k in ("N", "jax", "device", "host", "group"):
+            if a.get(k) != c.get(k):
+                bad.append(f"{w}: runs A and C differ in {k} ({a.get(k)} / {c.get(k)})")
+        N = a.get("N")
+        if not isinstance(N, int) or isinstance(N, bool) or N < EQUIV_MIN_TOKENS:
+            bad.append(f"{w}: the runs decoded {N} tokens, fewer than {EQUIV_MIN_TOKENS}")
+        for k, users in (("one", "1 user"), ("eight", "8 users")):
+            for t, r in (("A", a), ("C", c)):
+                rows = r.get(k)
+                if not isinstance(rows, list) or len(rows) != EQUIV_PROMPTS:
+                    bad.append(f"{w}: run {t} has {len(rows) if isinstance(rows, list) else 0} prompts at {users}, "
+                               f"not {EQUIV_PROMPTS}")
+                elif any(not isinstance(x, list) or len(x) != N for x in rows):
+                    bad.append(f"{w}: run {t} has a prompt at {users} without {N} ids")
+            if isinstance(a.get(k), list) and isinstance(c.get(k), list):
+                diff = [i for i in range(max(len(a[k]), len(c[k])))
+                        if i >= len(a[k]) or i >= len(c[k]) or a[k][i] != c[k][i]]
+                if diff:
+                    bad.append(f"{w}: ids differ between run A and run C at {users} for prompts {diff}")
+        out += bad
+        if not bad:
+            held.append((c["commit"], frozenset(a["code_files"]) & frozenset(c["code_files"])))
+    return out, held
+
+
+def equivalent_file(repo, git_dir, f, commit, equiv, what):
+    """[] when a held equivalence's run C hashed f and C's f is this tree's f as code; else the problem"""
+    now = _code_only(f, (repo / f).read_bytes())
+    for c, files in equiv:
+        then = _git(git_dir, "show", f"{c}:{f}") if f in files else None
+        if then is not None and _code_only(f, then) == now:
+            return []
+    tail = (" and from the code of the equivalence's run C " + ", ".join(c[:12] for c, _ in equiv)) if equiv else ""
+    return [f"{what}: {f} differs from the code the record ran ({commit[:12]}){tail}"]
 
 
 CODE_ID_RE = re.compile(r"code-.+\.json")
@@ -965,6 +1058,10 @@ def evidence_problems(reg, ev, repo, work=None):
             if e is None:
                 out.append(f"{what}: no evidence entry")
                 continue
+            if e.get("kind") == "quick-check" or "record_kind" in r:      # a quick-check run: its own record kind
+                out += quick_check_problems(g, r, e, read, root, repo, git_dir, reg.get("engine_kernels") or [], chip, what,
+                                      work)
+                continue
             have, listed = {}, {}
             for key in ("record", "compare", "sha256sums", "file", "plan", "card", "header"):
                 have[key] = read(e[key], f"{what} {key}") if key in e else out.append(f"{what}: no {key} in the evidence")
@@ -974,35 +1071,7 @@ def evidence_problems(reg, ev, repo, work=None):
                 for key in ("record", "compare", "file", "plan", "card", "header"):
                     if key in e and listed.get(os.path.normpath(e[key]["path"])) != e[key]["sha256"]:
                         out.append(f"{what}: {e[key]['path']} is not in {have['sha256sums'].name} with its sha256")
-            if have["file"] is not None:
-                lines = have["file"].read_text().split("\n")
-                m = SUMS_LINE.fullmatch(lines[0].strip())
-                size = lines[1].strip() if len(lines) > 1 else ""
-                if not size:
-                    out.append(f"{what}: {have['file'].name} has no size line")
-                if not m or (m.group(1), Path(m.group(2)).name) != (g["sha256"], g["file"]) or (
-                        size and size != str(g["bytes"])):
-                    out.append(f"{what}: {have['file'].name} names another file than {g['file']} {g['sha256']}")
-            if have["plan"] is not None and have["plan"].read_text().split() != [
-                    g["repo"], g["revision"], g["file"], g["sha256"]]:
-                out.append(f"{what}: {have['plan'].name} is not {g['repo']} @ {g['revision']} {g['file']}")
-            card = have["card"]
-            if card is not None and not isinstance(card, dict):
-                out.append(f"{what}: the card snapshot is not JSON")
-            elif card is not None:      # the row's card fields are the pinned card's, never typed
-                cd = card.get("cardData") or {}
-                base, link = cd.get("base_model"), cd.get("license_link")
-                for field, ours, theirs in (("repo", g["repo"], card.get("id")), ("revision", g["revision"], card.get("sha")),
-                                            ("license", g["license"], cd.get("license"))):
-                    if ours != theirs:
-                        out.append(f"{what}: {field} {ours!r}, the pinned card says {theirs!r}")
-                if link is not None and g["license_link"] != link:
-                    out.append(f"{what}: license_link {g['license_link']!r}, the pinned card says {link!r}")
-                elif link is None and not str(g["license_link"]).startswith(f"https://huggingface.co/{g['repo']}/"):
-                    out.append(f"{what}: license_link {g['license_link']!r}, and the pinned card names none, so it is a file "
-                               f"of {g['repo']}")
-                if g["base"] not in (base if isinstance(base, list) else [base]):
-                    out.append(f"{what}: base {g['base']!r}, the pinned card says {base!r}")
+            out += row_file_problems(g, have, what)
             code, kq = e["code"]["commit"], (e.get("kernels") or {}).get("commit")
             out += code_id_problems(e, listed, read, git_dir, what)
             rec = have["record"]
@@ -1050,7 +1119,9 @@ def evidence_problems(reg, ev, repo, work=None):
                 else:
                     number(e["numbers"][name], value, f"{what} {name}")
             if git_dir:
-                out += code_problems(repo, git_dir, code, g["arch"], what, reg.get("engine_kernels") or [], chip)
+                eq, held = equivalence_problems(g, e, listed, read, root, git_dir, what)
+                out += eq + code_problems(repo, git_dir, code, g["arch"], what, reg.get("engine_kernels") or [], chip,
+                                          equiv=held)
             if r["kernel_path"] == "bundle":
                 man = manifests.get(chip)
                 if man is None:
@@ -1061,6 +1132,43 @@ def evidence_problems(reg, ev, repo, work=None):
                 for t in g["types"]:
                     if t not in catalog.UNQUANTIZED and t not in (man.get("impl") or {}):
                         out.append(f"{what}: the release bundle has no {t} kernel")
+    return out
+
+
+def row_file_problems(g, have, what):
+    """A chip row's file, plan and card against the row: the file-*.sha256 names the row's file, sha256 and size, the
+    plan its repo, revision, file and sha256, and the pinned card its repo, revision, license, license_link and base
+    (never typed)"""
+    out = []
+    if have["file"] is not None:
+        lines = have["file"].read_text().split("\n")
+        m = SUMS_LINE.fullmatch(lines[0].strip())
+        size = lines[1].strip() if len(lines) > 1 else ""
+        if not size:
+            out.append(f"{what}: {have['file'].name} has no size line")
+        if not m or (m.group(1), Path(m.group(2)).name) != (g["sha256"], g["file"]) or (
+                size and size != str(g["bytes"])):
+            out.append(f"{what}: {have['file'].name} names another file than {g['file']} {g['sha256']}")
+    if have["plan"] is not None and have["plan"].read_text().split() != [
+            g["repo"], g["revision"], g["file"], g["sha256"]]:
+        out.append(f"{what}: {have['plan'].name} is not {g['repo']} @ {g['revision']} {g['file']}")
+    card = have["card"]
+    if card is not None and not isinstance(card, dict):
+        out.append(f"{what}: the card snapshot is not JSON")
+    elif card is not None:      # the row's card fields are the pinned card's, never typed
+        cd = card.get("cardData") or {}
+        base, link = cd.get("base_model"), cd.get("license_link")
+        for field, ours, theirs in (("repo", g["repo"], card.get("id")), ("revision", g["revision"], card.get("sha")),
+                                    ("license", g["license"], cd.get("license"))):
+            if ours != theirs:
+                out.append(f"{what}: {field} {ours!r}, the pinned card says {theirs!r}")
+        if link is not None and g["license_link"] != link:
+            out.append(f"{what}: license_link {g['license_link']!r}, the pinned card says {link!r}")
+        elif link is None and not str(g["license_link"]).startswith(f"https://huggingface.co/{g['repo']}/"):
+            out.append(f"{what}: license_link {g['license_link']!r}, and the pinned card names none, so it is a file "
+                       f"of {g['repo']}")
+        if g["base"] not in (base if isinstance(base, list) else [base]):
+            out.append(f"{what}: base {g['base']!r}, the pinned card says {base!r}")
     return out
 
 
@@ -1423,6 +1531,227 @@ def run_problems(g, r, e, rec, header, man, listed, read, under, work, chip, wha
     if (s, a.ctx) != (rec.get("slots"), rec.get("ctx")):
         out.append(f"{what}: the candidate's fit gives {s} slots of {a.ctx} tokens on this file with bytes_limit {lim}; "
                    f"the record ran {rec.get('slots')} x {rec.get('ctx')}")
+    return out
+
+
+# A quick-check chip run (record_kind "quick-check"): four runs of `mashbox run REPO:TAG --prompt P --max-tokens 64
+# --temperature 0` with zero engine flags on one chip, each compared with llama.cpp's greedy ids on the same templated
+# prompt ids. Its seal folder holds these files by name, besides the file/plan/card/header the evidence cites.
+QUICK_RUNS, QUICK_TOKENS = 4, 64
+QUICK_FILES = ("cmp.json", "cmp_p1.py", "setup.log", "freeze.txt", "accelerator-type.txt", "CODE_SHA",
+            *(f"{x}{i}{y}" for i in range(QUICK_RUNS) for x, y in (
+                ("run", ".json"), ("run", ".rc"), ("run", ".stdout"), ("run", ".stderr"), ("prompt", ".txt"),
+                ("ref", ".ids"))))
+QUICK_MEASURED = ("decode_tok_s_1_user",)
+QUICK_DEVICE_RE = re.compile(r"^\S+ \S+ \S+ (TPU .+)$", re.M)      # setup's last check: mashbox, jax, libtpu, device kind
+
+
+def quick_check_decode(runs):
+    """the row's number: decode tok/s at 1 user = sum(new tokens) / sum(decode seconds) over runs 1-3 (run 0 holds the
+    first compile), 2 decimals"""
+    t = [r["generate_calls"][0]["timing"] for r in runs[1:]]
+    return round(sum(x["new_tokens"] for x in t) / sum(x["decode_s"] for x in t), 2)
+
+
+def quick_check_first_diff(ours, ref, stop, n=QUICK_TOKENS):
+    """the compare tool's rule on the sealed ids: the first of the first n generated tokens where ours and llama.cpp's
+    differ; when the engine stopped early with every token equal, a match only if it returned a stop id or llama.cpp's
+    next pick is one, else a difference at the stop"""
+    m = ours[:n]
+    k = next((s for s, (x, y) in enumerate(zip(m, ref)) if x != y), None)
+    if k is None and len(m) < n and not (m and m[-1] in stop) and not (len(m) < len(ref) and ref[len(m)] in stop):
+        k = len(m)
+    return k
+
+
+def _quick_events(text):
+    """event name -> its JSON lines in a run's stderr"""
+    out = {}
+    for line in text.splitlines():
+        if line.startswith('{"event"'):
+            try:
+                x = json.loads(line)
+            except ValueError:
+                continue
+            out.setdefault(x.get("event"), []).append(x)
+    return out
+
+
+def _quick_header_problems(g, header, work, chip, what):
+    """the sealed header (the file up to its tensor data, sparse to the file's size) is a file of the row's arch, block
+    types and expert count"""
+    size = header.stat().st_size
+    if size > g["bytes"]:
+        return [f"{what}: the sealed header is {size} bytes, longer than the file's {g['bytes']}"]
+    dst = Path(work or tempfile.mkdtemp(prefix="mashbox-catalog-qc-")) / f"{g['id']}-{chip}-qc" / g["file"]
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with open(dst, "wb") as fh:
+        fh.write(header.read_bytes())
+        fh.truncate(g["bytes"])
+    from mashbox import gguf as G
+    try:
+        f = G.File(str(dst))
+        have, experts = sorted(f.census()[0]), int(f.get(f"{f.arch}.expert_count") or 0)
+    except (G.GGUFError, ValueError) as x:
+        return [f"{what}: the sealed header does not read ({type(x).__name__}: {x})"]
+    out = []
+    if f.arch != g["arch"]:
+        out.append(f"{what}: the sealed header is a {f.arch} file, the row says {g['arch']}")
+    if have != sorted(g["types"]):
+        out.append(f"{what}: the sealed header's block types are {have}, the row says {sorted(g['types'])}")
+    if (experts > 0) != (g["moe"] is True):
+        out.append(f"{what}: the sealed header's metadata has {experts} experts, the row says moe {g['moe']}")
+    return out
+
+
+def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what, work=None):
+    """A chip row from a quick-check run, every value read from its seal under the records root, never typed: the
+    row and evidence both name the kind; the four runs ran `mashbox run REPO:TAG --prompt <sealed prompt i>
+    --max-tokens 64 --temperature 0` with no MASHBOX_ variable, exited 0 and printed one generation; each run's events
+    name the row's repo, file, revision, sha256 and arch, with no kernel type and no kernel byte (kernel_path exact); the
+    chip is the row's accelerator and device; the dists come from the sealed pip freeze and setup log (pins_problems,
+    exact path); the compare's rows are the runs' own ids, its first differences recomputed from llama.cpp's sealed ids,
+    its summary the rows' counts, and passing needs 4/4 runs and 0 other divergences; the one number is recomputed from
+    runs 1-3; the file, plan, card and header hold for the row; the wheel was built from the evidence's code commit,
+    whose code set equals this tree's (code_problems)."""
+    out = []
+    if e.get("kind") != "quick-check" or r.get("record_kind") != "quick-check":
+        return [f"{what}: the evidence kind is {e.get('kind')!r} (a quick-check record), and the row's record_kind is "
+                f"{r.get('record_kind')!r}"]
+    if g["moe"] is True:
+        out.append(f"{what}: a mixture of experts passes only with its routed experts on the kernel; a quick-check run "
+                   "is the exact path")
+    if r.get("kernel_path") != "exact" or "ctx" in r or "slots" in r:
+        out.append(f"{what}: a quick-check run records no ctx or slots and runs the exact path (kernel_path exact)")
+    have = {}
+    for key in ("sha256sums", "compare", "file", "plan", "card", "header"):
+        have[key] = read(e[key], f"{what} {key}") if key in e else out.append(f"{what}: no {key} in the evidence")
+    sums = have["sha256sums"]
+    if sums is None:
+        return out
+    listed = _sums(sums)
+    out += seal_problems(sums, root, what)
+    for key in ("compare", "file", "plan", "card", "header"):
+        if key in e and listed.get(os.path.normpath(e[key]["path"])) != e[key]["sha256"]:
+            out.append(f"{what}: {e[key]['path']} is not in {sums.name} with its sha256")
+    files = {}
+    for n in QUICK_FILES:
+        p = sums.parent / n
+        if os.path.normpath(p) not in listed:
+            out.append(f"{what}: {n} is not in {sums.name}")
+        elif p.is_file() and _sha(p) == listed[os.path.normpath(p)]:
+            files[n] = p
+    if os.path.normpath(e["compare"]["path"]) != os.path.normpath(sums.parent / "cmp.json"):
+        out.append(f"{what}: the compare is not the seal's cmp.json")
+    out += row_file_problems(g, have, what)
+    out += code_id_problems(e, listed, read, git_dir, what)
+    if have["header"] is not None:
+        out += _quick_header_problems(g, have["header"], work, chip, what)
+    if len(files) != len(QUICK_FILES):
+        return out
+    tag, runs = f"{g['repo']}:{g['tag']}", []
+    for i in range(QUICK_RUNS):
+        try:
+            run = json.loads(files[f"run{i}.json"].read_text())
+        except ValueError:
+            return out + [f"{what}: run{i}.json is not JSON"]
+        runs.append(run)
+        argv, env = [str(x) for x in run.get("argv") or []], run.get("env")
+        prompt = files[f"prompt{i}.txt"].read_text()
+        if argv != ["run", tag, "--prompt", prompt, "--max-tokens", str(QUICK_TOKENS), "--temperature", "0"]:
+            out.append(f"{what}: run{i} ran `mashbox {' '.join(argv)}`; a quick-check run is `mashbox run {tag} --prompt "
+                       f"<prompt{i}.txt> --max-tokens {QUICK_TOKENS} --temperature 0`")
+        if env:
+            out.append(f"{what}: run{i} ran with {' '.join(f'{k}={v}' for k, v in sorted(dict(env).items()))}; a "
+                       "quick-check run sets no MASHBOX_ variable")
+        calls = run.get("generate_calls") or []
+        ids = (calls[0].get("ids") or [[]])[0] if len(calls) == 1 else []
+        rc = files[f"run{i}.rc"].read_text().split()[:1]
+        if (rc != ["0"] or run.get("rc") not in (0, None) or run.get("error") is not None or len(calls) != 1 or not ids
+                or not files[f"run{i}.stdout"].read_text().strip()):
+            out.append(f"{what}: run{i} did not load and print (exit {rc}, rc {run.get('rc')}, error "
+                       f"{run.get('error')!r}, {len(calls)} generate calls, {len(ids)} ids)")
+        ev = _quick_events(files[f"run{i}.stderr"].read_text())
+        gf, gi, gp, w = (next(iter(ev.get(k) or []), {}) for k in ("gguf_file", "gguf_identity", "gguf_plan", "weights"))
+        if (gf.get("repo"), gf.get("file"), gf.get("revision")) != (g["repo"], g["file"], g["revision"]):
+            out.append(f"{what}: run{i} resolved {gf.get('repo')} {gf.get('file')} @ {gf.get('revision')}, the row is "
+                       f"{g['repo']} {g['file']} @ {g['revision']}")
+        if gi.get("sha256") != g["sha256"]:
+            out.append(f"{what}: run{i} read a file of sha256 {gi.get('sha256')}, the row's is {g['sha256']}")
+        if gp.get("arch") != g["arch"]:
+            out.append(f"{what}: run{i} ran it as {gp.get('arch')}, the row says {g['arch']}")
+        if gp.get("kernel_types") != []:
+            out.append(f"{what}: kernel_path exact, and run{i} ran kernel types {gp.get('kernel_types')}")
+        if w.get("file") != g["file"] or w.get("kernel_bytes") != 0:
+            out.append(f"{what}: kernel_path exact, and run{i} ran {w.get('kernel_bytes')} bytes on a kernel "
+                       f"({w.get('file')})")
+    setup = files["setup.log"].read_text()
+    acc = files["accelerator-type.txt"].read_text().strip()
+    if acc != r.get("accelerator"):
+        out.append(f"{what}: accelerator {r.get('accelerator')}, the chip says {acc}")
+    devs = QUICK_DEVICE_RE.findall(setup)
+    dev = devs[-1].strip() if devs else None
+    if DEVICE_CHIP.get(dev) != chip or not str(r.get("accelerator")).startswith(f"{chip}-"):
+        out.append(f"{what}: the run's device is {dev}, the row is {chip} {r.get('accelerator')}")
+    v = {k.lower().replace("-", "_"): x for k, x in re.findall(r"^([A-Za-z0-9_.-]+)==(\S+)$",
+                                                             files["freeze.txt"].read_text(), re.M)}
+    py = re.search(r"^Using CPython (\S+)", setup, re.M)
+    if py:
+        v["python"] = py.group(1)
+    krow = next((k for k in kernels if chip in (k.get("chips") or [])), None)
+    out += pins_problems({"versions": v}, krow, repo, chip, what, exact=True)
+    built = files["CODE_SHA"].read_text().split()[:1]
+    if built != [e["code"]["commit"]]:
+        out.append(f"{what}: the wheel was built from {built[0] if built else None}, the evidence names "
+                   f"{e['code']['commit']}")
+    cmp = have["compare"]
+    rows = cmp.get("rows") if isinstance(cmp, dict) else None
+    if not isinstance(rows, list) or [x.get("i") for x in rows] != list(range(QUICK_RUNS)):
+        out.append(f"{what}: the compare has no row per run (0-{QUICK_RUNS - 1})")
+    else:
+        ok, full, near, other = 0, 0, 0, 0
+        for i, (x, run) in enumerate(zip(rows, runs)):
+            calls = run.get("generate_calls") or [{}]
+            c = calls[0] if len(calls) == 1 else {}
+            pid, ours, stop = (c.get("prompt_ids") or [[]])[0], (c.get("ids") or [[]])[0], set(c.get("stop_ids") or [])
+            a, _, b = files[f"ref{i}.ids"].read_text().partition("\n\n")
+            rp, rg = [int(t) for t in a.split()], [int(t) for t in b.split()]
+            if x.get("ids_ours") != ours or x.get("ids_prompt") != pid:
+                out.append(f"{what}: compare row {i} is not run{i}'s ids")
+            if rp != pid:
+                out.append(f"{what}: prompt {i}: llama.cpp ran other prompt ids than the chip")
+            k = quick_check_first_diff(ours, rg, stop)
+            if x.get("first_diff") != k:
+                out.append(f"{what}: prompt {i}: the compare says first difference {x.get('first_diff')}, the sealed ids "
+                           f"give {k}")
+            gap = x.get("ref_gap")
+            if k is None:
+                full += 1
+            elif isinstance(gap, (int, float)) and not isinstance(gap, bool) and gap < NEAR_TIE_GAP:
+                near += 1
+            else:
+                other += 1
+            ok += not any(f"run{i} did not load and print" in y for y in out)
+        s = cmp.get("summary") or {}
+        said = (s.get("runs_ok"), s.get("full"), s.get("near"), s.get("other"))
+        if said != (ok, full, near, other):
+            out.append(f"{what}: the compare's rows give runs {ok} / full {full} / near {near} / other {other}, its "
+                       f"summary says {said[0]} / {said[1]} / {said[2]} / {said[3]}")
+        if r.get("status") == "passing" and (ok != QUICK_RUNS or other):
+            out.append(f"{what}: passing needs {QUICK_RUNS}/{QUICK_RUNS} runs that load and print and 0 other divergences; "
+                       f"the sealed runs give {ok} and {other} other divergence{'s' * (other != 1)}")
+    measured = r.get("measured") or {}
+    if sorted(measured) != list(QUICK_MEASURED):
+        out.append(f"{what}: a quick-check run measures decode_tok_s_1_user only; measured has {sorted(measured)}")
+    try:
+        got = quick_check_decode(runs)
+    except (KeyError, IndexError, TypeError, ZeroDivisionError):
+        out.append(f"{what}: runs 1-3 have no decode timing")
+    else:
+        if measured.get("decode_tok_s_1_user") != got:
+            out.append(f"{what}: models.json says {measured.get('decode_tok_s_1_user')}, the sealed runs 1-3 give {got}")
+    if git_dir:
+        out += code_problems(repo, git_dir, e["code"]["commit"], g["arch"], what, kernels, chip)
     return out
 
 
@@ -2054,6 +2383,129 @@ def test_record_guard_keeps_a_row_when_a_code_set_member_differs_only_in_a_comme
     reg, ev = _fake_records(tmp_path, _code(member, lambda b: b + b"\n# a comment, no code\n"))
     found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
     assert not any(f"{member} differs" in x for x in found), found
+
+
+# The sealed equivalence (MAIN's code-set ruling, 2026-10-29 23:2xZ part 2): a code-set file that differs as code from the
+# code a chip record ran stands only when equiv.py ran the record's own 16 prompt ids on the record's code (A) and on a
+# later commit (C) whose file is this tree's, same file, same machine, zero flags, and every id came out the same at
+# 1 user and at 8 users.
+EQUIV_FILES = ("src/mashbox/cli.py", "src/mashbox/tpu/__init__.py", "src/mashbox/catalog.py")
+
+
+def _show(d, commit, f):
+    r = subprocess.run(["git", "-C", str(d), "show", f"{commit}:{f}"], capture_output=True)
+    return r.stdout if r.returncode == 0 else None
+
+
+def _equivalence(base, members=EQUIV_FILES, edit=None):
+    """A chip row whose record ran code A (each of members with one statement more than this tree; the record's seal
+    lists its ids-row.json) and a sealed equivalence of it: equiv.py's runs of A and of C (a later commit of the same
+    code repo whose members are this tree's) on the record's 16 prompt ids at 1 user and 8 users, every id the same.
+    edit(part, value) changes a part before it is written: "c_code" ({path: bytes} of commit C), "ids" (the
+    equivalence's ids file, bytes), "a", "c" (the run jsons), "seal" (lines), then "ev". Returns (reg, ev)."""
+    edit = edit or (lambda part, v: v)
+    reg, ev = _fake_records(base, _set("code", lambda c: c.update(
+        {m: c.get(m, (ROOT / m).read_bytes()) + b"\n_guard_probe = 1\n" for m in members})))
+    root, row = Path(ev["records_root"]), reg["gguf"][0]
+    e, code = ev["gguf"][row["id"]]["v6e"], Path(ev["code_repo"])
+    a_commit = e["code"]["commit"]
+    for f, data in edit("c_code", {m: (ROOT / m).read_bytes() for m in members}).items():
+        (code / f).parent.mkdir(parents=True, exist_ok=True)
+        (code / f).write_bytes(data)
+    c_commit = _commit(code)
+    prompts = [f"prompt {i}" for i in range(16)]
+    ids = json.dumps({"file": row["file"], "prompts": prompts, "ids": [[1, 2, 3 + i] for i in range(16)],
+                      "stop_ids": [2]}).encode()
+    (root / "row" / "ids-row.json").write_bytes(ids)
+    with open(root / "row" / "SHA256SUMS", "a") as fh:
+        fh.write(f"{_sha(root / 'row' / 'ids-row.json')}  ids-row.json\n")
+    e["sha256sums"]["sha256"] = _sha(root / "row" / "SHA256SUMS")
+    out = [[(i * 131 + j * 7) % 50000 for j in range(64)] for i in range(16)]
+
+    def run(commit, tree):
+        files = {f: (lambda b: None if b is None else hashlib.sha256(b).hexdigest())(_show(code, commit, f))
+                 for f in EQUIV_FILES}
+        return {"src": f"/equiv/tree-{tree}", "commit": commit, "file": row["file"], "file_sha256": row["sha256"],
+                "N": 64, "slots": 8, "group": 8, "jax": "0.11.2", "device": "cpu", "host": "build", "env": {},
+                "ready_s": 1.0, "ids_chat_equal_sealed": True, "code_files": files, "one": copy.deepcopy(out),
+                "eight": copy.deepcopy(out), "utc_end": "2026-10-30T01:00:00Z"}
+    q = root / "equiv"
+    (q / "in").mkdir(parents=True)
+    (q / "out").mkdir()
+    (q / "in" / "ids-row.json").write_bytes(edit("ids", ids))
+    (q / "out" / "row-A.json").write_text(json.dumps(edit("a", run(a_commit, "A"))))
+    (q / "out" / "row-C.json").write_text(json.dumps(edit("c", run(c_commit, "C"))))
+    names = ("in/ids-row.json", "out/row-A.json", "out/row-C.json")
+    (q / "SHA256SUMS").write_text("\n".join(edit("seal", [f"{_sha(q / n)}  {n}" for n in names])) + "\n")
+
+    def src(n):
+        return {"path": str(q / n), "sha256": _sha(q / n)}
+    e["equivalence"] = [{"sha256sums": src("SHA256SUMS"), "ids": src(names[0]), "a": src(names[1]),
+                         "c": src(names[2])}]
+    return reg, edit("ev", ev)
+
+
+def _differs(found, f):
+    return [x for x in found if f"{f} differs from the code the record ran" in x]
+
+
+def test_record_guard_keeps_a_row_whose_differing_code_set_files_have_a_sealed_equivalence(tmp_path):
+    reg, ev = _equivalence(tmp_path)
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+def test_without_an_equivalence_every_differing_code_set_file_stays_a_problem(tmp_path):
+    reg, ev = _equivalence(tmp_path, edit=_in_place("ev", lambda ev: [x["v6e"].pop("equivalence")
+                                                                     for x in ev["gguf"].values()]))
+    found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert all(_differs(found, f) for f in EQUIV_FILES) and len(found) == 3, found
+
+
+def _bump(key, i, j=0):
+    return lambda r: r[key][i].__setitem__(j, r[key][i][j] + 1)
+
+
+EQUIV_BAD = {
+    "one id differs at 1 user": (_set("c", _bump("one", 3, 10)), "ids differ between run A and run C at 1 user "
+                                                               "for prompts [3]"),
+    "one id differs at 8 users": (_set("c", _bump("eight", 5)), "ids differ between run A and run C at 8 users "
+                                                              "for prompts [5]"),
+    "15 prompts": (_both(*(_in_place(t, lambda r: [r[k].pop() for k in ("one", "eight")]) for t in ("a", "c"))),
+                   "run A has 15 prompts at 1 user, not 16"),
+    "ids file is not the record's": (_set("ids", lambda b: b.replace(b"[1, 2, 3]", b"[1, 2, 4]")),
+                                     "prompt ids are not the record's (ids-row.json)"),
+    "run A is not the record's commit": (_set("a", lambda r: r.__setitem__("commit", "e" * 40)),
+                                         "run A ran eeeeeeeeeeee, the record ran"),
+    "a code_files hash is not its commit's": (
+        _set("a", lambda r: r["code_files"].__setitem__("src/mashbox/cli.py", "0" * 64)),
+        "run A's src/mashbox/cli.py is not the code of its commit"),
+    "another file": (_set("c", lambda r: r.__setitem__("file_sha256", "e" * 64)),
+                     "run C ran another file than the row's"),
+    "env set": (_set("c", lambda r: r.__setitem__("env", {"MASHBOX_GGUF_KERNELS": "off"})),
+                "run C ran with MASHBOX_GGUF_KERNELS=off"),
+    "another machine": (_set("c", lambda r: r.__setitem__("host", "other")), "runs A and C differ in host"),
+    "fewer than 64 tokens": (_both(*(_set(t, lambda r: r.__setitem__("N", 32)) for t in ("a", "c"))),
+                             "the runs decoded 32 tokens, fewer than 64"),
+    "not in the seal": (_set("seal", lambda lines: lines[:2]), "out/row-C.json is not in SHA256SUMS with its sha256"),
+}
+
+
+@pytest.mark.parametrize("form", sorted(EQUIV_BAD))
+def test_record_guard_names_each_bad_equivalence_and_keeps_the_differing_files(tmp_path, form):
+    """a bad equivalence is named, and accepts nothing: every differing code-set file stays a problem"""
+    reg, ev = _equivalence(tmp_path, edit=EQUIV_BAD[form][0])
+    found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(EQUIV_BAD[form][1] in x for x in found), found
+    assert all(_differs(found, f) for f in EQUIV_FILES), found
+
+
+def test_an_equivalence_accepts_a_file_only_where_this_tree_holds_the_code_it_ran(tmp_path):
+    """C's cli.py is neither A's nor this tree's: cli.py stays a problem (named with C), the other two are accepted"""
+    reg, ev = _equivalence(tmp_path, edit=_set("c_code", lambda c: c.__setitem__(
+        "src/mashbox/cli.py", c["src/mashbox/cli.py"] + b"\n_other = 2\n")))
+    found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert [x for x in found if "differs" in x] == _differs(found, "src/mashbox/cli.py") and len(found) == 1, found
+    assert "and from the code of the equivalence's run C" in found[0], found
 
 
 def test_the_code_set_is_the_reviewed_v1_and_names_only_files_of_this_tree():
@@ -3247,3 +3699,244 @@ def test_the_org_profile_chips_cell_names_the_cpu_first_for_a_model_that_runs_on
         else:
             assert "CPU" not in chips.split(", "), row
     assert seen
+
+
+# ---------------------------------------------------------------- quick-check chip record (record_kind "quick-check")
+# A row's chip says "passing" from a quick-check run: four `mashbox run REPO:TAG --prompt P --max-tokens 64
+# --temperature 0` runs with zero engine flags, each compared with llama.cpp's greedy ids on the same templated prompt.
+# It measures one number (decode tok/s, 1 user) and records no ctx, no slots and no 8-user number, so its row has none.
+
+QUICK_PROMPTS = ["The capital of France is Paris. The capital of Japan is",
+              'def fibonacci(n):\n    """Return the n-th Fibonacci number."""\n',
+              "Translate to German: The weather is nice.\nGerman:", "Question: What is 17 times 23?\nAnswer:"]
+QUICK_STOP = [7, 8]
+# (new tokens, decode seconds) per run; run 0 holds the first compile, so the row's number is runs 1-3:
+# (64 + 14 + 64) / (4.0 + 1.6 + 4.4) = 14.2
+QUICK_TIMING = [(3, 100.0), (64, 4.0), (14, 1.6), (64, 4.4)]
+QUICK_DECODE = 14.2
+
+
+def _quick_ids(i):
+    """(prompt ids, ours, llama.cpp's generated ids) of run i: run 0 and 2 stop on a stop id llama.cpp also picks; run 3
+    meets llama.cpp's near tie at step 31"""
+    pid = [1, 2, 3, 40 + i]
+    n = QUICK_TIMING[i][0]
+    ours = [100 + i * 100 + s for s in range(n - 1)] + [QUICK_STOP[0]] if n < 64 else [100 + i * 100 + s for s in range(64)]
+    ref = list(ours) + [9] * (64 - len(ours))
+    if i == 3:
+        ref[31] = 5
+    return pid, ours, ref
+
+
+def _fake_quick_check(base, edit=None):
+    """A records root under base with one quick-check chip run of the qwen3-kquant fixture: the four runs (json, exit
+    code, stdout, stderr events), the compare, llama.cpp's ids, the prompts, the chip's setup log, pip freeze,
+    accelerator type and code commit, the file/plan/card/header of the row, one SHA256SUMS seal, and the git repo of the
+    code it ran. edit(part, value) changes a part before it is written ("run0".."run3", "rc0".., "stderr0"..,
+    "cmp", "setup", "freeze", "accelerator", "code_sha", "prompt0".., "ref0".., "seal" (lines), "row", "reg", "ev")."""
+    edit = edit or (lambda part, v: v)
+    root = base / "records"
+    d = root / "p1row"
+    d.mkdir(parents=True)
+    from mashbox.gguf import File
+    fx = File(str(FIXTURE))
+    code = {f: (ROOT / f).read_bytes() for f in gguf_code_files(ROOT, fx.arch) + [ARCHS_SRC]}
+    code["models.json"] = json.dumps({"engine_kernels": []}).encode()
+    code["pyproject.toml"] = (ROOT / "pyproject.toml").read_bytes()
+    for f, data in code.items():
+        (root / "code" / f).parent.mkdir(parents=True, exist_ok=True)
+        (root / "code" / f).write_bytes(data)
+    commit = _commit(root / "code")
+    row = edit("row", dict(ROW, arch=fx.arch, bytes=FIXTURE.stat().st_size, types=sorted(fx.census()[0]), chips={
+        "v6e": {"status": "passing", "accelerator": "v6e-1", "kernel_path": "exact", "record_kind": "quick-check",
+                "measured": {"decode_tok_s_1_user": QUICK_DECODE}}}))
+    tag = f"{row['repo']}:{row['tag']}"
+    parts, rows = {}, []
+    for i in range(4):
+        pid, ours, ref = _quick_ids(i)
+        n, dec = QUICK_TIMING[i]
+        parts[f"prompt{i}"] = QUICK_PROMPTS[i]
+        parts[f"run{i}"] = {"argv": ["run", tag, "--prompt", QUICK_PROMPTS[i], "--max-tokens", "64", "--temperature", "0"],
+                            "env": {}, "rc": None, "error": None, "wall_s": dec + 12.0, "generate_calls": [{
+                                "call_start_s": 11.0, "call_end_s": 11.0 + dec, "prompt_ids": [pid], "ids": [ours],
+                                "timing": {"prefill_s": 0.5, "decode_s": dec, "decode_calls": 9, "new_tokens": n,
+                                           "sampled": False}, "max_new": 64, "stop_ids": QUICK_STOP, "samp": None}]}
+        parts[f"rc{i}"] = f"0 {dec + 12.5}\n"
+        parts[f"stdout{i}"] = "some text\n"
+        parts[f"stderr{i}"] = "\n".join(json.dumps(x) for x in (
+            {"event": "gguf_file", "repo": row["repo"], "file": row["file"], "shards": 1, "gb": 0.0,
+             "revision": row["revision"], "rule": f"tag {row['tag']}"},
+            {"event": "gguf_plan", "arch": row["arch"], "layers": 2, "kernel_types": [], "reference_share": 99.9,
+             "chip": None},
+            {"event": "weights", "file": row["file"], "kernel_bytes": 0, "reference_bytes": 1000},
+            {"event": "gguf_identity", "sha256": row["sha256"], "shards": 1},
+            {"event": "done", "new_tokens": n, "prefill_s": 0.5, "decode_s": dec})) + "\n"
+        parts[f"ref{i}"] = " ".join(map(str, pid)) + "\n\n" + " ".join(map(str, ref)) + "\n"
+        k = 31 if i == 3 else None
+        rows.append({"i": i, "rc": None, "process_rc": 0, "wall_s": dec + 12.5, "error": None, "printed_chars": 9,
+                     "generate_calls": 1, "loads_and_prints": True, "ids_prompt": pid, "ids_ours": ours,
+                     "ids_ref": ref, "ref_prompt_equal": True, "compared": len(ours), "first_diff": k,
+                     "ref_gap": 0.21 if k is not None else None, "near_tie": k is not None,
+                     "kind": "near" if k is not None else "full"})
+    parts["cmp"] = {"summary": {"runs_ok": 4, "full": 3, "near": 1, "other": 0, "PASS": True},
+                    "bar": "64 greedy tokens vs llama.cpp", "rows": rows}
+    parts["setup"] = ("Using CPython 3.12.12\nCreating virtual environment\nsetup rc 0\n"
+                      "0.1.5 0.11.2 0.0.48.1 TPU v6 lite\n")
+    parts["freeze"] = "".join(f"{k}=={v}\n" for k, v in (
+        ("gguf", "0.19.0"), ("jax", "0.11.2"), ("jaxlib", "0.11.2"), ("jinja2", "3.1.6"), ("libtpu", "0.0.48.1"),
+        ("numpy", "2.5.4"), ("tokenizers", "0.23.3"))) + "mashbox @ file:///k/wheel/mashbox-0.1.5-py3-none-any.whl\n"
+    parts["accelerator"] = "v6e-1"
+    parts["code_sha"] = commit + "\n"
+    parts["cmp_p1"] = "# the compare tool\n"
+    parts["card"] = {"id": row["repo"], "sha": row["revision"], "cardData": {
+        "license": row["license"], "license_link": row["license_link"], "base_model": row["base"]}}
+    parts["file"] = f"{row['sha256']}  {row['file']}\n{row['bytes']}\n"
+    parts["plan"] = f"{row['repo']} {row['revision']} {row['file']} {row['sha256']}\n"
+    parts["header"] = _header(FIXTURE)
+    names = {**{f"{x}{i}": f"{y}{i}{z}" for i in range(4) for x, y, z in (
+        ("run", "run", ".json"), ("rc", "run", ".rc"), ("stdout", "run", ".stdout"), ("stderr", "run", ".stderr"),
+        ("prompt", "prompt", ".txt"), ("ref", "ref", ".ids"))},
+             "cmp": "cmp.json", "setup": "setup.log", "freeze": "freeze.txt", "accelerator": "accelerator-type.txt",
+             "code_sha": "CODE_SHA", "cmp_p1": "cmp_p1.py", "card": "card-api.json", "file": "file-row.sha256",
+             "plan": "plan-row.txt", "header": "header-row.gguf"}
+    for k, n in names.items():
+        v = edit(k, parts[k])
+        if isinstance(v, bytes):
+            (d / n).write_bytes(v)
+        else:
+            (d / n).write_text(v if isinstance(v, str) else json.dumps(v))
+    seal = edit("seal", [f"{_sha(d / n)}  {n}" for n in names.values()])
+    (d / "SHA256SUMS").write_text("\n".join(seal) + "\n")
+
+    def src(n):
+        return {"path": str(d / n), "sha256": _sha(d / n)}
+    ev = {"records_root": str(root), "code_repo": str(root / "code"), "models": {}, "engine_kernels": {},
+          "gguf": {row["id"]: {"v6e": {
+              "kind": "quick-check", "sha256sums": src("SHA256SUMS"), "compare": src("cmp.json"),
+              "file": src("file-row.sha256"), "plan": src("plan-row.txt"), "card": src("card-api.json"),
+              "header": src("header-row.gguf"), "code": {"commit": commit}}}}}
+    reg = copy.deepcopy(REG)
+    reg["gguf"], reg["engine_kernels"], reg["models"] = [row], [], []
+    return edit("reg", reg), edit("ev", ev)
+
+
+def _quick_cmp_other(c):
+    """the compare says prompt 2 diverged at step 5 with llama.cpp's gap 1.5 (an other divergence); the summary agrees"""
+    c["rows"][2].update(first_diff=5, ref_gap=1.5, near_tie=False, kind="other")
+    c["summary"].update(full=2, other=1, PASS=False)
+
+
+def _quick_ref_differs(v):
+    """llama.cpp's sealed ids for prompt 2 differ from ours at step 5"""
+    a, b = v.split("\n\n")
+    ids = b.split()
+    ids[5] = "6"
+    return a + "\n\n" + " ".join(ids) + "\n"
+
+
+def _quick_stderr(i, fn):
+    """an edit of run i's stderr: fn(event dict) on every event line"""
+    def change(v):
+        out = []
+        for line in v.splitlines():
+            x = json.loads(line)
+            fn(x)
+            out.append(json.dumps(x))
+        return "\n".join(out) + "\n"
+    return _set(f"stderr{i}", change)
+
+
+def _quick_row(fn):
+    return _in_place("row", lambda r: fn(r["chips"]["v6e"]))
+
+
+QUICK_BAD = {
+    "a flag": (_in_place("run1", lambda v: v["argv"].extend(["--ctx", "4096"])),
+               "run1 ran `mashbox run someone/Tiny-Qwen3-GGUF:Q4_K_M --prompt"),
+    "another prompt": (_set("prompt2", lambda v: v + " Please."), "run2 ran `mashbox run"),
+    "a local file": (_in_place("run0", lambda v: v["argv"].__setitem__(1, "/models/Tiny-Qwen3-Q4_K_M.gguf")),
+                     "run0 ran `mashbox run /models/"),
+    "env": (_in_place("run3", lambda v: v["env"].update(MASHBOX_GGUF_KERNELS="off")),
+            "run3 ran with MASHBOX_GGUF_KERNELS=off"),
+    "exit code": (_set("rc2", lambda v: "1 13.0\n"), "run2 did not load and print"),
+    "error": (_in_place("run1", lambda v: v.__setitem__("error", "boom")), "run1 did not load and print"),
+    "nothing printed": (_set("stdout0", lambda v: "\n"), "run0 did not load and print"),
+    "other divergence, said": (_both(_set("ref2", _quick_ref_differs), _in_place("cmp", _quick_cmp_other)),
+                               "1 other divergence"),
+    "other divergence, hidden": (_set("ref2", _quick_ref_differs), "prompt 2: the compare says first difference None, "
+                                                                "the sealed ids give 5"),
+    "summary": (_in_place("cmp", lambda c: c["summary"].update(full=4, near=0)), "its summary says"),
+    "compare of other ids": (_in_place("cmp", lambda c: c["rows"][1]["ids_ours"].__setitem__(0, 1)),
+                             "compare row 1 is not run1's ids"),
+    "sha256": (_quick_stderr(1, lambda x: x.update(sha256="b" * 64) if x["event"] == "gguf_identity" else None),
+               f"run1 read a file of sha256 {'b' * 64}"),
+    "revision": (_quick_stderr(0, lambda x: x.update(revision="1" * 40) if x["event"] == "gguf_file" else None),
+                 "run0 resolved someone/Tiny-Qwen3-GGUF Tiny-Qwen3-Q4_K_M.gguf @ 1111"),
+    "kernel types": (_quick_stderr(2, lambda x: x.update(kernel_types=["Q4_K"]) if x["event"] == "gguf_plan" else None),
+                     "kernel_path exact, and run2 ran kernel types ['Q4_K']"),
+    "kernel bytes": (_quick_stderr(2, lambda x: x.update(kernel_bytes=5) if x["event"] == "weights" else None),
+                     "kernel_path exact, and run2 ran 5 bytes on a kernel"),
+    "arch": (_quick_stderr(3, lambda x: x.update(arch="llama") if x["event"] == "gguf_plan" else None),
+             "run3 ran it as llama"),
+    "version": (_set("freeze", lambda v: v.replace("jinja2==3.1.6", "jinja2==3.1.5")),
+                "the record ran jinja2 3.1.5, this tree pins 3.1.6"),
+    "no python": (_set("setup", lambda v: v.replace("Using CPython 3.12.12\n", "")),
+                  "the record's versions have no python"),
+    "decode number": (_quick_row(lambda r: r["measured"].update(decode_tok_s_1_user=15.0)),
+                      "models.json says 15.0, the sealed runs 1-3 give 14.2"),
+    "decode timing": (_in_place("run2", lambda v: v["generate_calls"][0]["timing"].update(decode_s=2.6)),
+                      "models.json says 14.2, the sealed runs 1-3 give 12.91"),
+    "a typed number": (_quick_row(lambda r: r["measured"].update(decode_tok_s_8_users=120.0)),
+                       "measures decode_tok_s_1_user only"),
+    "not sealed": (_set("seal", lambda v: [x for x in v if not x.endswith("setup.log")]), "setup.log is not in SHA256SUMS"),
+    "seal sha256": (_set("seal", lambda v: [("0" * 64 + x[64:]) if x.endswith("freeze.txt") else x for x in v]),
+                    "freeze.txt sha256 differs from its seal line"),
+    "accelerator": (_set("accelerator", lambda v: "v6e-4"), "accelerator v6e-1, the chip says v6e-4"),
+    "device": (_set("setup", lambda v: v.replace("TPU v6 lite", "TPU v5 lite")), "the run's device is TPU v5 lite"),
+    "code": (_set("code_sha", lambda v: "c" * 40 + "\n"), f"the wheel was built from {'c' * 40}"),
+    "ctx on the row": (_quick_row(lambda r: r.update(ctx=2048)), "a quick-check run records no ctx or slots"),
+    "no record_kind on the row": (_quick_row(lambda r: r.pop("record_kind")), "(a quick-check record), and the row's "
+                                                                           "record_kind is None"),
+    "header types": (_in_place("row", lambda r: r.__setitem__("types", ["F32", "Q4_K"])),
+                     "the sealed header's block types are"),
+    "file": (_set("file", lambda v: v.split("\n")[0] + "\n999\n"), "file-row.sha256 names another file"),
+}
+
+
+def test_record_guard_holds_a_quick_check_row(tmp_path):
+    reg, ev = _fake_quick_check(tmp_path)
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+@pytest.mark.parametrize("form", sorted(QUICK_BAD))
+def test_record_guard_names_each_bad_quick_check_form(tmp_path, form):
+    edit, want = QUICK_BAD[form]
+    reg, ev = _fake_quick_check(tmp_path, edit)
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(want in x for x in got), got
+
+
+def test_a_run3_row_still_needs_its_ctx_and_slots(tmp_path):
+    """the run3 path is unchanged: a row without record_kind and without ctx is refused by the schema"""
+    row = dict(ROW, chips={"v6e": {k: v for k, v in ROW["chips"]["v6e"].items() if k != "ctx"}})
+    assert any("chips.v6e needs" in x for x in problems(with_row(row)))
+
+
+def test_the_schema_holds_a_quick_check_row_to_what_it_measured():
+    qc = {"status": "passing", "accelerator": "v6e-1", "kernel_path": "exact", "record_kind": "quick-check",
+          "measured": {"decode_tok_s_1_user": 14.2}}
+    assert problems(with_row(dict(ROW, chips={"v6e": qc}))) == []
+    bad = {
+        "ctx": (dict(qc, ctx=2048), "records no ctx or slots"),
+        "slots": (dict(qc, slots=8), "records no ctx or slots"),
+        "8 users": (dict(qc, measured={"decode_tok_s_1_user": 14.2, "decode_tok_s_8_users": 99.0}),
+                    "measures decode_tok_s_1_user only"),
+        "bundle": (dict(qc, kernel_path="bundle"), "kernel_path exact"),
+        "kind": (dict(qc, record_kind="other"), "record_kind must be one of"),
+        "no measured": ({k: v for k, v in qc.items() if k != "measured"}, "chips.v6e needs"),
+    }
+    for name, (chip, want) in bad.items():
+        got = problems(with_row(dict(ROW, chips={"v6e": chip})))
+        assert any(want in x for x in got), (name, got)
+    rendered = catalog.tpu_line(dict(ROW, chips={"v6e": qc}))
+    assert rendered == "Runs on: TPU v6e-1" and "ctx" not in rendered and "slot" not in rendered

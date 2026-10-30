@@ -310,6 +310,11 @@ KERNELS_FILE_RE = re.compile(r"^mashbox_engine_kernels-[0-9A-Za-z_.+-]+\.whl$")
 GGUF_KEYS = ("id", "model", "publisher", "family", "maker", "repo", "revision", "file", "tag", "sha256", "bytes", "arch", "moe", "params_b",
              "types", "license", "license_link", "base", "in", "out", "run", "experimental", "chips")
 GGUF_CHIP_KEYS = ("status", "accelerator", "ctx", "slots", "kernel_path", "measured")
+# a quick-check chip run (record_kind "quick-check": four zero-flag `mashbox run REPO:TAG --prompt P --max-tokens 64
+# --temperature 0` runs compared with llama.cpp) measures decode tok/s at 1 user on the exact path, nothing else
+GGUF_QUICK_KEYS = ("status", "accelerator", "kernel_path", "measured", "record_kind")
+RECORD_KINDS = ("quick-check",)
+QUICK_MEASURED = ("decode_tok_s_1_user",)
 UNQUANTIZED = ("F32", "F16", "BF16")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -468,27 +473,30 @@ def validate_catalog(reg, problems):
                                     "beside a passing one), or from a passing CPU check (cpu_check status passing) with "
                                     "every chip pending and its not_run_reason")
         for ch in pending:
+            # a not-run chip holds status and not_run_reason only: a row shows a speed only when measured on that exact
+            # file, so no smoke from another row (same architecture or not) and nothing measured
             r = chips[ch]
-            if not str(r.get("not_run_reason") or "").strip() or set(r) - {"status", "not_run_reason", "smoke"}:
-                problems.add(where, f"chips.{ch}: a pending chip holds its not_run_reason (never empty) and at most the "
-                                    "smoke that covers it, nothing measured")
-            sm = r.get("smoke")
-            if sm is not None:
-                src = next((x for x in reg["gguf"] if x.get("id") == (sm or {}).get("row")), None)
-                run = ((src or {}).get("chips") or {}).get(ch) or {}
-                if (src is None or run.get("status") != "passing" or src["arch"] != g["arch"]
-                        or not {t for t in g["types"] if t not in UNQUANTIZED} <= set(src["types"])
-                        or sm.get("accelerator") != run.get("accelerator")
-                        or sm.get("decode_tok_s_1_user") != (run.get("measured") or {}).get("decode_tok_s_1_user")):
-                    problems.add(where, f"chips.{ch}.smoke must name a row with a passing {ch} run of the same "
-                                        "architecture whose types cover this file's, with that run's accelerator and "
-                                        "decode_tok_s_1_user")
+            if not str(r.get("not_run_reason") or "").strip() or set(r) - {"status", "not_run_reason"}:
+                problems.add(where, f"chips.{ch}: a pending chip holds its status and not_run_reason (never empty) only: "
+                                    f"no smoke, nothing measured ({sorted(set(r) - {'status', 'not_run_reason'})})")
         for ch, r in chips.items():
             if ch in pending:
                 continue
-            if not isinstance(r, dict) or any(key not in r for key in GGUF_CHIP_KEYS):
-                problems.add(where, f"chips.{ch} needs {GGUF_CHIP_KEYS}")
+            quick = isinstance(r, dict) and "record_kind" in r
+            keys = GGUF_QUICK_KEYS if quick else GGUF_CHIP_KEYS
+            if not isinstance(r, dict) or any(key not in r for key in keys):
+                problems.add(where, f"chips.{ch} needs {keys}")
                 continue
+            if quick:
+                if r["record_kind"] not in RECORD_KINDS:
+                    problems.add(where, f"chips.{ch}.record_kind must be one of {RECORD_KINDS}")
+                if "ctx" in r or "slots" in r:
+                    problems.add(where, f"chips.{ch}: a quick-check run records no ctx or slots, so its row has none")
+                if r["kernel_path"] != "exact":
+                    problems.add(where, f"chips.{ch}: a quick-check run is the zero-flag run: kernel_path exact")
+                if sorted(r["measured"] or {}) != list(QUICK_MEASURED):
+                    problems.add(where, f"chips.{ch}: a quick-check run measures decode_tok_s_1_user only (1 user, no "
+                                        "8-user number)")
             if r["status"] not in ("passing", "failing"):
                 problems.add(where, f"chips.{ch}.status must be passing or failing (the outcome of the run's record)")
             if r["kernel_path"] not in ("bundle", "exact"):

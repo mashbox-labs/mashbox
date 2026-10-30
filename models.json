@@ -1633,6 +1633,560 @@
           "not_run_reason": "no chip run of this file"
         }
       }
+    },
+    {
+      "id": "qwen-qwen2-5-0-5b-instruct-q4-k-m",
+      "model": "qwen2-5-0-5b-instruct",
+      "publisher": "Qwen",
+      "family": "Qwen2.5-0.5B-Instruct",
+      "maker": "Qwen",
+      "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+      "revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+      "file": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "tag": "q4_k_m",
+      "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+      "bytes": 491400032,
+      "arch": "qwen2",
+      "moe": false,
+      "params_b": {
+        "total": null,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q5_0",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/LICENSE",
+      "base": "Qwen/Qwen2.5-0.5B-Instruct",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 2.6e-11,
+          "top1": "131/131"
+        },
+        "block_path": {
+          "top1": "126/131",
+          "kl": 0.0044
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 3,
+          "near_tie": 1,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 7,
+          "explained": 1
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
+    },
+    {
+      "id": "bartowski-llama-3-2-1b-instruct-q4-k-m",
+      "model": "llama-3-2-1b-instruct",
+      "publisher": "bartowski",
+      "family": "Llama-3.2",
+      "maker": "Meta",
+      "repo": "bartowski/Llama-3.2-1B-Instruct-GGUF",
+      "revision": "067b946cf014b7c697f3654f621d577a3e3afd1c",
+      "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
+      "bytes": 807694464,
+      "arch": "llama",
+      "moe": false,
+      "params_b": {
+        "total": 1.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "llama3.2",
+      "license_link": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/blob/067b946cf014b7c697f3654f621d577a3e3afd1c/README.md",
+      "base": "meta-llama/Llama-3.2-1B-Instruct",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 4.2e-12,
+          "top1": "133/133"
+        },
+        "block_path": {
+          "top1": "130/133",
+          "kl": 0.002
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 3,
+          "near_tie": 1,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 8,
+          "explained": 0
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
+    },
+    {
+      "id": "qwen-qwen2-5-1-5b-instruct-q4-k-m",
+      "model": "qwen2-5-1-5b-instruct",
+      "publisher": "Qwen",
+      "family": "Qwen2.5-1.5B-Instruct",
+      "maker": "Qwen",
+      "repo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
+      "revision": "91cad51170dc346986eccefdc2dd33a9da36ead9",
+      "file": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "tag": "q4_k_m",
+      "sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+      "bytes": 1117320736,
+      "arch": "qwen2",
+      "moe": false,
+      "params_b": {
+        "total": 1.8,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/main/LICENSE",
+      "base": "Qwen/Qwen2.5-1.5B-Instruct",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run Qwen/Qwen2.5-1.5B-Instruct-GGUF:q4_k_m",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 1.2e-11,
+          "top1": "131/131"
+        },
+        "block_path": {
+          "top1": "125/131",
+          "kl": 0.18
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 3,
+          "near_tie": 1,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 7,
+          "explained": 1
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
+    },
+    {
+      "id": "qwen-qwen3-4b-q4-k-m",
+      "model": "qwen3-4b",
+      "publisher": "Qwen",
+      "family": "Qwen3",
+      "maker": "Qwen",
+      "repo": "Qwen/Qwen3-4B-GGUF",
+      "revision": "bc640142c66e1fdd12af0bd68f40445458f3869b",
+      "file": "Qwen3-4B-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
+      "bytes": 2497280256,
+      "arch": "qwen3",
+      "moe": false,
+      "params_b": {
+        "total": 4.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/LICENSE",
+      "base": "Qwen/Qwen3-4B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run Qwen/Qwen3-4B-GGUF:Q4_K_M",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 1.7e-11,
+          "top1": "131/131"
+        },
+        "block_path": {
+          "top1": "129/131",
+          "kl": 0.013
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 4,
+          "near_tie": 0,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 7,
+          "explained": 1
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
+    },
+    {
+      "id": "bartowski-qwen2-5-7b-instruct-q4-k-m",
+      "model": "qwen2-5-7b-instruct",
+      "publisher": "bartowski",
+      "family": "Qwen2.5",
+      "maker": "Qwen",
+      "repo": "bartowski/Qwen2.5-7B-Instruct-GGUF",
+      "revision": "8911e8a47f92bac19d6f5c64a2e2095bd2f7d031",
+      "file": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423",
+      "bytes": 4683074240,
+      "arch": "qwen2",
+      "moe": false,
+      "params_b": {
+        "total": 7.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/LICENSE",
+      "base": "Qwen/Qwen2.5-7B-Instruct",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 1.1e-11,
+          "top1": "131/131"
+        },
+        "block_path": {
+          "top1": "124/131",
+          "kl": 0.0048
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 3,
+          "near_tie": 1,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 7,
+          "explained": 1
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
+    },
+    {
+      "id": "unsloth-qwen3-5-9b-q4-k-m",
+      "model": "qwen3-5-9b",
+      "publisher": "unsloth",
+      "family": "Qwen3.5-9B",
+      "maker": "Qwen",
+      "repo": "unsloth/Qwen3.5-9B-GGUF",
+      "revision": "3885219b6810b007914f3a7950a8d1b469d598a5",
+      "file": "Qwen3.5-9B-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+      "bytes": 5680522464,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 9.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/LICENSE",
+      "base": "Qwen/Qwen3.5-9B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 2e-12,
+          "top1": "135/135"
+        },
+        "block_path": {
+          "top1": "134/135",
+          "kl": 0.0029
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 3,
+          "near_tie": 1,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 8,
+          "explained": 0
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
+    },
+    {
+      "id": "qwen-qwen3-14b-q4-k-m",
+      "model": "qwen3-14b",
+      "publisher": "Qwen",
+      "family": "Qwen3",
+      "maker": "Qwen",
+      "repo": "Qwen/Qwen3-14B-GGUF",
+      "revision": "530227a7d994db8eca5ab5ced2fb692b614357fd",
+      "file": "Qwen3-14B-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0",
+      "bytes": 9001752960,
+      "arch": "qwen3",
+      "moe": false,
+      "params_b": {
+        "total": 14.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen3-14B-GGUF/blob/main/LICENSE",
+      "base": "Qwen/Qwen3-14B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run Qwen/Qwen3-14B-GGUF:Q4_K_M",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 3.3e-12,
+          "top1": "131/131"
+        },
+        "block_path": {
+          "top1": "130/131",
+          "kl": 0.0016
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 4,
+          "near_tie": 0,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 7,
+          "explained": 1
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
+    },
+    {
+      "id": "qwen-qwen2-5-coder-1-5b-instruct-q4-k-m",
+      "model": "qwen2-5-coder-1-5b-instruct",
+      "publisher": "Qwen",
+      "family": "Qwen2.5-Coder",
+      "maker": "Qwen",
+      "repo": "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF",
+      "revision": "f86cb2c1fa58255f8052cc32aeede1b7482d4361",
+      "file": "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
+      "tag": "q4_k_m",
+      "sha256": "cc324af070c2ecbfd324a30884d2f951a7ff756aba85cb811a6ec436933bb046",
+      "bytes": 1117320768,
+      "arch": "qwen2",
+      "moe": false,
+      "params_b": {
+        "total": 1.5,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/blob/main/LICENSE",
+      "base": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF:q4_k_m",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 2.1e-12,
+          "top1": "131/131"
+        },
+        "block_path": {
+          "top1": "124/131",
+          "kl": 0.13
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 3,
+          "near_tie": 1,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 7,
+          "explained": 1
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
+    },
+    {
+      "id": "lmstudio-community-qwen3-5-9b-q4-k-m",
+      "model": "qwen3-5-9b",
+      "publisher": "lmstudio-community",
+      "family": "Qwen_Qwen3.5",
+      "maker": "Qwen",
+      "repo": "lmstudio-community/Qwen3.5-9B-GGUF",
+      "revision": "1379f25c6b505a3fc737bd7818cb09389cf807c1",
+      "file": "Qwen3.5-9B-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "cd76ec205963b3b33350093e6904d9de16c4e666fd104e1f632d25c7f15f2a13",
+      "bytes": 5627044256,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 9.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/blob/1379f25c6b505a3fc737bd7818cb09389cf807c1/README.md",
+      "base": "Qwen/Qwen3.5-9B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M",
+      "experimental": false,
+      "cpu_check": {
+        "status": "passing",
+        "reference": "llama.cpp a37cc46 CPU",
+        "identical_weights": {
+          "nmse": 1.5e-12,
+          "top1": "135/135"
+        },
+        "block_path": {
+          "top1": "134/135",
+          "kl": 0.0044
+        },
+        "greedy": {
+          "prompts": 4,
+          "tokens": 16,
+          "full": 4,
+          "near_tie": 0,
+          "other": 0
+        },
+        "tokenizer": {
+          "texts": 8,
+          "equal": 8,
+          "explained": 0
+        }
+      },
+      "chips": {
+        "v6e": {
+          "status": "pending",
+          "not_run_reason": "no chip run of this file"
+        }
+      }
     }
   ],
   "engine_kernels": []

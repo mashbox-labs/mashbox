@@ -67,7 +67,7 @@ Tested on TPU:
 | **Qwen3.5-0.8B**<br>by Qwen | [Qwen3.5-0.8B-Q8_0.gguf](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/blob/807dfd9a6fadbf703207aac3bfb0b2b3040d077c/Qwen3.5-0.8B-Q8_0.gguf)<br>from ggml-org, 0.83 GB | `qwen35` | Q8_0 | Tested | TPU v6e-1 |
 | **Qwen3.5-4B**<br>by Qwen | [Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/blob/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf)<br>from unsloth, 2.74 GB | `qwen35` | Q4_K_M | Tested | TPU v6e-1 |
 
-[Full catalog](https://mashbox.gg/docs/supported-models): 17 entries: 2 MASHBOX ports, 1 MASHBOX model and 14 GGUF files of 12 models.
+[Full catalog](https://mashbox.gg/docs/supported-models): 26 entries: 2 MASHBOX ports, 1 MASHBOX model and 23 GGUF files of 18 models.
 <!-- models:end -->
 
 Every number names the chip it was measured on; each model's guide has all its results. Options for any model: `~/.local/bin/mashbox run <model> --help`.
