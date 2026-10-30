@@ -7,7 +7,7 @@
   "hf": {
     "org": "mashbox-labs"
   },
-  "version": "0.1.8",
+  "version": "0.1.9",
   "license": "Apache-2.0",
   "company_line": "MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.",
   "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]\"",
@@ -2461,9 +2461,9 @@
   "engine_kernels": [
     {
       "for": "gguf",
-      "file": "mashbox_engine_kernels-0.1.8-py3-none-any.whl",
-      "url": "https://github.com/mashbox-labs/mashbox/releases/download/v0.1.8/mashbox_engine_kernels-0.1.8-py3-none-any.whl",
-      "sha256": "95184cefa99cadf7df5cf185452266c8c1043e480444c0272eaf617c99bed616",
+      "file": "mashbox_engine_kernels-0.1.9-py3-none-any.whl",
+      "url": "https://github.com/mashbox-labs/mashbox/releases/download/v0.1.9/mashbox_engine_kernels-0.1.9-py3-none-any.whl",
+      "sha256": "56b0d2a8fd470a0d68ce744a14a0653ddf132bc2936317d02e555a98afaee178",
       "jax": "0.11.2",
       "libtpu": "0.0.48.*",
       "chips": [
@@ -2474,7 +2474,10 @@
         "IQ4_NL",
         "IQ4_XS",
         "Q3_K",
+        "Q4_0",
+        "Q4_1",
         "Q4_K",
+        "Q5_0",
         "Q5_K",
         "Q6_K",
         "Q8_0"
