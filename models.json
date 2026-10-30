@@ -1692,8 +1692,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 14.63
+          }
         }
       }
     },
@@ -1753,8 +1758,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 8.06
+          }
         }
       }
     },
@@ -1814,8 +1824,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 4.08
+          }
         }
       }
     },
@@ -1875,8 +1890,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 1.75
+          }
         }
       }
     },
@@ -1936,8 +1956,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 1.01
+          }
         }
       }
     },
@@ -1999,8 +2024,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 1.51
+          }
         }
       }
     },
@@ -2060,8 +2090,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 0.71
+          }
         }
       }
     },
@@ -2121,8 +2156,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 4.08
+          }
         }
       }
     },
@@ -2183,8 +2223,13 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick-check",
+          "measured": {
+            "decode_tok_s_1_user": 1.51
+          }
         }
       }
     }
