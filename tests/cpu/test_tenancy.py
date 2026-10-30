@@ -1,10 +1,10 @@
-"""Owner isolation of the prefix cache (skill mashbox-engine-batching A9/A10, certified-base gate B1).
+"""Owner isolation of the prefix cache.
 
 The owner of a cached point is (cache namespace, tenant id, edit variant). The tenant id is an HMAC of the server's cache
 secret and the key's tenant (or the key), never the key's place in the key list; rotating the secret or changing the
-namespace leaves nothing that matches (E49). Another tenant's prompt never hits (B1 canary, E13), a request never copies
-another tenant's slot state on its own admission (E31), the host cache keeps per-tenant floors (E32), a row with
-activation edits never resumes another variant's state (E38), and every resume checks the owner key (IsolationError).
+namespace leaves nothing that matches. Another tenant's prompt never hits (a canary), a request never copies
+another tenant's slot state on its own admission, the host cache keeps per-tenant floors, a row with
+activation edits never resumes another variant's state, and every resume checks the owner key (IsolationError).
 
 The engine runs a stand-in model with the real state layout (K/V per slot and position, a linear-attention state per slot
 that starts from zero at position 0, as the model's forward does), so these run with JAX on CPU in seconds.
@@ -45,7 +45,7 @@ TEN = T.Tenancy(secret=b"s" * 32)
 A, B = TEN.tenant_id("key-a"), TEN.tenant_id("key-b")
 
 
-# ------------------------------------------------------------------------------------------------- tenant id (A10)
+# ------------------------------------------------------------------------------------------------- tenant id
 def test_tenant_id_is_an_hmac_never_the_key_position():
     T.configure()
     h = {"Authorization": "Bearer key-a"}
@@ -64,7 +64,7 @@ def test_key_file_tenants_group_keys():
     assert t.tenant_id("k1") == t.tenant_id("k2") != t.tenant_id("k3")
 
 
-# ------------------------------------------------------------------------------------------------- B1 canary, E13
+# ------------------------------------------------------------------------------------------------- another tenant's prompt never hits (canary)
 def test_canary_another_tenant_never_hits_and_gets_fresh_tokens():
     """Tenant A caches a conversation; tenant B sends A's exact next turn: B gets 0 cached tokens and the tokens B gets
     on a fresh engine, and A's own next turn still hits."""
@@ -79,7 +79,7 @@ def test_canary_another_tenant_never_hits_and_gets_fresh_tokens():
     assert e.stats["other_copy_bytes"] == 0
 
 
-# ------------------------------------------------------------------------------------------------- E31
+# ------------------------------------------------------------------------------------------------- no copy of another tenant's slot state on admission
 def test_admission_never_copies_another_tenants_slot():
     """On one slot, B's request takes the slot that holds A's conversation: nothing of A's is copied to host memory on
     B's path (A's state is dropped). A request of A's own tenant on that slot still saves it, and A comes back restored."""
@@ -104,7 +104,7 @@ def test_admission_never_copies_another_tenants_slot():
     assert run(e, p + ra["ids"] + [7], A)["restored"] == len(p)
 
 
-# ------------------------------------------------------------------------------------------------- E32 floors
+# ------------------------------------------------------------------------------------------------- per-tenant floors in the host cache
 def test_host_cache_floors_keep_a_quiet_tenant():
     """Cap 100 bytes, two tenants: A saves two 20-byte entries (inside its floor of 50), then B saves five. B's own
     oldest entries go; A keeps both."""
@@ -126,7 +126,7 @@ def test_host_cache_floors_keep_a_quiet_tenant():
 
 def test_health_states_the_host_cache_cap_and_evictions():
     """/health carries the host cache cap and its eviction count, so a live gate can size cache pressure from the server
-    and see that evictions happened (CERT B1 floor arm)."""
+    and see that evictions happened."""
     e = engine(S=1, cache_ram=12345)
     h = SV.Server(e, IdChat(), "standin", {}, log=lambda m: None).health()
     assert h["host_cache_cap_bytes"] == 12345 and h["host_cache_evictions"] == 0
@@ -134,7 +134,7 @@ def test_health_states_the_host_cache_cap_and_evictions():
     assert SV.Server(e, IdChat(), "standin", {}, log=lambda m: None).health()["host_cache_evictions"] == 3
 
 
-# ------------------------------------------------------------------------------------------------- E49
+# ------------------------------------------------------------------------------------------------- a new secret or namespace matches nothing
 def test_secret_rotation_and_namespace_change_give_zero_hits():
     t = T.Tenancy(secret=b"r" * 32)
     p = prompts(4)
@@ -161,7 +161,7 @@ def test_namespace_covers_each_field():
     assert T.namespace(**dict(reversed(list(base.items())))) == n0
 
 
-# ------------------------------------------------------------------------------------------------- E38 (CPU part)
+# ------------------------------------------------------------------------------------------------- activation-edit variants (CPU part)
 def test_edit_variant_is_in_the_cache_key():
     p = prompts(5)
     e = engine()
@@ -184,7 +184,7 @@ def test_a_resume_of_another_owner_key_fails_closed():
     assert e.stats["owner_checks"] >= 1
 
 
-# ------------------------------------------------------------------------------------------------- A9 admission order
+# ------------------------------------------------------------------------------------------------- admission order
 class IdChat:
     """Token ids as text: the server path without a tokenizer."""
     stop_ids = ()
@@ -245,7 +245,7 @@ def admitted(warm_c, arrivals):
 
 
 def test_admission_order_does_not_depend_on_another_tenants_cache():
-    """A9 (no content-dependent ordering): the same arrival schedule twice, where the ONLY change is what tenant C has in
+    """No content-dependent ordering: the same arrival schedule twice, where the ONLY change is what tenant C has in
     its cache (prompts x in run 1, other prompts of the same lengths in run 2). In run 1 C's queued request continues x (a
     cache hit is on offer when the engine admits), in run 2 it hits nothing. The engine admits the requests in arrival
     order (first come, first served) and on the same slots in both runs. Recorded at each admission: when b1 is admitted

@@ -1,4 +1,4 @@
-"""Failure rules A13 on a TPU chip: the HTTP front (runtime/front.py) with the real engine in a worker process.
+"""The failure rules on a TPU chip: the HTTP front (runtime/front.py) with the real engine in a worker process.
 
   python tests/tpu/front_recovery_check.py OUT_DIR [--model qwen3-8-27b] [--n-fault 6] [-- extra `mashbox run` args]
 
@@ -10,7 +10,7 @@ One front, three worker lives, the same greedy request each time (chat, temperat
      then the error event; worker 3 comes back by itself and answers exactly the baseline;
   4. Front.close(): the worker exits and no process holds the TPU.
 /health is read where the engine runs: deployment id and component set come from the worker (the same after both
-restarts), compiles_after_ready never drops when a worker dies (its value is recorded; zero is CERT's gate B2), and the
+restarts), compiles_after_ready never drops when a worker dies (its value is recorded; the chip suite gates it at zero), and the
 front prints the "ready" line once.
 Writes OUT_DIR/events.jsonl (every step with a UTC time), OUT_DIR/front.log (front and worker lines), the raw streams,
 and OUT_DIR/summary.json (cold ready, each restart's ready time, pass/fail per rule). Exit 0 when every rule holds.

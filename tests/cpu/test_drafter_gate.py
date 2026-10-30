@@ -1,4 +1,4 @@
-"""The drafter add-on's declaration and default rule (INTERFACES-v1 §10.1, runtime/drafter.py, cli.speculation):
+"""The drafter add-on's declaration and default rule (runtime/drafter.py, cli.speculation):
 speculation turns on without a flag only where the drafter passed its gate on this chip for this deployment's
 component_set_sha; --mtp 0 is always off; --mtp K forces it on and says when it is not gated; the draft file is fetched
 only when speculation is on; the drafter is part of the deployment key; the engine refuses another drafter ABI."""

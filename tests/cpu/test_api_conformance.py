@@ -347,7 +347,7 @@ def test_real_engine_compiles_after_ready_are_the_workers(tiny_wd):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_unknown_model_id_is_404_on_the_openai_routes(mode):
-    """INTERFACES-v1 3.4: a model id other than the served one is 404 model_not_found on chat, completions and
+    """A model id other than the served one is 404 model_not_found on chat, completions and
     responses (before the request reaches the engine); no model field is accepted. The Anthropic routes answer any model
     name and echo it (Claude Code sends its own names for the main model and its subagents)."""
     oc, ac = up([HELLO] * 4, mode)

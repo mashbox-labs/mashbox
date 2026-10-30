@@ -1,7 +1,7 @@
 """A table failure after ready never compiles in a ready process.
 
 A program loaded from the saved executable table that fails in a request (programs.TableFailed) ends the process that
-holds the engine; it never warms again in that process, where every compile would be a compile after ready, and A13
+holds the engine; it never warms again in that process, where every compile would be a compile after ready, and the failure rule
 restarts the engine's process after a failed device call:
 - behind the HTTP front (`mashbox run`): the worker sends one fatal ERROR frame that names the table failure and exits;
   the front answers 503 while it starts a new worker without the table (MASHBOX_AOT=0 for every later worker, so a
@@ -127,7 +127,7 @@ def test_a_streamed_request_with_tokens_gets_the_error_and_the_next_worker_answe
 
 
 def test_a_non_streamed_request_with_tokens_is_sent_again_after_a_table_failure(tmp_path):
-    """A13's no-bytes rule on the table's fatal frame: the loaded program fails once the row has tokens; the client of a
+    """The no-bytes rule on the table's fatal frame: the loaded program fails once the row has tokens; the client of a
     request that is not streamed has received nothing, so the request runs again on the worker that starts without the
     table and gets the whole answer. Old code: 500 (the front counted the worker's tokens as output the client had)."""
     from test_front_failures import tokens_seen

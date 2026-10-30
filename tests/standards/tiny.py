@@ -34,11 +34,12 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LO = 0.05
 BSHJ = "qwen38-bshj"
-TINY_ROW = "std-tiny-qwen38"     # the models.json row id ST-B8 asks the catalog for (the BSHJ fixture through cli.load)
+TINY_ROW = "std-tiny-qwen38"     # the row id the load-tail test asks the catalog for (the BSHJ fixture through cli.load)
 RESIDUAL = (".attn_output.weight", ".ssm_out.weight", ".ffn_down.weight", ".ffn_down_exps.weight", ".ffn_down_shexp.weight")
 POST_FFN, POST_ATTN = ".post_ffw_norm.weight", ".post_attention_norm.weight"
-# Fixtures whose generations say nothing yet: every row that needs varied tokens (ST-B2's near-bigram rows, ST-B3) is a
-# strict xfail on them, so the run fails the day the fixture changes and the entry is removed. Never a skip.
+# Fixtures whose generations say nothing yet: every row that needs varied tokens (the near-bigram batched-equals-alone
+# rows, the join-and-leave schedule) is a strict xfail on them, so the run fails the day the fixture changes and the
+# entry is removed. Never a skip.
 DEGENERATE = {
     "gemma4-f32": "open: this fixture copies the last token. tools/gguf_fixtures write_gemma4 draws token_embd as "
                   "0.5 x randn, the graph multiplies it by sqrt(256) and the output head is tied, so the embedding "
@@ -345,12 +346,12 @@ def alone(eng, ids, max_new, samp=None, stop_ids=()):
 
 
 def bf16_step(x):
-    """one bf16 step (8 bits of mantissa) at the magnitude of x, as the chip's tie-aware rule (G-D1) counts it"""
+    """one bf16 step (8 bits of mantissa) at the magnitude of x, as the chip's tie-aware rule counts it"""
     return 2.0 ** (np.floor(np.log2(np.maximum(np.abs(x), 1e-30))) - 7)
 
 
 def tie_check(eng, prompt, ids, stop_tok=None):
-    """The chip's tie-aware rule (G-D1 form) for one answer: teacher-force prompt + ids (+ the stop token that ended it)
+    """The chip's tie-aware rule for one answer: teacher-force prompt + ids (+ the stop token that ended it)
     through Engine.logits, the plain forward from a fresh zero state (no slot, no cache) -> (beyond, near): how many
     committed tokens are more than one bf16 step under the top logit there, and how many are not the argmax"""
     got = list(ids) + ([stop_tok] if stop_tok is not None else [])

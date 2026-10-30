@@ -775,8 +775,8 @@ def test_up_chip_never_says_not_on_for_a_chip_the_model_ran_on():
 
 
 # ------------------------------------------------------------------------------------- run on chips that are too small
-# `mashbox run` on a chip split that cannot hold the model stops with one line before any weights are read (CHIPS-VERIFY
-# case C: `-tp 1` on a v5e-4 loaded ~14.7 GB onto chip 0, then a raw RESOURCE_EXHAUSTED traceback). Chip memory as
+# `mashbox run` on a chip split that cannot hold the model stops with one line before any weights are read (a
+# chip run found it: `-tp 1` on a v5e-4 loaded ~14.7 GB onto chip 0, then a raw RESOURCE_EXHAUSTED traceback). Chip memory as
 # JAX reports it (bytes_limit, MEASURED: v5e 15.75 GiB, v6e 31.24 GiB); the config has the real Qwen3.8-27B shapes.
 QWEN_CFG = dict(model_type="qwen3_5_text", num_hidden_layers=64, hidden_size=5120, intermediate_size=17408,
                 num_attention_heads=24, num_key_value_heads=4, head_dim=256, vocab_size=248320, linear_num_key_heads=16,
@@ -850,7 +850,7 @@ def test_too_long_a_context_names_ctx_and_slots(host):
 
 
 @pytest.mark.parametrize("fam,n,args", [
-    ("v5e", 4, ()),                                       # auto tp 4: the P7 / CHIPS-VERIFY B run
+    ("v5e", 4, ()),                                       # auto tp 4: the measured v5e-4 run
     ("v5e", 4, ("--ctx", "32768")),                       # 32768 x 8 slots: peak 12.06 GB per chip measured
     ("v5e", 4, ("--ctx", "131072", "--slots", "1")),      # 131072 x 1: needle recalled
     ("v6e", 1, ()),                                       # v6e-1, the public default

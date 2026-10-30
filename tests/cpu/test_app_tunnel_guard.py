@@ -295,7 +295,7 @@ def test_a_tpu_row_is_used_while_its_job_runs_and_dropped_when_it_ends(tmp_path,
         s.shutdown()
 
 
-# ------------------------------------------------------------------ a job that ends while the app connects (F18)
+# ------------------------------------------------------------------ a job that ends while the app connects
 class EndingJob:
     """A checked tunnel job that exits while the app is connecting to its port (another program then has the port)."""
     def __init__(self, chip, url):
@@ -306,7 +306,7 @@ class EndingJob:
 
 
 def ends_on_connect(monkeypatch, port, jobs):
-    """Every connection the app makes to `port` ends the jobs first: the race of F18, made certain."""
+    """Every connection the app makes to `port` ends the jobs first: that race, made certain."""
     import socket
     real = socket.create_connection
 
@@ -385,7 +385,7 @@ def test_a_job_that_ends_during_its_guard_check_is_never_used(monkeypatch, tmp_p
     assert j.refused and not j.ok and added == []
 
 
-# ------------------------------------------------------------------ two Start clicks at once (F19)
+# ------------------------------------------------------------------ two Start clicks at once
 def test_two_starts_at_once_make_one_job(tmp_path, monkeypatch):
     import re
     monkeypatch.setenv("MASHBOX_APP_DATA", str(tmp_path))
@@ -437,7 +437,7 @@ def test_two_starts_at_once_make_one_job(tmp_path, monkeypatch):
             s.shutdown()
 
 
-# ------------------------------------------------------------------ Stop or Delete while a Start is being made (F22)
+# ------------------------------------------------------------------ Stop or Delete while a Start is being made
 @pytest.mark.parametrize("call,body", [("/api/tpu/stop", {"model": "qwen3-8-27b"}), ("/api/tpu/down", {"name": "c-new-1"})])
 def test_stop_or_delete_during_a_start_stops_that_start(tmp_path, monkeypatch, call, body):
     import re

@@ -1,4 +1,4 @@
-"""A table failure in the warm-up, before ready, follows A13's one recovery rule: the worker ends.
+"""A table failure in the warm-up, before ready, follows the one recovery rule: the worker ends.
 
 A program loaded from the saved executable table that fails in cli.warm's two short requests or in Engine.warm (here at
 its final barrier) raises programs.TableFailed out of the warm-up; the worker sends the table's fatal frame with

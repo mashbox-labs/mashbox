@@ -161,7 +161,7 @@ def test_catalog_lists_addon_rows(demo, monkeypatch):
 
 
 def test_probe_reports_only_hashed_files(demo, monkeypatch, tmp_path):
-    """S25: the chip's answer names a file as held only after hashing it; a bare name (the old `ls` answer) or a hash
+    """The chip's answer names a file as held only after hashing it; a bare name (the old `ls` answer) or a hash
     that was not asked for never skips a send."""
     h = tpu.sha256_file(str(tmp_path / "data.bin"))
     for have in (h + "\n", "MBX_HAVE=" + "0" * 64 + "\n"):
@@ -180,7 +180,7 @@ def _sh(script, home):
 
 @pytest.mark.parametrize("bad", ["corrupt", "link", "folder"])
 def test_chip_scripts_replace_a_bad_cached_entry(demo, monkeypatch, tmp_path, bad):
-    """S25 on a real shell: a corrupt file, a link (even to the right bytes) or a folder under the expected name is never
+    """On a real shell: a corrupt file, a link (even to the right bytes) or a folder under the expected name is never
     reported as held; the sent file is checked and put in place in one step (a folder of that name set aside)."""
     import hashlib
     body = b"x" * 1000
@@ -213,7 +213,7 @@ def test_chip_scripts_replace_a_bad_cached_entry(demo, monkeypatch, tmp_path, ba
 
 
 def test_held_entry_is_hashed_again_at_start(demo, monkeypatch, tmp_path):
-    """S25: between the probe and the start the entry changed: the start's check refuses it (exit 5)."""
+    """Between the probe and the start the entry changed: the start's check refuses it (exit 5)."""
     import hashlib
     body = b"x" * 1000
     h = hashlib.sha256(body).hexdigest()
@@ -230,7 +230,7 @@ def test_held_entry_is_hashed_again_at_start(demo, monkeypatch, tmp_path):
 
 
 def test_restart_identity_covers_data_and_arguments(demo, monkeypatch, tmp_path):
-    """S26: the same code with other data or other arguments is another payload: the server starts again."""
+    """The same code with other data or other arguments is another payload: the server starts again."""
     def pkg_line(m):
         calls, _ = run_setup(monkeypatch, m)
         script = calls[-1][calls[-1].index("--command") + 1]

@@ -1,4 +1,4 @@
-"""Compile key and component set (runtime/compile_key.py; INTERFACES-v1 section 6): every listed field changes the key,
+"""Compile key and component set (runtime/compile_key.py): every listed field changes the key,
 weight values and dict order do not, and a shipped cache built for another component set is refused."""
 import copy
 import os
@@ -103,7 +103,7 @@ print(json.dumps(dict(front=front["compiles_after_ready"], before=before, after=
 
 
 def test_a_process_that_does_not_count_compiles_reports_none_not_zero():
-    """/health's compiles_after_ready is a gate witness (B2): a process that never marked ready (a front whose engine runs
+    """/health's compiles_after_ready is a gate witness: a process that never marked ready (a front whose engine runs
     in a worker process, or a server before ready) has no count, so it reports null, never a 0 that reads as a pass."""
     import json
     import subprocess
