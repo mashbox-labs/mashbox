@@ -2,6 +2,16 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.10
+
+### F16 weights are held as their float16 values
+
+1. **`ops/__init__.py` (`Dense32`, `prepare`, `qmatmul`, `dequant`, `take_rows`, `route`), `hf/__init__.py`:** on the kernel path, an F16 weight of one (rows, cols) shape (a GGUF F16 tensor or a Hugging Face float16 weight, unstacked or a stack of layers) is held on the device as its float16 values, the same bytes as the file. It runs the exact path's steps (the same barrier, the same row chunks, the same float32 dot on the same float32 values) without rebuilding the values from pairs of bytes at every call. The weights events count these weights as `resident_f32`, as they count F32 weights held as values, so they leave `reference` bytes. With `use_kernel=False` (no kernels) an F16 weight keeps the exact path, as before.
+2. **Not bit for bit on TPU:** the held values run as another XLA program than the exact path's. On XLA:CPU the outputs have the exact path's bits. On TPU v6e the float32 rounding can differ, so F16 is held to the `op/F16` bars, as BF16's native path is. Measured on one v6e chip with bfloat16 activations, at 4096, 11008 and 14336 rows by 4096 cols and 1, 8 and 32 rows of activations: at most 45 outputs of a call differ from the exact path's (45 of 352,256, at 11008 rows and 32 rows of activations), by at most 0.016 in absolute value, and the NMSE against a float64 product equals the exact path's to 9 digits.
+3. **Stacks of experts** in F16 keep the handle they had, and F32 and every other type keep theirs.
+
+Why: the exact path rebuilt every F16 weight's float32 values from its bytes at every call, on GGUF files with F16 tensors and on every Hugging Face float16 model. On one v6e chip, an F16 4096 x 4096 weight times one row took 16.53 ms that way and 0.028 ms held as values; 14336 x 4096 took 2.58 ms and 0.103 ms. Compatible: the device holds the same number of bytes, `dequant` and row lookups give the exact values, F32 weights are unchanged, and no weight of the 28 catalog GGUF files is F16.
+
 ## 0.1.9
 
 ### The kernel bundle reads shape-class keys (format 2); the 0.1.9 bundle adds Q4_0, Q4_1 and Q5_0
