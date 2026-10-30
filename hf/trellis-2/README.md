@@ -1,5 +1,4 @@
 ---
-base_model: microsoft/TRELLIS.2-4B
 license: mit
 pipeline_tag: image-to-3d
 tags:
