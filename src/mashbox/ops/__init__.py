@@ -472,7 +472,8 @@ def _kq_planes(raw, t, shape):
     mod = _KERNELS["module"]
     if not isinstance(raw, jax.Array) and hasattr(mod, "repack_host"):
         return Packed(jax.device_put(mod.repack_host(t, np.asarray(raw), tuple(shape)), jax.devices()[0]), t, shape)
-    rep = lambda r: mod.repack(t, r, tuple(shape))
+    kw = {"stacked": True} if raw.ndim > 2 and "stacked" in inspect.signature(mod.repack).parameters else {}
+    rep = lambda r: mod.repack(t, r, tuple(shape), **kw)
     for _ in range(max(0, raw.ndim - 2)):
         rep = jax.vmap(rep)
     cpu = _host_cpu()
@@ -633,7 +634,10 @@ def qmatmul(x, h):
 
 def kernel_picks_layer():
     """True when the loaded kernel package's matmul takes layer= (see the module docstring)"""
-    mm = getattr(_KERNELS["module"], "matmul", None)          # a package of expert kernels only has no dense matmul
+    mod = _KERNELS["module"]
+    if getattr(mod, "picks_layer", None) is not None:          # a bundle says whether it has layer forms
+        return bool(mod.picks_layer)
+    mm = getattr(mod, "matmul", None)                         # a package of expert kernels only has no dense matmul
     try:
         return mm is not None and "layer" in inspect.signature(mm).parameters
     except (TypeError, ValueError):
