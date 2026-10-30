@@ -26,7 +26,15 @@ MERGES = ["Ġ t", "h e", "Ġt he", "i n", "Ġ a", "1 2", "12 3", "o r", "l d", "
           "Ġ 1", "Ġ1 2", "' s", "e r"]
 WHOLE = ["Ġhello", "Server"]          # in the vocabulary, not reachable by the merges
 CASES = [("deepseek-r1-qwen", "after"), ("falcon3", "first"), ("dbrx", "mixed"), ("tekken", "first"), ("smollm", "first"),
-         ("qwen2", "after"), ("llama-bpe", "after"), ("tekken", "mixed"), ("refact", "first"), ("exaone", "first")]
+         ("qwen2", "after"), ("llama-bpe", "after"), ("tekken", "mixed"), ("refact", "first"), ("exaone", "first"),
+         ("qwen35", "after"), ("gemma4", "gemma4"), ("llama-bpe", "digits")]
+# layout "digits": the "after" vocabulary plus merges that build whole digit runs, so a split that cuts digit runs
+# differently (1-3 digits, one digit, any length) gives different ids (llama.cpp's LLAMA3 split cuts every 3)
+DIGIT_MERGES = ["123 4", "1234 5", "4 5", "45 6", "456 7", "5 6", "56 7", "3 4", "3 .", "3. 1", "3.1 4"]
+# layout "gemma4": a tokenizer.ggml.model "gemma4" vocabulary (gguf/tokenizer.py _gemma4): byte tokens <0x00>..<0xFF>, the
+# space written as U+2581, the merges above in that form, the same two whole words, control tokens first
+G4_SPECIAL = ["<pad>", "<eos>", "<bos>", "<unk>", "<|im_end|>"]
+BYTE = 6
 TEXTS = ["the cat in a hat", " hello World", "hello", "HTTPServer camelCaseWord", "ÉCOLE école Ünïcödé", "123 12345 3.14",
          " 12 1234567", "it's IT'S they'RE", "a  b\n\nc\n", "x/y\r\nz", "the<|im_end|>in", "<s>hi</s> a", "東京 🙂 naïve",
          "  leading", "trailing  ", "\t\ttabs and\n\n\n"]
@@ -43,6 +51,13 @@ def tokens(layout):
     normal += WHOLE
     if layout == "after":
         toks = normal + SPECIAL
+    elif layout == "digits":
+        for m in DIGIT_MERGES:
+            t = m.replace(" ", "")
+            if t not in normal:
+                normal.append(t)
+        merges = MERGES + DIGIT_MERGES
+        return normal + SPECIAL, [3 if t in SPECIAL else 1 for t in normal + SPECIAL], merges
     elif layout == "first":
         toks = SPECIAL + normal
     else:                                   # mixed: one control token among the bytes, two after the merged tokens
@@ -51,10 +66,27 @@ def tokens(layout):
     return toks, types, MERGES
 
 
+def g4_tokens():
+    """-> (tokens, types, merges) of the gemma4 layout"""
+    sp = "\u2581"
+    toks, types = list(G4_SPECIAL), [3] * len(G4_SPECIAL)
+    toks += [f"<0x{b:02X}>" for b in range(256)]
+    types += [BYTE] * 256
+    normal = [sp] + [chr(c) for c in range(ord("a"), ord("z") + 1)] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+    normal += [str(d) for d in range(10)] + list(".,'/!?-") + ["\n", "\t"]
+    merges = [m.replace("\u0120", sp) for m in MERGES] + [f"{sp} {sp}"]
+    for m in merges:
+        t = m.replace(" ", "")
+        if t not in normal:
+            normal.append(t)
+    normal += [w.replace("\u0120", sp) for w in WHOLE]
+    return toks + normal, types + [1] * len(normal), merges
+
+
 def write(path, pre, layout):
     """the case's vocabulary-only GGUF (llama hyperparameters so llama.cpp opens it; no tensors)"""
     import gguf
-    toks, types, merges = tokens(layout)
+    toks, types, merges = g4_tokens() if layout == "gemma4" else tokens(layout)
     w = gguf.GGUFWriter(path, "llama")
     w.add_name(f"mashbox-vocab-{pre}-{layout}")
     w.add_context_length(256)
@@ -65,13 +97,13 @@ def write(path, pre, layout):
     w.add_head_count_kv(4)
     w.add_layer_norm_rms_eps(1e-5)
     w.add_rope_dimension_count(16)
-    w.add_tokenizer_model("gpt2")
+    w.add_tokenizer_model("gemma4" if layout == "gemma4" else "gpt2")
     w.add_tokenizer_pre(pre)
     w.add_token_list(toks)
     w.add_token_types(types)
     w.add_token_merges(merges)
-    w.add_bos_token_id(toks.index("<s>"))
-    w.add_eos_token_id(toks.index("</s>"))
+    w.add_bos_token_id(toks.index("<bos>" if layout == "gemma4" else "<s>"))
+    w.add_eos_token_id(toks.index("<eos>" if layout == "gemma4" else "</s>"))
     w.add_add_bos_token(False)
     w.add_chat_template("{% for m in messages %}{{ m['content'] }}{% endfor %}")
     w.write_header_to_file()
