@@ -1,16 +1,41 @@
 # Install
 
-Two lines on your own machine: the first installs the `mashbox` command, the second gets a Google Cloud TPU chip and starts Qwen3.8-27B on it.
+<!-- install:start -->
+Two lines on your own machine (Linux or macOS, x86_64 or arm64; on Windows, use WSL2). The first installs the `mashbox` command, the second gets a Google Cloud TPU chip and starts Qwen3.8-27B on it:
 
 ```bash
 curl -fsSL https://mashbox.gg/install.sh | sh
 mashbox tpu up qwen3-8-27b
 ```
 
-## Before you start
+Line 2 needs the Google Cloud CLI, signed in to a project with billing and the TPU API turned on; [Run on Google Cloud TPU](google-cloud.md) steps 1 to 5 do that from a new Google account. It prints the chip's price per hour and asks before it creates anything. Then it installs the same `mashbox` version on the chip and starts the server there, reached through an SSH tunnel from your machine. `mashbox tpu down mashbox-qwen3-8-27b` deletes the chip, and if you forget, the chip deletes itself at its max lifetime.
 
-- Linux or macOS, x86_64 or arm64. On Windows, use WSL2.
-- The Google Cloud CLI, signed in to a project with billing and the TPU API turned on. [Run on Google Cloud TPU](google-cloud.md) steps 1 to 5 do that from a new Google account.
+On a machine that has a TPU, such as a Cloud TPU VM you created yourself, the same line 1 installs the TPU version and `mashbox run` runs a model there:
+
+```bash
+curl -fsSL https://mashbox.gg/install.sh | sh
+mashbox run qwen3-8-27b --prompt "Write a haiku about the sea."
+```
+
+If the shell does not find `mashbox` after line 1, `~/.local/bin` is not on your `PATH`: line 1 printed the `export PATH=...` line for this terminal, or call it as `~/.local/bin/mashbox`. To do the same by hand with `gcloud`, one chip and one answer: [Quickstart](quickstart.md).
+
+What each install adds:
+
+| Install | What it adds | Where it goes |
+|---|---|---|
+| `mashbox` | the `mashbox` command with `mashbox models` and `mashbox tpu`, which gets a chip and runs a model on it from your machine. It has no JAX, so models do not run on this machine. | your laptop or desktop: line 1 installs this anywhere but a TPU VM |
+| `mashbox[cpu]` | JAX for CPU | a machine that runs a CPU model: Track2Rig, which adds its own extra (`mashbox[cpu,track2rig]`) |
+| `mashbox[tpu]` | JAX for TPU | a TPU VM: line 1 installs this there |
+| `mashbox[tpu,hy-nomas]` | JAX for TPU, plus PyTorch and the other libraries the Hy-Nomas pipeline uses | a TPU VM that runs Hy-Nomas: `mashbox tpu up hy-nomas` installs it on its chip |
+
+Each one needs Python 3.12 or newer. Line 1 installs with [uv](https://docs.astral.sh/uv/), which brings its own Python 3.12, since a Cloud TPU VM's system Python is 3.10. On a TPU VM without line 1: `python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"`. For Hy-Nomas with line 1, name the extras:
+
+```bash
+curl -fsSL https://mashbox.gg/install.sh | MASHBOX_EXTRAS=tpu,hy-nomas sh
+```
+
+`mashbox run` fetches the compiled TPU kernels a model uses by itself, so there is nothing to install or pick. They come from two places. The engine kernel package, used for GGUF files and Hugging Face models, is one file attached to a mashbox release on GitHub; `models.json` lists it under `engine_kernels`, with the chips and the JAX version it is built for. Each MASHBOX build that ships kernels has its own kernel package in its Hugging Face repo, under `kernels/`. `mashbox run` checks every file against its sha256 in `models.json` before it uses it. When no package fits the chip and the JAX version, the model runs without one, on plain JAX, which is slower, and the log says so.
+<!-- install:end -->
 
 ## What line 1 changes on your machine
 
@@ -18,8 +43,6 @@ mashbox tpu up qwen3-8-27b
 - If you already have [uv](https://docs.astral.sh/uv/), it uses yours. If not, it puts uv (and uvx) in `~/.local/bin`.
 - It installs `mashbox` as a uv tool, in its own folder with Python 3.12, and puts the `mashbox` command in `~/.local/bin`.
 - It never overwrites a `mashbox` command that another tool put there: it stops and says why.
-
-If `~/.local/bin` is not on your `PATH`, it prints the `export PATH=...` line for this terminal and the next command with its full path.
 
 ## What line 2 does
 
@@ -104,6 +127,8 @@ From create to delete the chip bills for about 17 minutes: about $0.76 at Google
 
 | Variable | Where it is read | What it does |
 |---|---|---|
+| `MASHBOX_VERSION` | line 1 (install.sh) | installs that version of `mashbox` instead of the newest |
+| `MASHBOX_EXTRAS` | line 1 (install.sh) | installs these extras instead of the machine's default (`tpu` on a TPU VM, none elsewhere), for example `tpu,hy-nomas` |
 | `MASHBOX_WHEEL` | your machine, by `mashbox tpu up` | installs this wheel file (or an http(s) URL of one) on the chip instead of the release from PyPI; the chip checks its sha256 before it installs |
 | `MASHBOX_AOT` | the machine that runs `mashbox run` | `0` turns off the saved programs ([FAQ](faq.md#why-is-the-first-start-slow-and-later-starts-fast)) |
 | `MASHBOX_STALL_S` | the machine that runs `mashbox run` | seconds a response may wait for a client that reads nothing before the server ends it (default 30) |

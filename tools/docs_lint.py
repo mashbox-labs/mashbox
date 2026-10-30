@@ -115,7 +115,7 @@ MDX_COMMENT_RE = re.compile(r"\{/\*(.*?)\*/\}", re.S)   # an MDX page's hidden c
 FENCE_RE = re.compile(r"^```.*?^```[ \t]*$", re.S | re.M)   # commands and program output: read as they are typed
 CODE_RE = re.compile(r"`[^`\n]+`")                          # inline code quotes a literal (an error message, a marker)
 # generated-block markers (llama.cpp HELP_START style) and the generated-file header of pages rendered from public code
-OK_COMMENT_RE = re.compile(r"^\s*(?:(?:models|cli|api|chips|cloud|charts|resources|catalog|archs):(?:start|end)\b[^>]*|Generated (?:from|by) .*)$", re.S)
+OK_COMMENT_RE = re.compile(r"^\s*(?:(?:models|cli|api|chips|cloud|charts|resources|catalog|archs|kernels|install):(?:start|end)\b[^>]*|Generated (?:from|by) .*)$", re.S)
 LEGAL = {"LICENSE", "LICENSE-KERNELS", "docs/licence.md"}
 TEXT_GLOBS = ("*.md", "*.mdx", "llms.txt", "hf/*.txt", "docs/media/*.txt", ".github/ISSUE_TEMPLATE/*.yml", "models.json", "docs/openapi.json")
 SKIP_PREFIX = ("tests/", "internal/", "addons/", "licenses/", "src/mashbox/models.json")   # tests; private map; private app add-ons; upstream texts; copy of models.json

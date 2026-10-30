@@ -33,7 +33,7 @@ For coding agents that work on this repo, or that run its models for a person.
 - CPU tests: `python3 -m pytest tests/cpu`. CI runs them on every pull request.
 - TPU tests live in `tests/tpu/`. Maintainers run them on real chips before each release. Say in the pull request if your change needs one.
 - After editing `models.json`, copy it to `src/mashbox/models.json`, then run `python3 tools/hf_github_sync_check.py render --repo . --write` and commit the files it rewrites.
-- The kernel source is not in this repo. Each model's compiled kernels come as one bundle that `mashbox run` downloads from the model's Hugging Face repo and checks against the sha256 in `models.json`. Do not patch or decompile it; report kernel problems as issues. `--no-kernels` runs without it where the model supports plain JAX.
+- The kernel source is not in this repo. `mashbox run` downloads the compiled kernels and checks each file against its sha256 in `models.json`: the engine kernel package (GGUF files and Hugging Face models) from a mashbox release on GitHub, listed under `engine_kernels`, and each MASHBOX build's own kernel package from its Hugging Face repo, under `kernels/`. Do not patch or decompile them; report kernel problems as issues. `--no-kernels` runs without them where the model supports plain JAX.
 - Sign off every commit: `git commit -s` (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## When something fails

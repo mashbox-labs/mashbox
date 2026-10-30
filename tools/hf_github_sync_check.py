@@ -18,6 +18,10 @@ Views:
   docs pages           a block between <!-- catalog:start --> and <!-- catalog:end -->: the catalog (mashbox/catalog.py,
                        the same render as `mashbox models`): by publisher, then model, then file
   docs/gguf.md         the block between <!-- archs:start --> and <!-- archs:end -->: catalog.arch_rows (ARCHS with a passing chip row)
+  docs/gguf.md         the block between <!-- kernels:start --> and <!-- kernels:end -->: engine_kernels[] (chips, JAX,
+                       the block types on the kernels and the ones on the exact path)
+  README.md            the block between <!-- install:start --> and <!-- install:end -->: docs/install.md's install
+                       block (its one source), links taken from docs/ to the repo root
   docs pages           blocks between <!-- cli:start CMD --> / <!-- cli:end --> (option table of `mashbox CMD`)
                        and <!-- api:start --> / <!-- api:end --> (routes and sampling fields) in docs/*.md, docs/models/*.md
   versions             models.json is the one source: src/mashbox/__init__.py reads it, pyproject.toml takes it
@@ -1411,6 +1415,54 @@ def splice(text, block, where, problems):
 LINK_RE = re.compile(r'(!?\[[^\]]*\]\()([^)\s]+)((?:[ \t]+"[^"\n]*")?\))|((?:src|srcset|href)=["\'])([^"\']+)(["\'])')
 REF_RE = re.compile(r"^( {0,3}\[[^\]]+\]:[ \t]*<?)([^\s>]+)", re.M)   # reference-style: [id]: target
 
+# The one install story: docs/install.md holds the install block (the install line, `mashbox tpu up`, `mashbox run`,
+# the extras and where the kernels come from) between <!-- install:start --> and <!-- install:end -->, and README.md
+# (also the PyPI page) carries the same block, its links taken from docs/ to the repo root and then pinned. The site's
+# Install page takes it from the same place.
+INSTALL_RE = re.compile(r"(<!-- install:start -->)(.*?)(<!-- install:end -->)", re.S)
+INSTALL_SRC = "docs/install.md"
+
+
+def install_block(repo):
+    """the install block of docs/install.md, the one source of every copy; None when the page or its block is missing"""
+    f = repo / INSTALL_SRC
+    mt = INSTALL_RE.search(f.read_text()) if f.exists() else None
+    return mt.group(2) if mt else None
+
+
+def rebase_links(text, base):
+    """text from a page in folder base with its relative links and images made relative to the repo root (from
+    docs/install.md, `google-cloud.md` becomes `docs/google-cloud.md` and `../LICENSE` becomes `LICENSE`), as the
+    README needs before pin_links"""
+    import posixpath
+
+    def sub(mt):
+        if mt.group(2) is not None:
+            pre, target, post = mt.group(1), mt.group(2), mt.group(3)
+        else:
+            pre, target, post = mt.group(4), mt.group(5), mt.group(6)
+        if re.match(r"[a-z][a-z0-9+.-]*:|#|/", target):
+            return mt.group(0)
+        path, sep, frag = target.partition("#")
+        return pre + posixpath.normpath(posixpath.join(base, path)) + sep + frag + post
+    return LINK_RE.sub(sub, text)
+
+
+def readme_install(text, block, problems):
+    """README text with its install block replaced by docs/install.md's (block, from install_block). A README without
+    the markers while the docs page has a block, or with the markers while the page has none, is a problem: the two
+    front doors would tell two install stories."""
+    has = INSTALL_RE.search(text)
+    if block is None:
+        if has:
+            problems.add("README.md", f"carries an install block, but {INSTALL_SRC} has none to copy")
+        return text
+    if not has:
+        problems.add("README.md", f"no <!-- install:start --> / <!-- install:end --> block: it carries {INSTALL_SRC}'s "
+                                  "install block")
+        return text
+    return INSTALL_RE.sub(lambda mt: mt.group(1) + rebase_links(block, "docs") + mt.group(3), text, count=1)
+
 
 def pin_links(reg, repo, text, where, problems):
     """README is also the PyPI page, where repo-relative paths do not resolve: every relative link and image becomes an
@@ -1453,6 +1505,7 @@ def render_all(reg, repo, profile, templates, problems, places=None, org_card=No
     if readme.exists():
         out = splice(readme.read_text(), readme_block(reg), "README.md", problems)
         if out is not None:
+            out = readme_install(out, install_block(repo), problems)
             views["README.md"] = pin_links(reg, repo, out, "README.md", problems)
     else:
         problems.add("README.md", "missing")
@@ -1503,7 +1556,49 @@ API_RE = re.compile(r"(<!-- api:start -->)(.*?)(<!-- api:end -->)", re.S)
 CHIPS_RE = re.compile(r"(<!-- chips:start -->)(.*?)(<!-- chips:end -->)", re.S)
 CATALOG_RE = re.compile(r"(<!-- catalog:start -->)(.*?)(<!-- catalog:end -->)", re.S)   # a docs page (mashbox.catalog)
 ARCHS_RE = re.compile(r"(<!-- archs:start -->)(.*?)(<!-- archs:end -->)", re.S)         # docs/gguf.md (gguf.archs.ARCHS)
-CLI_NOTE = ("Generated from the argparse parsers in src/mashbox/cli.py and src/mashbox/tpu/__init__.py by "
+KERNELS_RE = re.compile(r"(<!-- kernels:start -->)(.*?)(<!-- kernels:end -->)", re.S)   # docs/gguf.md (engine_kernels[])
+READER_TYPES = Path("src") / "mashbox" / "ops" / "reference.py"    # TYPES: every block type the GGUF reader reads
+UNQUANTIZED = ("F32", "F16", "BF16")
+
+
+def _py_literal(path, name):
+    """the literal value of a top-level `name = ...` in a Python file, read from its source (no import: the docs render
+    runs where jax is not installed); None when the file, the name or a literal value is missing"""
+    import ast
+    if not path.exists():
+        return None
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            try:
+                return ast.literal_eval(node.value)
+            except ValueError:
+                return None
+    return None
+
+
+def kernels_block(reg, repo):
+    """The block between <!-- kernels:start --> and <!-- kernels:end --> in docs/gguf.md, from models.json
+    engine_kernels[]: per row for GGUF files, its chips, its JAX version, the block types its kernels run and the
+    quantized types the GGUF reader reads that it does not run. The unquantized types (F32, F16, BF16) are in neither
+    list: they have paths of their own, which the page names. Types in the reader's order (ops/reference.py TYPES, by
+    ggml type id)."""
+    types = _py_literal(repo / READER_TYPES, "TYPES") or {}
+    names = [v[0] for _, v in sorted(types.items())]
+    rows = [k for k in reg.get("engine_kernels") or [] if k.get("for") == "gguf"]
+    if not rows:
+        return "This version has no kernel package for GGUF files: every block type runs on the exact reference path."
+    order = {n: i for i, n in enumerate(names)}
+    out = ["| Chips | JAX | 2-D weights of these types run on the kernels | These quantized types run on the exact reference path |",
+           "|---|---|---|---|"]
+    for k in rows:
+        on = sorted(k.get("types") or [], key=lambda n: (order.get(n, len(order)), n))
+        off = [n for n in names if n not in set(on) | set(UNQUANTIZED)]
+        out.append(f"| {', '.join(CHIP_LABEL.get(c, c) for c in k.get('chips') or [])} | {k.get('jax')} | "
+                   f"{', '.join(on)} | {', '.join(off)} |")
+    return "\n".join(out)
+
+
+CLI_NOTE =("Generated from the argparse parsers in src/mashbox/cli.py and src/mashbox/tpu/__init__.py by "
             "tools/hf_github_sync_check.py render --write. Do not edit.")
 
 
@@ -1754,12 +1849,13 @@ def docs_views(reg, repo, problems):
         C = mods[".catalog"]
         new = CATALOG_RE.sub(lambda mt: f"{mt.group(1)}\n{_lists().render_markdown(reg)}\n{mt.group(3)}", new)
         new = ARCHS_RE.sub(lambda mt: f"{mt.group(1)}\n{C.archs_block(reg)}\n{mt.group(3)}", new)
+        new = KERNELS_RE.sub(lambda mt: f"{mt.group(1)}\n{kernels_block(reg, repo)}\n{mt.group(3)}", new)
         if CLOUD_RE.search(text):
             if cloud is None:
                 problems.add(rel, f"cloud blocks need {CLOUD.as_posix()}")
             else:
                 new = CLOUD_RE.sub(lambda mt: f"{mt.group(1)}\n{cloud_block(mt.group(2), cloud, reg)}\n{mt.group(4)}", new)
-        if new != text or any(rx.search(text) for rx in (CLI_RE, API_RE, CHIPS_RE, CLOUD_RE, CATALOG_RE, ARCHS_RE)):
+        if new != text or any(rx.search(text) for rx in (CLI_RE, API_RE, CHIPS_RE, CLOUD_RE, CATALOG_RE, ARCHS_RE, KERNELS_RE)):
             views[rel] = new
     return views
 
@@ -2053,7 +2149,7 @@ WORD_NUM_RE = re.compile(rf"\b(?:{_WORDS})(?:[\s-](?:and a half|{_WORDS}))*[\s-]
                          rf"times|tokens|frames|percent|gigabytes|megabytes)\b", re.I)
 CODE_LANGS = r"(?:bash|sh|shell|zsh|json|jsonc|toml|python|py|yaml|yml|js|javascript|ts|html|css|ini|diff|powershell|ps1)"
 STRIP_RES = (re.compile(rf"^```{CODE_LANGS}\b[^\n]*\n.*?^```", re.S | re.M),   # code; output blocks (text, console, plain) are read
-             re.compile(r"<!-- (models|cli|api|chips|catalog|archs):start.*?<!-- (models|cli|api|chips|catalog|archs):end -->", re.S),
+             re.compile(r"<!-- (models|cli|api|chips|catalog|archs|kernels):start.*?<!-- (models|cli|api|chips|catalog|archs|kernels):end -->", re.S),
              CLOUD_BLOCK_RE,  # rendered from docs/data/cloud-prices.json and checked by render-and-diff (check_cloud)
              re.compile(r"\]\([^)\s]*\)"), re.compile(r"^```.*$", re.M))  # inline code is read: a number there is public too
 TAG_RE = re.compile(r"<[^>]*>")   # a tag is dropped, the words it shows or exposes read (tag_words)

@@ -5,7 +5,6 @@
 # Every measured number goes in a number marker instead: <!-- r:MODEL/KEY -->6.6 s<!-- /r --> with its value in
 # models.json (results by number, figures by name). A line that holds no number on its page any more fails the check.
 README.md | answer (sped up 10x) | playback speed-up of the terminal GIF (an edit)
-README.md | downloads the 26.9 GB weights file | size of Qwen3.8-27B-BQ8_R.bshj, rounded (models.json files)
 README.md | single TPU v6e chip (32 GB) from a 26.94 GB weights file at 8.01 bits per weight | v6e memory per chip (Google's spec); size and bits per weight of the Qwen file (models.json files)
 README.md | Memory per chip | 32 GB | 16 GB | TPU v6e and v5e memory per chip, Google's published spec
 README.md | Memory bandwidth per chip | 1,638 GBps | 800 GiBps | TPU v6e and v5e memory bandwidth per chip, Google's published spec

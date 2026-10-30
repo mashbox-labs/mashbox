@@ -1116,3 +1116,67 @@ def test_env_never_crashes_without_jax(tmp_path):
     out = json.loads(p.stdout)
     assert out["mashbox"] == mashbox.__version__ and out["python"] == ".".join(map(str, sys.version_info[:3]))
     assert out["jax"] is None and out["devices"] == "none: this install has no JAX (it is the client for mashbox tpu)", out
+
+
+def _sync_tool():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    return sc
+
+
+def test_readme_carries_the_install_block_of_the_install_page(tmp_path):
+    """The docs Install page led with install.sh and `mashbox tpu up` while the README (also the PyPI page) showed only
+    three gcloud lines and never named the extras: two install stories. docs/install.md's install block is the one
+    source: it holds the install line, `mashbox tpu up`, `mashbox run`, the extras and where the kernels come from; the
+    README carries it word for word with its links pinned, and a README that edits the block, or lacks it, fails."""
+    sc = _sync_tool()
+    reg = json.loads((ROOT / "models.json").read_text())
+    block = sc.install_block(ROOT)
+    assert block and "install.sh | sh" in block and "mashbox tpu up " in block and "mashbox run " in block
+    for extra in ("mashbox", "mashbox[cpu]", "mashbox[tpu]", "mashbox[tpu,hy-nomas]"):
+        assert f"| `{extra}` |" in block, extra
+    assert "GitHub" in block and "Hugging Face" in block and "`engine_kernels`" in block    # both kernel sources
+    readme = (ROOT / "README.md").read_text()
+    inside = sc.INSTALL_RE.search(readme).group(2)
+    p = sc.Problems()
+    assert inside == sc.pin_links(reg, ROOT, sc.rebase_links(block, "docs"), "README.md", p) and not list(p)
+    assert "](google-cloud.md)" in block and f"/blob/v{reg['version']}/docs/google-cloud.md)" in inside
+    assert sc.rebase_links("[a](../LICENSE) [b](faq.md#x) [c](#top) [d](https://x.y/z.md)", "docs") == \
+        "[a](LICENSE) [b](docs/faq.md#x) [c](#top) [d](https://x.y/z.md)"
+    edited = readme.replace(inside, inside.replace("use WSL2", "use WSL"))
+    assert edited != readme and sc.readme_install(edited, block, sc.Problems()) != edited     # drift is rendered away
+    p = sc.Problems()
+    sc.readme_install(sc.INSTALL_RE.sub("", readme), block, p)
+    assert any("no <!-- install:start -->" in x for x in p), list(p)
+    p = sc.Problems()
+    sc.readme_install(readme, None, p)
+    assert any("has none to copy" in x for x in p), list(p)
+
+
+def test_gguf_page_lists_the_kernel_types_from_models_json():
+    """docs/gguf.md said every GGUF block type runs on plain JAX and is slow after the engine kernel package covered most
+    quantized types on TPU v6e. Its kernels block is rendered from models.json engine_kernels[]: each quantized type
+    the GGUF reader reads is on the kernels or on the exact path, F32, F16 and BF16 on neither (they have paths of their
+    own), and a type the package adds moves from one list to the other."""
+    sc = _sync_tool()
+    reg = json.loads((ROOT / "models.json").read_text())
+    names = [v[0] for _, v in sorted(sc._py_literal(ROOT / sc.READER_TYPES, "TYPES").items())]
+
+    def lists(r):
+        cells = [c.strip() for c in sc.kernels_block(r, ROOT).splitlines()[-1].strip("|").split("|")]
+        return cells[2].split(", "), cells[3].split(", ")
+    row = next(k for k in reg["engine_kernels"] if k["for"] == "gguf")
+    on, off = lists(reg)
+    assert set(on) == set(row["types"]) and not set(on) & set(off)
+    unq = set(sc.UNQUANTIZED)
+    assert set(on) | set(off) | unq == set(names) and not unq & (set(on) | set(off))
+    page = (ROOT / "docs" / "gguf.md").read_text()
+    assert sc.KERNELS_RE.search(page).group(2).strip() == sc.kernels_block(reg, ROOT)
+    new = off[0]
+    more = json.loads(json.dumps(reg))
+    next(k for k in more["engine_kernels"] if k["for"] == "gguf")["types"].append(new)
+    on2, off2 = lists(more)
+    assert new in on2 and new not in off2
+    assert "exact reference path" in sc.kernels_block(dict(reg, engine_kernels=[]), ROOT)
