@@ -49,9 +49,14 @@ def smokes(models):
 # A GGUF row's maker: the organisation its base model's card names, keyed by the Hugging Face org of that base (base is
 # org/name). The one table: rows get gguf[].maker from it and the release check reads it here.
 MAKER_NAMES = {"google": "Google DeepMind", "ibm-granite": "IBM", "LGAI-EXAONE": "LG AI Research", "meta-llama": "Meta",
-               "mistralai": "Mistral AI", "Qwen": "Qwen", "tiiuae": "Technology Innovation Institute"}
-# A GGUF repo whose card metadata names no base model: the original model its own card text links (at the pinned revision).
-ORIGINAL = {"bartowski/Mistral-7B-Instruct-v0.3-GGUF": "mistralai/Mistral-7B-Instruct-v0.3"}
+               "mistralai": "Mistral AI", "Qwen": "Qwen", "tiiuae": "Technology Innovation Institute",
+               "naver-hyperclovax": "HyperCLOVA X", "janhq": "Jan", "prism-ml": "Prism ML", "superwhisper": "Superwhisper",
+               "ornith-ai": "Ornith", "openbmb": "OpenBMB", "defog": "Defog, Inc", "DavidAU": "DavidAU"}
+# A GGUF repo whose card metadata names no base model: the original model its own card text links (at the pinned revision),
+# or the repo itself when it is the original and its card says the publisher made it. Never guessed.
+ORIGINAL = {"bartowski/Mistral-7B-Instruct-v0.3-GGUF": "mistralai/Mistral-7B-Instruct-v0.3",
+            "ornith-ai/Ornith-1.5-9B-GGUF": "ornith-ai/Ornith-1.5-9B", "openbmb/MiniCPM5-2B-GGUF": "openbmb/MiniCPM5-2B",
+            "defog/sqlcoder-7b-2": "defog/sqlcoder-7b-2"}
 
 
 def upstream(repo, card_base):
