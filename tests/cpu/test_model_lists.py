@@ -214,11 +214,31 @@ def overviews(reg):
     return {"README": SC.readme_block(reg)}
 
 
+# a CPU check of the shape a sealed record copies to a row (cpu_check), for a CPU-only row the catalog may not list
+CPU_CHECK = dict(status="passing", reference="llama.cpp a37cc46 CPU", identical_weights=dict(nmse=4.2e-12, top1="131/131"),
+                 block_path=dict(top1="128/131", kl=0.0021), greedy=dict(prompts=4, tokens=16, full=3, near_tie=1, other=0),
+                 tokenizer=dict(texts=8, equal=8, explained=0))
+
+
+def cpu_only_row(reg):
+    """the catalog's first CPU-only row (CPU check passed, no chip run), else a copy of a passing row made one: every
+    chip pending with its reason and a passing CPU check, so a list test always holds both kinds of row"""
+    got = next((g for g in reg["gguf"] if not catalog.chips_run(g)), None)
+    if got is not None:
+        return got
+    g = copy.deepcopy(passing_row(reg))
+    g["chips"] = {c: {"status": "pending", "not_run_reason": "no chip run of this file"} for c in g["chips"]}
+    g["cpu_check"] = copy.deepcopy(CPU_CHECK)
+    g.pop("speculation", None)
+    assert not catalog.chips_run(g) and catalog.level(g) == "Checked on CPU"
+    return g
+
+
 def many_rows(reg, n=30):
     """reg plus n more GGUF files (copies of a passing row and of a CPU-only row under new ids, files and publishers),
     so the catalog is far longer than any short list a page might print."""
     reg = copy.deepcopy(reg)
-    cpu = next(g for g in reg["gguf"] if not catalog.chips_run(g))
+    cpu = cpu_only_row(reg)
     for i in range(n):
         g = copy.deepcopy(passing_row(reg) if i % 2 else cpu)
         g.update(id=f"pub{i % 4}-extra-{i}-q4-k-m", model=f"extra-{i}", publisher=f"pub{i % 4}",

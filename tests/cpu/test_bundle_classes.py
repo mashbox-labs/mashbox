@@ -3,7 +3,9 @@ carries kq_classes, the default net, under the exact entries of 'payloads', whic
 data only: atoms over format and hardware constants (block size bs, K tile tk, N pad, N tile tn, the domain bounds
 n_max / k_max) plus the row classes its matmul takes. The reader picks a class by the atoms and never knows the recipe:
 tk = the largest class tk that divides K, else the smallest with K zero-padded to it; Np = N rounded up to n_pad; tn =
-the largest class tn that divides Np and has a matmul for every row class. The raw blocks are zero-padded to (Np, Kp),
+the largest class tn that divides Np and has a matmul for every row class (from 0.1.12, when the matmul's config has a
+measured step cost, B.STEP_COLS, the least-cost class tn with Np rounded up to it: the WIDE tests at the end; the
+routing tests pin B.WIDE off). The raw blocks are zero-padded to (Np, Kp),
 x's columns to Kp, and the outputs are cut back to [:M, :N] (matmul) and [:N, :K] (dequant).
 
 These tests build small bundles on CPU from plain-JAX stand-ins exported with SYMBOLIC shapes for the cpu platform (the
@@ -16,6 +18,7 @@ own symbolic constraints: each stays on the exact path (or falls back with the l
 keeps loading as before, and a format the reader does not know is refused."""
 import hashlib
 import json
+import math
 import zipfile
 
 import jax
@@ -74,10 +77,12 @@ def _mm_layer(x, layer, v, s):
     return _mm(x, v[layer], s[layer])
 
 
-def _classes(drop=None, n_max=NMAX, k_max=KMAX, a_max=None, bad_sha=None, t=Q8_0, layer=False, drop_layer=None):
+def _classes(drop=None, n_max=NMAX, k_max=KMAX, a_max=None, bad_sha=None, t=Q8_0, layer=False, drop_layer=None, tns=TNS,
+             nmult=True):
     """-> [(exported, entry)]: repack + dequant per tk, matmul per (tk, tn) and row class; drop = {(tk, tn, rc)} left out;
     a_max: the repack's own symbolic constraint on Np / NPAD (to call it outside its constraints); layer: each matmul
-    also gets its layer form (id + "_layer"), except the (tk, tn, rc) in drop_layer"""
+    also gets its layer form (id + "_layer"), except the (tk, tn, rc) in drop_layer; nmult: the exact-form ones take
+    planes of any width NPAD a and state atoms n_mult NPAD (kq 0.1.9), else tn a as kq 0.1.7"""
     out = []
     atoms = {"bs": BS, "n_pad": NPAD, "n_max": n_max, "k_max": k_max}
     lab = {"impl": "0" * 64, "kernel_version": "0.0.1"}
@@ -90,7 +95,7 @@ def _classes(drop=None, n_max=NMAX, k_max=KMAX, a_max=None, bad_sha=None, t=Q8_0
         deq = _export(_deq, spec((tk * b, NPAD * a), f32), spec((1, NPAD * a), f32))
         out.append((deq, dict(lab, id=f"deq.q8.tk{tk}", op="dequant", type=t, atoms=dict(atoms, tk=tk), platform="cpu",
                               args=["v", "s"])))
-        for tn in TNS:
+        for tn in tns:
             for rows in ((4,), (8,), (16, 24)):
                 if any((tk, tn, r) in (drop or ()) for r in rows):
                     continue
@@ -99,21 +104,24 @@ def _classes(drop=None, n_max=NMAX, k_max=KMAX, a_max=None, bad_sha=None, t=Q8_0
                     xr = 8 * c
                 else:
                     (a, b), xr = _sym("a, b"), rows[0]
-                mm = _export(_mm, spec((xr, tk * b), bf16), spec((tk * b, tn * a), f32), spec((1, tn * a), f32))
+                w = NPAD if (nmult and rows[0] <= 8) else tn
+                at = dict(atoms, tk=tk, tn=tn, **({"n_mult": NPAD} if w == NPAD and rows[0] <= 8 else {}))
+                mm = _export(_mm, spec((xr, tk * b), bf16), spec((tk * b, w * a), f32), spec((1, w * a), f32))
                 out.append((mm, dict(lab, id=f"mm.c8.tk{tk}.tn{tn}.r{rows[0]}", op="matmul", config="C8", types=[t],
-                                     atoms=dict(atoms, tk=tk, tn=tn), rows=list(rows), platform="cpu",
-                                     args=["x", "v", "s"])))
+                                     atoms=at, rows=list(rows), platform="cpu",
+                                     form="exact" if rows[0] <= 8 else "tile", args=["x", "v", "s"])))
                 if layer and not any((tk, tn, r) in (drop_layer or ()) for r in rows):
                     if len(rows) > 1:                # one symbolic scope per export: g with the plain symbols
                         a, b, c, g = _sym("a, b, c, g", ["c >= 2", "c <= 3", "g <= 256"])
                         xr = 8 * c
                     else:
                         (a, b, g), xr = _sym("a, b, g", ["g <= 256"]), rows[0]
-                    ml = _export(_mm_layer, spec((xr, tk * b), bf16), spec((), jnp.int32), spec((g, tk * b, tn * a), f32),
-                                 spec((g, 1, tn * a), f32))
+                    ml = _export(_mm_layer, spec((xr, tk * b), bf16), spec((), jnp.int32), spec((g, tk * b, w * a), f32),
+                                 spec((g, 1, w * a), f32))
                     out.append((ml, dict(lab, id=f"mm.c8.tk{tk}.tn{tn}.r{rows[0]}_layer", op="matmul", config="C8",
-                                         types=[t], atoms=dict(atoms, tk=tk, tn=tn), rows=list(rows), platform="cpu",
-                                         layer=True, l_max=256, args=["x", "layer", "v", "s"])))
+                                         types=[t], atoms=at, rows=list(rows), platform="cpu",
+                                         form="exact" if rows[0] <= 8 else "tile", layer=True, l_max=256,
+                                         args=["x", "layer", "v", "s"])))
     if bad_sha is not None:
         out = [(exp, dict(e, sha256="0" * 64) if e["id"] == bad_sha else e) for exp, e in out]
     return out
@@ -177,6 +185,7 @@ def _want(x, raw, k):
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
     CAT.clear()
+    monkeypatch.setattr(B, "WIDE", False)          # the routing tests state the 0.1.11 pick; the WIDE tests set it on
     monkeypatch.setattr(B, "rows", lambda: [dict(r) for r in CAT], raising=False)
     monkeypatch.delenv("MASHBOX_GGUF_KERNELS", raising=False)
     yield
@@ -340,14 +349,16 @@ C4 = (1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20)
 LADDER = ((8,), (16,), (32,), (64,), (128,), (256,), (512,), (1024, 1536, 2048))
 
 
-def _fake(t, bs, menu, config):
+def _fake(t, bs, menu, config, nmult=True):
     atoms = {"bs": bs, "n_pad": 128, "n_max": 524288, "k_max": 65536}
     out = []
     for tk in (1280, 1024, 512):
         for op, plats in (("repack", ("cpu", "tpu")), ("dequant", ("cpu", "tpu"))):
             out += [dict(id=f"{op}.{t}.{tk}.{p}", op=op, type=t, atoms=dict(atoms, tk=tk), platform=p) for p in plats]
         out += [dict(id=f"mm.{config}.{tk}.{m}.{r[0]}", op="matmul", config=config, types=[t], rows=list(r),
-                     atoms=dict(atoms, tk=tk, tn=128 * m), platform="tpu") for m in menu for r in LADDER]
+                     atoms=dict(atoms, tk=tk, tn=128 * m, **({"n_mult": 128} if nmult and r == (8,) else {})),
+                     platform="tpu", form="exact" if r == (8,) else "tile")
+                for m in menu for r in LADDER]
     return out
 
 
@@ -460,3 +471,164 @@ def test_a_class_missing_one_layer_form_slices_its_stacks_with_one_warning(tmp_p
     assert len(w) == 1 and "layer=" in w[0] and "sliced per layer" in w[0], w
     held, xs = ops.scan_split({"w": h})
     assert held is None and xs == {"w": h}
+
+
+# 0.1.12: the exact-form row classes of a weight already on a class may take a larger class tn of its config (WIDE,
+# STEP_COLS[config], STEP_ERR[config]) when their payloads state n_mult; tile-form row classes keep the pick's tn, and
+# no plane is padded for the wider tile (one copy of each weight serves every call)
+WIDE_N = [128 * m for m in (1, 2, 3, 7, 19, 38, 61, 76, 79, 136, 1187, 1940)] + [9728, 10000, 151936, 248320, 4864, 896]
+TILE_ROWS = (16, 32, 64, 128, 256, 512, 1024)
+
+
+def _both(idx, monkeypatch, t, n, k):
+    monkeypatch.setattr(B, "WIDE", False); idx._picks.clear(); old = idx.pick(t, n, k, "tpu")
+    monkeypatch.setattr(B, "WIDE", True); idx._picks.clear(); new = idx.pick(t, n, k, "tpu")
+    return old, new
+
+
+@pytest.mark.parametrize("c", [100.0, 600.0, 3000.0, 12000.0])
+@pytest.mark.parametrize("t,bs,menu,config", [(Q4_K, 256, C4, "C4M"), (Q8_0, 32, C8, "C8/32"), (14, 256, C4, "C6")])
+def test_the_wide_tile_keeps_the_planes_and_at_least_halves_the_modelled_cost(monkeypatch, c, t, bs, menu, config):
+    """for any step cost: the pick (tk, tn, Kp, Np) stays, so the planes are the 0.1.11 ones; the exact-form row class
+    takes tw >= tn, every tile-form row class tn; a wider tw models at most half the cost (Np' a multiple of both tiles,
+    <= n_max); no 0.1.11 pick, no pick"""
+    idx = B.Classes(_fake(t, bs, menu, config))
+    monkeypatch.setattr(B, "STEP_COLS", {config: c})
+    monkeypatch.setattr(B, "STEP_ERR", {})
+    for n in WIDE_N:
+        for k in (2560, 5120, 1024):
+            old, new = _both(idx, monkeypatch, t, n, k)
+            if old is None:
+                assert new is None
+                continue
+            tw = idx.tn_for(t, n, k, 8, "tpu")
+            assert new[:3] == old[:3] and all(idx.tn_for(t, n, k, r, "tpu") == old[1] for r in TILE_ROWS)
+            npm = -(-old[3] // math.lcm(tw, old[1])) * math.lcm(tw, old[1])
+            assert new == old and tw >= old[1] and npm <= 524288
+            cc = c * 1280 / old[0]
+            assert npm * (1 + cc / tw) <= old[3] * (1 + cc / old[1]) * (0.5 if tw != old[1] else 1)
+            assert idx.layer_ok(t, n, k, "tpu") is False             # _fake has no layer forms
+
+
+@pytest.mark.parametrize("t,bs,menu,config", [(Q4_K, 256, C4, "C4M"), (Q8_0, 32, C8, "C8/32")])
+def test_a_gain_inside_the_cost_models_error_keeps_the_old_pick(monkeypatch, t, bs, menu, config):
+    """STEP_ERR 0.99: no modelled gain clears the error, so nothing switches"""
+    idx = B.Classes(_fake(t, bs, menu, config))
+    monkeypatch.setattr(B, "STEP_COLS", {config: 600.0})
+    monkeypatch.setattr(B, "STEP_ERR", {config: 0.99})
+    for n in WIDE_N:
+        old, new = _both(idx, monkeypatch, t, n, 2560)
+        assert new == old and (old is None or idx.tn_for(t, n, 2560, 8, "tpu") == old[1])
+
+
+def test_a_gain_under_half_keeps_the_old_pick(monkeypatch):
+    """Q8_0 17408 x 5120 with step cost 600: tile 1024 -> 3072 (Np' 18432) models 0.80 of the cost, under the error
+    margin's bar but not half: the 0.1.11 tile stays (WIDE_GAIN); 151936 rows model under half and switch; the planes
+    never change"""
+    idx = B.Classes(_fake(Q8_0, 32, C8, "C8/32"))
+    monkeypatch.setattr(B, "STEP_COLS", {"C8/32": 600.0})
+    monkeypatch.setattr(B, "STEP_ERR", {})
+    old, new = _both(idx, monkeypatch, Q8_0, 17408, 5120)
+    assert old == new == (1280, 1024, 5120, 17408) and idx.tn_for(Q8_0, 17408, 5120, 8, "tpu") == 1024
+    monkeypatch.setattr(B, "WIDE_GAIN", 0.9)
+    old, new = _both(idx, monkeypatch, Q8_0, 17408, 5120)
+    assert new == old and idx.tn_for(Q8_0, 17408, 5120, 8, "tpu") > 1024
+    monkeypatch.setattr(B, "WIDE_GAIN", 0.5)
+    old, new = _both(idx, monkeypatch, Q8_0, 151936, 5120)
+    assert old[1] == 128 and new == old and idx.tn_for(Q8_0, 151936, 5120, 8, "tpu") >= 1280
+
+
+def test_the_wide_tile_on_a_prime_column_count(monkeypatch):
+    """N = 151936 = 128 x 1187 (1187 is prime): the 0.1.11 pick is tn 128 (1187 N tiles); with a step cost the
+    exact-form row class takes a large tile over the same 151936-column planes (its last step partial); the tile-form
+    ones stay on tn 128"""
+    idx = B.Classes(_fake(14, 256, C4, "C6"))
+    monkeypatch.setattr(B, "STEP_COLS", {"C6": 600.0})
+    monkeypatch.setattr(B, "STEP_ERR", {"C6": 0.1})
+    monkeypatch.setattr(B, "WIDE", True)
+    tk, tn, Kp, Np = idx.pick(14, 151936, 1024, "tpu")
+    tw = idx.tn_for(14, 151936, 1024, 8, "tpu")
+    assert tn == 128 and tw >= 1280 and Np == 151936 and Np % tw != 0
+    assert idx.tn_for(14, 151936, 1024, 64, "tpu") == 128
+
+
+@pytest.mark.parametrize("steps", [None, {}, {"C8/32": 600.0}])
+def test_a_config_without_a_step_cost_keeps_the_old_pick(monkeypatch, steps):
+    idx = B.Classes(_fake(Q4_K, 256, C4, "C4M"))
+    monkeypatch.setattr(B, "STEP_COLS", steps)
+    monkeypatch.setattr(B, "WIDE", True)
+    assert idx.pick(Q4_K, 9728, 2560, "tpu") == (1280, 512, 2560, 9728)
+    assert idx.tn_for(Q4_K, 9728, 2560, 8, "tpu") == 512
+    assert idx.config(Q4_K, 1280, 512, "tpu") == "C4M" and idx.form(Q4_K, 1280, 512, 8, "tpu") == "exact"
+
+
+def test_entries_that_state_no_form_keep_the_old_pick(monkeypatch):
+    ents = [{k: v for k, v in e.items() if k != "form"} for e in _fake(Q4_K, 256, C4, "C4M")]
+    idx = B.Classes(ents)
+    monkeypatch.setattr(B, "STEP_COLS", {"C4M": 5000.0})
+    monkeypatch.setattr(B, "STEP_ERR", {})
+    old, new = _both(idx, monkeypatch, Q4_K, 9728, 2560)
+    assert new == old == (1280, 512, 2560, 9728) and idx.tn_for(Q4_K, 9728, 2560, 8, "tpu") == 512
+
+
+@pytest.mark.parametrize("t,bs,menu,config", [(Q4_K, 256, C4, "C4M"), (14, 256, C4, "C6")])
+def test_exact_payloads_that_state_no_n_mult_keep_the_old_pick(monkeypatch, t, bs, menu, config):
+    """a kq 0.1.7 bundle (0.1.11): its exact-form payloads take planes only as wide as a multiple of their own tile, so
+    with no padding no wider tile fits 9728 or 151936 columns and the 0.1.11 pick stays, whatever the step cost"""
+    idx = B.Classes(_fake(t, bs, menu, config, nmult=False))
+    monkeypatch.setattr(B, "STEP_COLS", {config: 12000.0})
+    monkeypatch.setattr(B, "STEP_ERR", {})
+    for n in (9728, 151936):
+        old, new = _both(idx, monkeypatch, t, n, 2560)
+        assert new == old and idx.tn_for(t, n, 2560, 8, "tpu") == old[1]
+
+
+def test_a_step_cost_the_bundle_states_wins_over_the_readers_table(monkeypatch):
+    """a matmul entry's own step_cols / step_err (a new kernel or config) are used instead of STEP_COLS / STEP_ERR"""
+    ents = [dict(e, step_cols=5000.0, step_err=0.0) if e["op"] == "matmul" else e for e in _fake(Q4_K, 256, C4, "C4M")]
+    idx = B.Classes(ents)
+    monkeypatch.setattr(B, "STEP_COLS", {})
+    monkeypatch.setattr(B, "STEP_ERR", {})
+    old, new = _both(idx, monkeypatch, Q4_K, 9728, 2560)
+    assert old == new == (1280, 512, 2560, 9728)
+    assert idx.tn_for(Q4_K, 9728, 2560, 8, "tpu") == 2560
+    ents = [dict(e, step_err=0.99) if e["op"] == "matmul" else e for e in ents]
+    idx = B.Classes(ents)
+    assert _both(idx, monkeypatch, Q4_K, 9728, 2560)[1] == (1280, 512, 2560, 9728)
+    ents = [dict(e, step_cols=0.0) if e["op"] == "matmul" else e for e in _fake(Q4_K, 256, C4, "C4M")]
+    monkeypatch.setattr(B, "STEP_COLS", {"C4M": 5000.0})
+    assert _both(B.Classes(ents), monkeypatch, Q4_K, 9728, 2560)[1] == (1280, 512, 2560, 9728)
+
+
+@pytest.mark.parametrize("shape", sorted(CLASS_SHAPES))
+def test_a_wide_tile_multiplies_like_the_old_pick(tmp_path, monkeypatch, shape):
+    """the same values through the reader for an exact-form row class (3 rows, on tw over the unpadded planes) and a
+    tile-form one (20 rows, on tn), plain and through the layer form; the planes and the memory estimate are the 0.1.11
+    ones. N tiles 16, 32, 64, so a wide tile can model under half the cost"""
+    got = ops.load_kernels(module=str(_build(tmp_path, classes=_classes(layer=True, tns=(16, 32, 64)))))
+    assert ops._KERNELS["error"] is None and Q8_0 in got
+    mod = ops._KERNELS["module"]
+    rng = np.random.default_rng(4)
+    raw = _raw(*shape, seed=3)
+    stack = np.stack([_raw(*shape, seed=5), raw])
+    xs = [jnp.asarray(rng.standard_normal((r, shape[1])), bf16) for r in (3, 20)]
+    monkeypatch.setattr(B, "STEP_COLS", {"C8": 5000.0})
+    monkeypatch.setattr(B, "STEP_ERR", {"C8": 0.1})
+    ys, picks, pb = [], [], []
+    for wide in (False, True):
+        monkeypatch.setattr(B, "WIDE", wide)
+        mod._cls._picks.clear()
+        picks.append(mod._cls.pick(Q8_0, *shape, B._platform()) + tuple(mod._cls.tn_for(Q8_0, *shape, r, B._platform())
+                                                                        for r in (4, 24)))
+        pb.append(mod.plane_bytes(Q8_0, shape))
+        h = ops.prepare(raw, Q8_0, shape)
+        hs = ops.prepare(stack, Q8_0, shape)
+        assert isinstance(h, ops.Packed) and isinstance(hs, ops.Packed)
+        ys.append([np.asarray(mod.matmul(x, h.packed)) for x in xs]
+                  + [np.asarray(mod.matmul(x, hs.packed, layer=jnp.int32(1))) for x in xs])
+    for a, b in zip(*ys):
+        assert a.shape[-1] == shape[0]
+        np.testing.assert_array_equal(a, b)
+    assert pb[1] == pb[0] and picks[1][:4] == picks[0][:4]
+    if shape == (37, 96):                                   # Np 48 on tn 16 -> 3 rows on tn 64 (one partial step); 20 rows on tn 16
+        assert picks == [(64, 16, 128, 48, 16, 16), (64, 16, 128, 48, 64, 16)]

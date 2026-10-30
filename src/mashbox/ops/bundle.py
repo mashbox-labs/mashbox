@@ -24,6 +24,7 @@ and on TPU the chip family in its chips and the installed libtpu matching its li
 import fnmatch
 import hashlib
 import json
+import math
 import os
 import urllib.request
 import zipfile
@@ -159,6 +160,31 @@ def _up(n, m):
     return -(-int(n) // int(m)) * int(m)
 
 
+# The N tile pick (0.1.12). A grid step of a class matmul has a fixed cost on top of its plane reads. STEP_COLS[config]
+# states it in plane columns at K tile 1280, measured once per matmul config on synthetic shapes only (N 10240 x K 5120,
+# tk 1280, one x row, every menu tn dividing 10240, kq 0.1.7 payloads on one v6e chip; fit t = t_bytes + sigma x grid
+# steps, STEP_COLS = sigma / (t_bytes per column and K tile)); never on a model's own shapes. STEP_ERR[config] is that
+# fit's error: the largest |residual| / time over its points. Record: CORE-CHANGES 0.1.12. A bundle's matmul entry
+# may state its own "step_cols" and "step_err" (measured the same way for its kernels); those win over these tables, so
+# a new kernel or config brings its own step cost and the reader keeps no list of kernels.
+# WIDE: the row classes whose entry states form "exact" may take a larger class tn of the config (tw) when the
+# modelled cost Np' x (1 + c / tw), c = STEP_COLS[config] x 1280 / tk, Np' = Np rounded up to a multiple of both tw and
+# the pick's tn, is at most WIDE_GAIN (half) of the pick's, and lower by more than STEP_ERR[config]: only a tile that the
+# model says at least halves the cost, so a gain the linear model overstates (larger tiles hide steps behind their
+# reads) never switches. The planes are not padded for it: every call of a weight reads the one copy the pick lays out
+# (Np), and an exact-form payload whose entry states atoms "n_mult" (kq 0.1.9: 128) takes planes of any width that is a
+# multiple of it, running its last N step partial. A tw whose exact-form entries state no n_mult dividing Np is never
+# taken, so a bundle with no such entries keeps the 0.1.11 pick. The exact form computes each output column on its own,
+# so its values do not depend on the tile; a "tile" form's can, so tile-form row classes keep the pick's tn. A config
+# with no STEP_COLS, or WIDE False, keeps the 0.1.11 pick. One rule for every N: no per-shape table.
+STEP_COLS = {"c2m16": 32053.0, "c4m": 10066.9, "c5m": 5780.1, "c6": 276.0, "c8g16": 479.8, "c8g32": 546.2,
+             "l4g16": 42.6, "l4g32": 48.0}
+STEP_ERR = {"c2m16": 0.1194, "c4m": 0.2581, "c5m": 0.2799, "c6": 0.0926, "c8g16": 0.0671, "c8g32": 0.0992,
+            "l4g16": 0.0452, "l4g32": 0.0398}
+WIDE = True
+WIDE_GAIN = 0.5
+
+
 class Classes:
     """a format-2 manifest's kq_classes as an index (no payload is read here). Entry: id, op (repack | dequant | matmul),
     type (repack / dequant) or config + types (matmul), atoms {bs (repack / dequant), tk, n_pad, n_max, k_max[, tn]},
@@ -212,6 +238,53 @@ class Classes:
         tns = {tn for (t_, tk_, tn, rc, p) in self.mm if (t_, tk_, p) == (t, tk, platform)}
         return sorted((tn for tn in tns if lad and all((t, tk, tn, rc, platform) in self.mm for rc in lad)), reverse=True)
 
+    def config(self, t, tk, tn, platform):
+        """the matmul config of the class (t, tk, tn) on the platform (every row class's entry states the same one)"""
+        rc = min(self._ladder.get((int(t), platform), ()), default=None)
+        name = self.mm.get((int(t), tk, tn, rc, platform))
+        return None if name is None else self.entry[name].get("config")
+
+    def atoms(self, t, tk, tn, rc, platform):
+        """-> the matmul entry's atoms for (type, tk, tn, row class), {} when there is none"""
+        name = self.mm.get((int(t), tk, tn, rc, platform))
+        return {} if name is None else self.entry[name].get("atoms") or {}
+
+    def form(self, t, tk, tn, rc, platform):
+        """the form the matmul entry (t, tk, tn, row class rc) states ("exact", "tile"), or None"""
+        name = self.mm.get((int(t), tk, tn, rc, platform))
+        return None if name is None else self.entry[name].get("form")
+
+    def tn_for(self, t, n, k, rc, platform):
+        """the N tile row class rc of a (rows n, cols k) weight runs on: the wide tile for an exact-form row class when
+        WIDE gave one, else the pick's tn"""
+        if self.pick(t, n, k, platform) is None:
+            return None
+        tk, tn, Kp, Np, tw = self._picks[(int(t), int(n), int(k), platform)]
+        return tw if self.form(t, tk, tn, rc, platform) == "exact" else tn
+
+    def _widen(self, t, tk, tn, Np, n_max, platform):
+        """-> (tw, Np): the exact-form row classes' N tile (see STEP_COLS), else (tn, Np); the planes stay Np wide"""
+        cfg = self.config(t, tk, tn, platform)
+        ex = [rc for rc in self.rows(t, tk, tn, platform) if self.form(t, tk, tn, rc, platform) == "exact"]
+        if not ex:
+            return tn, Np
+        e = self.entry[self.mm[(int(t), tk, tn, ex[0], platform)]]
+        c = e["step_cols"] if "step_cols" in e else (STEP_COLS or {}).get(cfg)
+        err = e["step_err"] if "step_err" in e else (STEP_ERR or {}).get(cfg, 0.0)
+        if not c:
+            return tn, Np
+        c = c * 1280 / tk
+        now = Np * (1 + c / tn)
+        best = (now, -tn, tn, Np)
+        for m in self._tns(t, tk, platform):
+            npm = _up(Np, math.lcm(m, tn))
+            if npm <= n_max and all(self.form(t, tk, m, rc, platform) == "exact"
+                                    and Np % int(self.atoms(t, tk, m, rc, platform).get("n_mult", m)) == 0 for rc in ex):
+                best = min(best, (npm * (1 + c / m), -m, m, npm))
+        if best[2] != tn and best[0] <= now * WIDE_GAIN and best[0] < now * (1 - float(err)):
+            return best[2], Np
+        return tn, Np
+
     def layer_ok(self, t, n, k, platform):
         """True when the class pick of this (type, rows, cols) has a layer form for every row class of its ladder"""
         got = self.pick(t, n, k, platform)
@@ -219,16 +292,19 @@ class Classes:
             return False
         tk, tn = got[0], got[1]
         lad = self.rows(t, tk, tn, platform)
-        return bool(lad) and all((int(t), tk, tn, rc, platform) in self.mml for rc in lad)
+        return bool(lad) and all((int(t), tk, self.tn_for(t, n, k, rc, platform), rc, platform) in self.mml for rc in lad)
 
     def pick(self, t, n, k, platform):
         """-> (tk, tn, Kp, Np) of the class that covers a (rows n, cols k) weight of type t, or None: tk = the largest
         whole class tk that divides k, else the smallest whole one with k zero-padded to it (then the next); Np = n
-        rounded up to n_pad; tn = the largest whole class tn that divides Np"""
+        rounded up to n_pad; tn = the largest whole class tn that divides Np. Only a weight that has that pick is on a
+        class. With WIDE, the exact-form row classes may run on a wider tile over the same Np-wide planes (tn_for,
+        STEP_COLS); tn stays the tile-form row classes' tile"""
         key = (int(t), int(n), int(k), platform)
         if key not in self._picks:
             self._picks[key] = self._pick(*key)
-        return self._picks[key]
+        got = self._picks[key]
+        return None if got is None else got[:4]
 
     def _pick(self, t, n, k, platform):
         if t not in self.dom:
@@ -240,7 +316,8 @@ class Classes:
         for tk in [c for c in tks if k % c == 0] + sorted(c for c in tks if k % c):
             tn = next((c for c in self._tns(t, tk, platform) if Np % c == 0), None)
             if tn is not None:
-                return tk, tn, _up(k, tk), Np
+                tw, Np = self._widen(t, tk, tn, Np, n_max, platform) if WIDE else (tn, Np)
+                return tk, tn, _up(k, tk), Np, tw
         return None
 
 
@@ -507,13 +584,14 @@ class Bundle:
             xm = x2[a:a + top]
             rc = next(r for r in ladder if r >= xm.shape[0])
             xp = jax.numpy.pad(xm, ((0, rc - xm.shape[0]), (0, 0)))
+            tr = self._cls.tn_for(t, n, k, rc, plat) if route == "class" else None
             if layer is not None:
-                e, exp = self._cls_payload(self._cls.mml[(t, tk, tn, rc, plat)])
+                e, exp = self._cls_payload(self._cls.mml[(t, tk, tr, rc, plat)])
                 args = [p.planes[name] for name in e["args"][2:]]
                 ys.append(exp.call(xp, jax.numpy.asarray(layer, jax.numpy.int32), *args)[:xm.shape[0], :n])
                 continue
             e, exp = (self._entry(("matmul", t, n, k, plat, rc)) if route == "exact"
-                      else self._cls_payload(self._cls.mm[(t, tk, tn, rc, plat)]))
+                      else self._cls_payload(self._cls.mm[(t, tk, tr, rc, plat)]))
             args = [p.planes[name] for name in e["args"][1:]]
             ys.append(exp.call(xp, *args)[:xm.shape[0], :n])
         y = ys[0] if len(ys) == 1 else jax.numpy.concatenate(ys, axis=0)
