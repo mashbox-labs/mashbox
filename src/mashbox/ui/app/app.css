@@ -13,7 +13,7 @@
 .mbx-ui .app-field input[type=password]:focus { outline: 2px solid var(--mbx-up); outline-offset: 2px; }
 .app-hint, .app-dim { color: var(--mbx-faint); }
 .app-list { display: grid; gap: 10px; }
-/* a row inside a panel: a 1px rule stroke all round at radius 14, no second fill (skill: dense screens); the row in use is filled (paper) */
+/* a row inside a panel: a 1px rule stroke all round at radius 14, no second fill; the row in use is filled (paper) */
 .app-item { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; padding: 14px 16px;
   border: 1px solid var(--mbx-line); border-radius: var(--mbx-r); background: none; }
 .app-item.app-on { background: var(--mbx-bg); }

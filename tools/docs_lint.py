@@ -11,7 +11,9 @@ belong in licence text only; the changelog (CORE-CHANGES.md) names each release 
 
 What is read: Markdown and text by line; JSON by string value; Python by string literal; HTML by its visible text, its
 alt/title/aria-label/placeholder words, its comments and the string literals of its scripts; JavaScript by string
-literal. A one-word string in code ('pending', 'verified') is a name, so the plain-meaning word rules skip it; any
+literal; CSS by its comments and string literals. Every other text file the package ships (src/mashbox/ and the sdist's
+pyproject.toml: shell scripts, data JSON, checksums, any new kind) is read too, by its kind or by line; upstream licence
+texts and binary files are not. A one-word string in code ('pending', 'verified') is a name, so the plain-meaning word rules skip it; any
 string with a space is text a person can read and gets every rule.
 
     python3 tools/docs_lint.py [--repo ROOT]          lint every public file of the repo; exit 1 on a hit
@@ -79,7 +81,8 @@ RULES = [
     ("owner-note", re.compile(r"(?i)\bowners? should\b|\buntil (?:its|their) owners?\b|\bwhoever owns\b|\bnobody had\b|"
                               r"\bnote to (?:self|us)\b|\bfollow[- ]up\b"),
      "no notes to the people who maintain the code: say what changed and how callers keep working"),
-    ("skill", re.compile(r"\bskill [a-z][a-z0-9]*-[a-z0-9-]+\b|\bSKILL\.md\b"), "no internal guide names"),
+    ("skill", re.compile(r"\bskill [a-z][a-z0-9]*-[a-z0-9-]+\b|\bSKILL\.md\b|\(skill:|\bthe skill['\u2019]s\b"),
+     "no internal guide names"),
     ("label", re.compile(r"\b(?:MEASURED|ESTIMATE)\b"), "plain words (\"measured\", \"estimated\"), not a label"),
     ("marker", re.compile(r"<!--\s*/?r(?::|\s*-->)|\btest:tpu\b|\bTODO\b|\bFIXME\b|\bXXX\b"),
      "no record markers or notes in the public source"),
@@ -120,6 +123,11 @@ PY_ROOT = "src/mashbox/"                       # every string and docstring of t
 # the app pages people read: every .html, .svg and .js file under these folders (the files hf_github_sync_check.ui_pages reads)
 UI_ROOTS = ("src/mashbox/", "apps/", "docs/")
 UI_SUFFIXES = (".html", ".svg", ".js")
+# every other text file the package ships is public text too: the wheel and the sdist carry src/mashbox/ whole and the
+# sdist adds pyproject.toml. Upstream licence and notice texts (LICENSE*, NOTICE*, OFL-<font>.txt) stay as written.
+SHIPPED_ROOT = PY_ROOT
+SHIPPED_TOP = ("pyproject.toml",)
+LICENCE_RE = re.compile(r"^(?:LICEN[CS]E|NOTICE|COPYING|OFL)(?:[-._].*)?$")
 # word rules a one-word string in code trips as a name ('pending', 'verified', 'UTC'); a string with a space is read
 # with every rule. Dates, ids, run stories, notes and internal names apply to every string.
 CODE_NAME_SKIP = {"verified", "yet", "staging", "this-run", "utc", "pending", "label"}
@@ -141,7 +149,26 @@ def public_files(repo):
     rels = sorted(r for r in set(out) if (repo / r).is_file())
     text = [r for r in rels if any(fnmatch.fnmatchcase(r, g) for g in TEXT_GLOBS) and not r.startswith(SKIP_PREFIX)]
     py = [r for r in rels if r.startswith(PY_ROOT) and r.endswith(".py") and "/__pycache__/" not in r]
-    return text + py + ui_files(rels)
+    ui = ui_files(rels)
+    seen = set(text) | set(py) | set(ui)
+    shipped = [r for r in rels if (r.startswith(SHIPPED_ROOT) or r in SHIPPED_TOP) and r not in seen
+               and not r.startswith(SKIP_PREFIX) and "/__pycache__/" not in r and not licence_text(r) and is_text(repo / r)]
+    return text + py + ui + shipped
+
+
+def licence_text(rel):
+    """True for an upstream licence or notice text (LICENSE, NOTICE, OFL-<font>.txt, ...), which is never linted"""
+    return bool(LICENCE_RE.match(rel.rsplit("/", 1)[-1]))
+
+
+def is_text(path):
+    """True for a UTF-8 file with no NUL byte; a font, an image or an archive is not text"""
+    try:
+        data = Path(path).read_bytes()
+        data.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return b"\0" not in data
 
 
 def ui_files(rels):
@@ -153,6 +180,8 @@ SCRIPT_RE = re.compile(r"(?is)<script\b[^>]*>(.*?)</script>")
 STYLE_RE = re.compile(r"(?is)<style\b.*?</style>")
 TAG_RE = re.compile(r"<[^>]*>")
 ATTR_RE = re.compile(r'\b(?:alt|title|aria-label|placeholder)="([^"]*)"')
+CSS_COMMENT_RE = re.compile(r"/\*(.*?)\*/", re.S)
+CSS_STR_RE = re.compile(r"'((?:[^'\\\n]|\\.)*)'|\"((?:[^\"\\\n]|\\.)*)\"")
 JS_STR_RE = re.compile(r"'((?:[^'\\\n]|\\.)*)'|\"((?:[^\"\\\n]|\\.)*)\"|`((?:[^`\\]|\\.)*)`")   # as hf_github_sync_check
 
 
@@ -161,6 +190,19 @@ def _js_strings(js, first_line):
     js = re.sub(r"(?m)^[ \t]*//.*$", "", js)
     return [(str(first_line + js.count("\n", 0, mt.start())), next((g for g in mt.groups() if g is not None), ""), True)
             for mt in JS_STR_RE.finditer(js)]
+
+
+def _css_pieces(css):
+    """A stylesheet as a person reads it: the words of its comments, by line, and its string literals (content text,
+    font names) as strings in code. Selectors, properties and values are left out."""
+    out = []
+    for mt in CSS_COMMENT_RE.finditer(css):
+        first = css.count("\n", 0, mt.start()) + 1
+        out += [(str(first + i), line, False) for i, line in enumerate(mt.group(1).splitlines()) if line.strip()]
+    rest = CSS_COMMENT_RE.sub(_blank, css)
+    out += [(str(rest.count("\n", 0, mt.start()) + 1), next((g for g in mt.groups() if g is not None), ""), True)
+            for mt in CSS_STR_RE.finditer(rest)]
+    return out
 
 
 def _html_pieces(text):
@@ -207,6 +249,8 @@ def lines_of(rel, text):
         return _js_strings(text, 1)
     if rel.endswith((".html", ".svg")):   # an SVG's text, title and desc, as on a page
         return _html_pieces(text)
+    if rel.endswith(".css"):
+        return _css_pieces(text)
     return [(str(i), line, False) for i, line in enumerate(text.splitlines(), 1)]
 
 

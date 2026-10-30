@@ -432,6 +432,51 @@ def test_public_text_is_clean():
     assert dl.lint_text("docs/x.md", "Copied from example-host.\n", {}, set()) == []
 
 
+
+def test_public_text_reads_every_shipped_text_file(tmp_path):
+    """The lint reads every text file the package ships (the wheel and the sdist carry src/mashbox/ whole, the sdist adds
+    pyproject.toml): stylesheets (comments and strings), shell scripts, data JSON and checksums too, not only the pages,
+    the Python strings and the app pages. Upstream licence texts and binary files are left alone. A guide name in a
+    stylesheet comment fails in each form it takes."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("docs_lint", ROOT / "tools" / "docs_lint.py")
+    dl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl)
+    kinds_of = lambda rel, text: {p.split("[", 1)[1].split("]", 1)[0] for p in dl.lint_text(rel, text, {}, set())}
+    assert "skill" in kinds_of("src/mashbox/ui/x.css", "/* ---- tokens (skill example-guide v1): dark ---- */\n:root { --a: #000; }\n")
+    for words in ("(skill: Tag, Badge)", "(a panel head, the skill's dense rule)"):
+        assert "skill" in kinds_of("src/mashbox/ui/x.css", f"/* tag = a pill {words} */\n.t {{ color: red; }}\n"), words
+    assert {"our-run", "iso-date"} <= kinds_of("src/mashbox/ui/x.css", '.n::after { content: "measured 2026-10-28 in our run"; }\n')
+    clean = ("/* tag = a filled pill, no stroke; badge = a 1px pill, no fill */\n"
+             '@font-face { font-family: "Geist Mono ASCII"; src: url("fonts/x.woff2") format("woff2"); }\n'
+             '.a { content: ""; font: 500 13px/1 var(--m); }\n')
+    assert dl.lint_text("src/mashbox/ui/x.css", clean, {}, set()) == []
+    assert {"iso-date", "our-run"} <= kinds_of("src/mashbox/tpu/x.sh", "#!/bin/sh\n# measured 2026-10-28 in our run\necho ok\n")
+    assert "verified" in kinds_of("src/mashbox/models/m/defaults.json", '{"note": "verified on a v6e-1"}')
+    # which files: every text file under src/mashbox/ and pyproject.toml; never a licence text or a binary file
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    pkg = tmp_path / "src" / "mashbox"
+    for rel, data in (("ui/a.css", b"/* a */\n"), ("tpu/x.sh", b"echo ok\n"), ("models/m/defaults.json", b"{}\n"),
+                      ("tpu/x.sh.sha256", b"00  x.sh\n"), ("ui/fonts/OFL-X.txt", b"Copyright 2020 X\n"),
+                      ("ui/fonts/x.woff2", b"wOF2\x00\x01\x00"), ("LICENSE-X", b"Copyright 2020 X\n")):
+        (pkg / rel).parent.mkdir(parents=True, exist_ok=True)
+        (pkg / rel).write_bytes(data)
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "x"\n')
+    got = set(dl.public_files(tmp_path))
+    assert {"src/mashbox/ui/a.css", "src/mashbox/tpu/x.sh", "src/mashbox/models/m/defaults.json",
+            "src/mashbox/tpu/x.sh.sha256", "pyproject.toml"} <= got, got
+    assert not {"src/mashbox/ui/fonts/OFL-X.txt", "src/mashbox/ui/fonts/x.woff2", "src/mashbox/LICENSE-X"} & got, got
+    # this repository: no text file the package ships goes unread (the models.json copy is read as models.json)
+    read = set(dl.public_files(ROOT))
+    try:
+        names = subprocess.run(["git", "-C", str(ROOT), "ls-files", "src/mashbox", "pyproject.toml"], capture_output=True,
+                               text=True, check=True).stdout.split()
+    except (OSError, subprocess.CalledProcessError):   # an exported tree: every file under src/mashbox/
+        names = ["pyproject.toml"] + [f.relative_to(ROOT).as_posix() for f in (ROOT / "src" / "mashbox").rglob("*") if f.is_file()]
+    unread = [r for r in names if r not in read and r != "src/mashbox/models.json" and not dl.licence_text(r)
+              and "/__pycache__/" not in r and dl.is_text(ROOT / r)]
+    assert unread == [], unread
+
 def test_chip_status_keeps_its_condition():
     """A chip status on a page carries the chips row's condition or reason ("Supported: a v5e-4 ...", "Not supported:
     runs only on a v6e-4 ..."), so a page never prints a bare "Supported" for a model that needs a bigger host."""
