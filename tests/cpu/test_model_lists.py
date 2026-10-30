@@ -29,9 +29,9 @@ SC = _load("sync_check_lists", ROOT / "tools" / "hf_github_sync_check.py")
 ML = _load("model_lists_test", ROOT / "tools" / "model_lists.py")
 REG = json.loads((ROOT / "src" / "mashbox" / "models.json").read_text())
 
-# The org profile's old intro: a hand list of two models under a table of three.
+# An intro in the style of the org profile's old one: a hand list of two models under a table of three.
 OLD_INTRO = ("Our open model ports run on Google Cloud TPU, and anyone can run them: a 27B language model on a single "
-             "chip, and Hy-Nomas, a world model you steer in the browser, on a TPU v6e-4 slice.")
+             "chip, and Hy-Nomas, a world model in the browser, on a TPU v6e-4 slice.")
 NEW_INTRO = ("We port open models to Google Cloud TPU, and anyone can run them. The table below lists every model in "
              "the current mashbox release and the chips it runs on.")
 INSTALL = "```bash\n~/.local/bin/mashbox run qwen3-8-27b --prompt \"Write a haiku about the sea.\"\n```\n"
@@ -93,8 +93,9 @@ def test_new_row_reaches_every_list():
     assert "NewModel-9B" in views.pop("mashbox models")   # the CLI lists every row; its count line comes after 0.1.6
     for name, text in views.items():
         assert "NewModel-9B" in text, name
-        assert f"{n + 1} entries: " in text, name
-        assert f"{n} entries: " not in text, name
+        head = "entries: " if name == "docs" else "models and files run in mashbox: "   # count line / lead line
+        assert f"{n + 1} {head}" in text, name
+        assert f"{n} {head}" not in text, name
 
 
 def test_docs_catalog_is_one_page_in_two_tiers():
@@ -210,3 +211,51 @@ def test_profile_row_carries_every_readme_headline():
         row = next(r for r in rows if f"[{m['name']}]" in r)
         missing = [h["big"] for h in hl if f"**{h['big']}**" not in row]
         assert not missing, (m["id"], missing)
+
+
+def overviews(reg):
+    """Every overview a reader lands on first: the README, the GitHub org profile and the Hugging Face org card."""
+    return {"README": SC.readme_block(reg), "profile": SC.profile_block(reg), "org card": SC.org_card_block(reg)}
+
+
+def many_rows(reg, n=30):
+    """reg plus n more GGUF files (copies of a passing row and of a CPU-only row under new ids, files and publishers),
+    so the catalog is far longer than any short list a page might print."""
+    reg = copy.deepcopy(reg)
+    cpu = next(g for g in reg["gguf"] if not catalog.chips_run(g))
+    for i in range(n):
+        g = copy.deepcopy(passing_row(reg) if i % 2 else cpu)
+        g.update(id=f"pub{i % 4}-extra-{i}-q4-k-m", model=f"extra-{i}", publisher=f"pub{i % 4}",
+                 repo=f"pub{i % 4}/Extra-{i}-GGUF", file=f"Extra-{i}-Q4_K_M.gguf", base=f"{g['base'].split('/')[0]}/Extra-{i}",
+                 run=f"mashbox run pub{i % 4}/Extra-{i}-GGUF:Q4_K_M")
+        reg["gguf"].append(g)
+    return reg
+
+
+def test_every_overview_leads_with_the_catalog_size_and_lists_every_row():
+    """No overview shows fewer catalog rows than models.json has, or a count that is not models.json's: each one leads
+    with the lead line (models and files, MASHBOX builds, GGUF files of how many models), then lists every MASHBOX build
+    and every GGUF file, each GGUF file once with its level and chips, grouped by publisher then model."""
+    for reg in (REG, with_new_row(REG), many_rows(REG)):
+        c, rows = ML.counts(reg), catalog.gguf_rows(reg)
+        lead = (f"{c['entries']} models and files run in mashbox: {c['ports'] + c['own']} MASHBOX builds and "
+                f"{c['files']} GGUF files of {c['gguf_models']} models")
+        for name, text in overviews(reg).items():
+            assert text.lstrip().startswith(f"**{lead}.**"), (name, text[:200])
+            assert SC.list_problems(reg, block(text), name) == [], name
+            for m in catalog.live(reg):
+                assert f"[{m['name']}]" in text or f"**{m['name']}**" in text, (name, m["id"])
+            for r in rows:
+                assert text.count(f"]({r['file_url']})") == 1, (name, r["id"])
+                line = next(x for x in text.splitlines() if f"]({r['file_url']})" in x)
+                assert f"| {r['level']}" in line and (", ".join(r["chips"]) or "n/a") in line, (name, r["id"], line)
+            pubs = [p for p in catalog.publishers(reg) if p["name"] != catalog.MASHBOX]
+            at = [text.index(f"<summary><b>{p['name']}</b>") for p in pubs]
+            assert at == sorted(at), (name, [p["name"] for p in pubs])
+            for p in pubs:
+                k = sum(len(m["rows"]) for m in p["models"])
+                assert f"<summary><b>{p['name']}</b> ({k} {'file' if k == 1 else 'files'}): " in text, (name, p["name"])
+        assert ML.lead_line(reg) == lead
+    wrong = SC.profile_block(REG).replace(ML.lead_line(REG), ML.lead_line(REG).replace(
+        f"{ML.counts(REG)['files']} GGUF files", "2 GGUF files", 1), 1)
+    assert any("lead line" in m for _, m in SC.list_problems(REG, block(wrong), "profile")), "a wrong lead count passes"

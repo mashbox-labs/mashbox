@@ -865,25 +865,27 @@ def _lists():
 
 
 def gguf_block(reg):
-    """The README's and the org profile's GGUF tier (model_lists.gguf_block): the files with a passing chip test, each
-    linking its exact file on Hugging Face, then the catalog link with the count line. Rendered, never typed: a new
-    gguf[] row reaches both pages with render --write."""
+    """The overviews' GGUF tier (model_lists.gguf_block): every gguf[] row, one collapsed section per publisher, each
+    file linking its exact file on Hugging Face, then the catalog link. Rendered, never typed: a new gguf[] row reaches
+    the README, the org profile and the Hugging Face org card with render --write."""
     return _lists().gguf_block(reg, CATALOG_URL)
 
 
-def builds_head():
+def builds_head(reg):
+    """The top of every overview: the lead line (the catalog's size from models.json), then the MASHBOX builds tier."""
     ml = _lists()
-    return f"**{ml.BUILDS}**\n\n{ml.BUILDS_LINE}\n\n"
+    return f"**{ml.lead_line(reg)}.**\n\n**{ml.BUILDS}**\n\n{ml.BUILDS_LINE}\n\n"
 
 
 def readme_block(reg):
-    """The README models block in two labelled tiers: MASHBOX builds (our ports table), then the GGUF tier."""
-    return builds_head() + models_table(reg, absolute=False) + "\n\n" + gguf_block(reg)
+    """The README models block: the lead line, then two labelled tiers: MASHBOX builds (our ports table), then every
+    GGUF file by publisher."""
+    return builds_head(reg) + models_table(reg, absolute=False) + "\n\n" + gguf_block(reg)
 
 
 def profile_block(reg):
-    """The org profile models block: the same two tiers, with the compact builds table."""
-    return builds_head() + profile_table(reg) + "\n\n" + gguf_block(reg)
+    """The org profile models block: the same lead line and tiers, with the compact builds table."""
+    return builds_head(reg) + profile_table(reg) + "\n\n" + gguf_block(reg)
 
 
 # The Hugging Face org card is the org's static README Space. Its models block is rendered here like the GitHub
@@ -918,7 +920,7 @@ def org_card_table(reg):
 def org_card_block(reg):
     """The Hugging Face org card models block in the same two tiers as the README and the profile: MASHBOX builds (the
     org card table), then the GGUF tier."""
-    return builds_head() + org_card_table(reg) + "\n\n" + gguf_block(reg)
+    return builds_head(reg) + org_card_table(reg) + "\n\n" + gguf_block(reg)
 
 
 def tpu_ports(reg):
@@ -960,6 +962,8 @@ COUNT_RE = re.compile(r"\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven
                       r"(?:models|model ports|ports|GGUF files|LLMs)\b", re.I)
 ENTRIES_RE = re.compile(r"\b(\d+) entr(?:y|ies): ([^.\]\n]*)")
 PART_RE = re.compile(r"\b(\d+) (?:MASHBOX ports?|MASHBOX models?|GGUF files?)\b")
+LEAD_RE = re.compile(r"\b(\d+) models? and files? run in mashbox: (\d+) MASHBOX builds? and (\d+) GGUF files? of "
+                     r"(\d+) models?\b")
 
 
 def list_problems(reg, text, where, names=False):
@@ -984,6 +988,12 @@ def list_problems(reg, text, where, names=False):
         parts = [int(x) for x in PART_RE.findall(m.group(2))]
         if sum(parts) != int(m.group(1)) or int(m.group(1)) != total:
             out.append((where, f"count line {m.group(0)!r} does not add up to models.json's {total} entries"))
+    c = _lists().counts(reg)
+    want = (c["entries"], c["ports"] + c["own"], c["files"], c["gguf_models"])
+    for m in LEAD_RE.finditer(text):
+        if tuple(int(x) for x in m.groups()) != want or want[0] != want[1] + want[2]:
+            out.append((where, (f"lead line {m.group(0)!r} is not models.json's catalog ({want[0]} models and files: "
+                                f"{want[1]} MASHBOX builds and {want[2]} GGUF files of {want[3]} models)")))
     return out
 
 
