@@ -240,7 +240,7 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "dda6a06e03029ac0ac26b09cb024f6f912994efd",
+      "hf_revision": "5609eee53ba029a07756c6ffd450b8e3b60a9424",
       "card_release": "0.1.5",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
@@ -655,8 +655,8 @@
           "format": "XLA compile cache (tar)",
           "default": false,
           "variant": false,
-          "bytes": 981831680,
-          "sha256": "c69c715b03c2b3fb69cd403f8462427cc304120086c87b3ad6c469d0025d141f",
+          "bytes": 982323200,
+          "sha256": "67b3bae3c960f54bc8123f00f0ab0d977c7e04bbf2018f0ef9510e6b94b453af",
           "gb": 0.98,
           "chips": [
             "v6e"
