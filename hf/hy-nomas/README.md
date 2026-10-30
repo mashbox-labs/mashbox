@@ -1,5 +1,6 @@
 ---
 base_model: tencent/Hy-Nomas
+base_model_relation: quantized
 license: apache-2.0
 tags:
 - tpu
