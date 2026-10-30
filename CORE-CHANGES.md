@@ -4,6 +4,14 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 
 ## 0.1.9
 
+### The kernel bundle reads shape-class keys (format 2); the 0.1.9 bundle adds Q4_0, Q4_1 and Q5_0
+
+1. **`ops/bundle.py` (`Bundle`, `Classes`):** a format-2 manifest (`format` 2, `rule` `shape-class`) adds `kq_classes`. One class covers every weight shape of its types inside the domain it states; the weight and the activations are zero-padded to its tile and the output is cut back after the call. The exact `payloads` entries stay as overrides for the shapes they name, and `moe_payloads` stay exact-only. A manifest with no `format` key is read as format 1, so a 0.1.8 bundle loads unchanged. A format-2 manifest with another `rule`, other `roles`, or a `version` that is not the wheel's is refused.
+2. **`Bundle.kq_route(t, shape)` (new):** returns `"exact"`, `"class"` or `None`, and `repack_host`, `repack`, `matmul` and `dequant` follow it. A class payload whose sha256 is not the manifest's raises `ValueError`. A shape that no class covers (cols not a whole number of blocks, more than 65,536 cols or 524,288 rows, or a type with no class) takes the exact path, as before.
+3. **`models.json`:** the `engine_kernels` row names `mashbox_engine_kernels` 0.1.9, and its `types` gain `Q4_0`, `Q4_1` and `Q5_0`.
+
+Why: the 0.1.8 bundle covered only the shapes it listed, so a GGUF file with other shapes, or with Q4_0, Q4_1 or Q5_0 tensors, ran part of its weights on the exact path. With the 0.1.9 bundle, every 2-D quantized tensor of all 28 GGUF files in the catalog has a kernel payload. Compatible: a shape the 0.1.8 bundle listed runs the same program, because its entries are kept byte for byte. A shape outside every class takes the exact path as before.
+
 ### A compile cache is unpacked only on the deployment it was built for
 
 1. **`kernels.accelerator` (new):** this host's accelerator as compile-cache rows name it, the chip family and the number of chips counted by chip coordinates (`v6e-1`, `v6e-4`); `None` off TPU.
