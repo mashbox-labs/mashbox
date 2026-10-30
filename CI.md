@@ -10,7 +10,7 @@ Three tiers. Each change runs only what it can break, and every test has to earn
 
 ## What runs on which change
 
-`tools/ci_select.py` picks the T1 areas from the changed files. Areas come from `models.json`, so a new model needs no CI edit.
+`tools/ci_select.py` picks the T1 areas from the changed files. Areas come from `models.json`, so a new model needs no CI edit. One check, `t1`, stands for all of T1: it passes when every picked area passed, or when no area was picked.
 
 | Change | T0 | T1 |
 |---|---|---|

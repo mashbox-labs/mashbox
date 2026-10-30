@@ -94,3 +94,37 @@ def test_views_workflow_checks_and_writes_nothing(tmp_path):
     gone = {k: v for k, v in views.items() if k != "hf/a/README.md"}
     missing = compare("missing", views, gone)
     assert missing.returncode != 0 and "hf/a/README.md" in missing.stdout
+
+
+def test_t1_gate_is_green_only_when_every_picked_leg_passed(tmp_path):
+    """Branch protection requires one T1 check, the `t1` gate, not one check per leg: a change that picks no area (docs,
+    licences, a registry version) skips the legs, and a required leg that never reports would hold the pull request
+    forever. The gate runs always, after T0 and the legs: green when every picked leg passed or none was picked; red when
+    T0 failed, a picked leg failed, was cancelled or did not run, or the pick is missing."""
+    import re
+    import subprocess
+    wf = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    job = re.search(r"\n  (t1-gate):\n((?:(?:    .*)?\n)+)", wf)
+    assert job, "no t1-gate job"
+    body = job.group(2)
+    assert re.search(r"^    name: t1$", body, re.M)
+    assert re.search(r"^    needs: \[t0, t1\]$", body, re.M) and re.search(r"^    if: always\(\)$", body, re.M)
+    for var, expr in (("T0", "needs.t0.result"), ("PICKED", "needs.t0.outputs.any"), ("T1", "needs.t1.result")):
+        assert re.search(rf"^ +{var}: \$\{{\{{ {re.escape(expr)} \}}\}}$", body, re.M), var
+    step = re.search(r"\n( +)- name: Every picked T1 leg passed\n(?: +env:\n(?: +[A-Z0-9]+: .*\n)+)? +run: \|\n((?:(?:\1    .*)?\n)+)",
+                     body + "\n")
+    assert step, "no gate step"
+    script = "\n".join(line[len(step.group(1)) + 4:] for line in step.group(2).splitlines())
+
+    def gate(t0, picked, t1):
+        env = {"PATH": "/usr/bin:/bin", "T0": t0, "PICKED": picked, "T1": t1}
+        return subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True).returncode
+
+    assert gate("success", "false", "skipped") == 0          # T0-only change: no leg picked, none ran
+    assert gate("success", "true", "success") == 0           # every picked leg passed
+    for t1 in ("failure", "cancelled", "skipped", ""):       # a picked leg failed, was cancelled or never ran
+        assert gate("success", "true", t1) != 0, t1
+    assert gate("success", "false", "success") != 0          # legs ran although none was picked: the pick is wrong
+    assert gate("failure", "", "skipped") != 0               # red T0 (no pick)
+    assert gate("success", "", "skipped") != 0               # T0 passed but gave no pick
+    assert gate("cancelled", "true", "cancelled") != 0
