@@ -182,6 +182,22 @@ def test_kind_labels_match_the_views():
     assert catalog.CHIPS == SC.CHIPS
 
 
+def test_a_card_names_a_base_model_only_with_the_relation_its_row_records():
+    """Hugging Face reads a card's base_model with no base_model_relation as a fine-tune of that model. A card names its
+    base model only with the relation its row records (quantized: the repo hosts our quantized weights of it). A row
+    with none, such as a card-only port that hosts none of the model's weights, names no base model; its card text
+    credits and links the maker. Our own model names none."""
+    for m in REG["models"]:
+        fm = SC.front_matter(REG, m).splitlines()
+        base = [x for x in fm if x.startswith("base_model:")]
+        rel = [x for x in fm if x.startswith("base_model_relation:")]
+        if m.get("base_model_relation") and not m["upstream"].get("own"):
+            assert (base, rel) == ([f"base_model: {m['upstream']['hf']}"],
+                                   [f"base_model_relation: {m['base_model_relation']}"]), (m["id"], fm)
+        else:
+            assert (base, rel) == ([], []), (m["id"], fm)
+
+
 def test_ids_unique_across_models_and_gguf():
     ids = [m["id"] for m in REG["models"]] + [g["id"] for g in REG["gguf"]]
     assert len(ids) == len(set(ids))

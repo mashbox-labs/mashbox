@@ -958,7 +958,7 @@
         "license_sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb"
       },
       "hf_repo": "mashbox-labs/TRELLIS.2-TPU",
-      "hf_revision": "c308c341b1a13c06a4fd94b1aaedff36130d5cdc",
+      "hf_revision": "150b6982a825e173d0dd06bb23581b6349431390",
       "pipeline_tag": "image-to-3d",
       "chips": {
         "v5e": {

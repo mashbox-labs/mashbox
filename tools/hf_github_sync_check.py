@@ -1014,9 +1014,11 @@ def llms_block(reg):
 
 def front_matter(reg, m):
     up = m["upstream"]
-    lines = [] if up.get("own") else [f"base_model: {up['hf']}"]   # our own model has no base model
-    if m.get("base_model_relation"):
-        lines.append(f"base_model_relation: {m['base_model_relation']}")
+    # Hugging Face reads a base_model with no base_model_relation as a fine-tune of it, so a card names its base model
+    # only with the relation the row records (quantized: the repo hosts our quantized weights). A row with none (a
+    # card-only port, our own model) names no base model; the card text credits and links the maker.
+    rel = m.get("base_model_relation")
+    lines = [f"base_model: {up['hf']}", f"base_model_relation: {rel}"] if rel and not up.get("own") else []
     lines.append(f"license: {up['license']}")
     if up["license"] == "other":
         lines += [f"license_name: {up['license_name']}", f"license_link: {up['license_link']}"]
