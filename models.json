@@ -152,6 +152,7 @@
         {
           "name": "xla-cache/v6e4-jax0.11.2-libtpu0.0.48.1.tar",
           "kind": "xla-cache",
+          "accelerator": "v6e-4",
           "format": "XLA compile cache (tar)",
           "default": false,
           "variant": false,
@@ -628,6 +629,8 @@
         {
           "name": "xla-cache/v6e-jax0.11.2-libtpu0.0.48.1.tar",
           "kind": "xla-cache",
+          "accelerator": "v6e-1",
+          "tp": 1,
           "format": "XLA compile cache (tar)",
           "default": false,
           "variant": false,

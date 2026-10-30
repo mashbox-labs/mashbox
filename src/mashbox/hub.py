@@ -115,18 +115,22 @@ def draft_file(m, path=None, log=print):
     return verify(p, row["sha256"], log)
 
 
-def compile_cache(m, cache_dir, log=print):
-    """Unpack the model's XLA compile cache (models.json files[] row with kind "xla-cache") into cache_dir when its chip, jax,
-    jaxlib and libtpu match this setup, so the first run loads its programs instead of compiling them. -> local path or None.
+def compile_cache(m, cache_dir, log=print, tp=1):
+    """Unpack the model's XLA compile cache (models.json files[] row with kind "xla-cache") into cache_dir when its
+    deployment and jax, jaxlib and libtpu match this setup, so the first run loads its programs instead of compiling them.
+    -> local path or None. Deployment = the row's accelerator (chip family + chips, kernels.accelerator(): v6e-1, v6e-4)
+    and the tensor-parallel size its programs were built for (row "tp", 1 when absent; tp = this run's). The chip family
+    alone does not say which programs a cache holds (a v6e-4 tensor-parallel start compiled every program from the
+    one-chip v6e cache), so a row that names no accelerator is never unpacked.
     No match, or any error, = one log line and compiling at first use, as before. That includes a tar whose sha256 does not
     match the row: verify() stops the run with SystemExit for weights, so this path catches SystemExit too."""
     import shutil
     import tarfile
     from . import kernels as K
     try:
-        fam, ver = K.chip_family(), K.versions()
+        acc, ver = K.accelerator(), K.versions()
         for row in m.get("files", []):
-            if row.get("kind") != "xla-cache" or fam not in row.get("chips", []) \
+            if row.get("kind") != "xla-cache" or acc is None or row.get("accelerator") != acc or row.get("tp", 1) != tp \
                     or any(ver.get(k) != row.get(k) for k in ("jax", "jaxlib", "libtpu")):
                 continue
             p = verify(fetch(m["hf_repo"], row["name"], m["hf_revision"]), row["sha256"], log)
@@ -145,7 +149,7 @@ def compile_cache(m, cache_dir, log=print):
                     n += 1
             log(json.dumps(dict(event="compile_cache", used=True, file=row["name"].rsplit("/", 1)[-1], new_entries=n)))
             return p
-        log(json.dumps(dict(event="compile_cache", used=False, reason=f"no cache for chip {fam}, jax {ver['jax']}, libtpu {ver.get('libtpu')}")))
+        log(json.dumps(dict(event="compile_cache", used=False, reason=f"no cache for {acc} tp {tp}, jax {ver['jax']}, libtpu {ver.get('libtpu')}")))
     except (Exception, SystemExit) as e:  # a cache is an optimisation: never fail the run over it
         log(json.dumps(dict(event="compile_cache", used=False, reason=f"{type(e).__name__}: {e}"[:300])))
     return None

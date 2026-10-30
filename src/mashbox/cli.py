@@ -482,7 +482,7 @@ def load(a):
     from .models.qwen3_8_27b import weights as QW
     from .runtime.engine import Engine
     from .runtime.chat import Chat
-    hub.compile_cache(m, cache, log)
+    hub.compile_cache(m, cache, log, tp=tp)            # the cache built for this accelerator and tensor-parallel size
     t_files = time.time()
     dk = bpath = mesh = None
     if not a.no_kernels:
