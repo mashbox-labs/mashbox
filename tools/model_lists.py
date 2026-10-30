@@ -1,5 +1,5 @@
-"""Model lists for the public pages, rendered from models.json: the count line, the short list of GGUF files tested on
-TPU, the docs catalog by family, and the maker check of every GGUF row.
+"""Model lists for the public pages, rendered from models.json: the lead line and the count line, the overviews' GGUF
+list by publisher, the docs catalog by family, and the maker check of every GGUF row.
 
 Standard library only. It reads mashbox/catalog.py (rows, levels, speeds) and tools/gguf_rows.py (MAKER_NAMES), each
 loaded by path from this tool's own tree, and changes neither. catalog.py is in the code set of every GGUF chip record,
@@ -7,12 +7,12 @@ so the page layout lives here and a new layout never touches a measured record. 
 README, the org profile, llms.txt and the docs catalog with these functions; no page types a list or a count.
 """
 import functools
+import html
 import importlib.util
 import re
 from pathlib import Path
 
 TREE = Path(__file__).resolve().parent.parent
-TOP_GGUF = 8   # GGUF rows the README and the org profile show; the docs catalog and `mashbox models` show every row
 
 
 def _load(name, path):
@@ -67,6 +67,15 @@ def count_line(reg):
     return f"{_n(counts(reg)['entries'], 'entry', 'entries')}: {body}" if words else "0 entries"
 
 
+def lead_line(reg):
+    """"26 models and files run in mashbox: 3 MASHBOX builds and 23 GGUF files of 18 models": the first line of every
+    overview (README, org profile, Hugging Face org card), the catalog's size as models.json has it today."""
+    c = counts(reg)
+    return (f"{_n(c['entries'], 'model and file', 'models and files')} run in mashbox: "
+            f"{_n(c['ports'] + c['own'], 'MASHBOX build', 'MASHBOX builds')} and "
+            f"{_n(c['files'], 'GGUF file', 'GGUF files')} of {_n(c['gguf_models'], 'model', 'models')}")
+
+
 # ------------------------------------------------------------------------------------------------ makers
 
 def maker_problems(reg):
@@ -96,8 +105,7 @@ def gguf_name(r):
 
 def tested(reg):
     """gguf[] rows with a passing chip test (level Tuned or Tested), Tuned first, then by maker, model and file: the
-    short list the README and the org profile print (the first TOP_GGUF). The rows carry no date, so no view calls them
-    new."""
+    files llms.txt names. The rows carry no date, so no view calls them new."""
     cat = catalog()
     rows = [r for r in cat.gguf_rows(reg) if r["chips"]]
     return sorted(rows, key=lambda r: (cat.LEVELS.index(r["level"]), r["maker"].casefold(), gguf_name(r).casefold(),
@@ -216,16 +224,27 @@ def render_markdown(reg, src=None):
     return "\n".join(out)
 
 
+def by_publisher(reg):
+    """[(publisher, [model names], [rows])]: every gguf[] row under its publisher (the Hugging Face owner of its repo),
+    in catalog.publishers' order (publishers by name, models by name, files by tag and file); MASHBOX builds are the
+    other tier."""
+    cat = catalog()
+    return [(p["name"], [m["name"] for m in p["models"]], [r for m in p["models"] for r in m["rows"]])
+            for p in cat.publishers(reg) if p["name"] != cat.MASHBOX]
+
+
 def gguf_block(reg, catalog_url):
-    """The README's and the org profile's GGUF tier: its heading and line, the first TOP_GGUF files with a passing chip
-    test (tested), then the catalog link with the count line."""
-    speed, top = catalog()._speed, tested(reg)
+    """The overviews' GGUF tier (README, org profile, Hugging Face org card): its heading and line, then EVERY gguf[]
+    row, one collapsed section per publisher (its file count and model names in the summary, so a phone shows the whole
+    list short), each file with maker, architecture, quant, level and chips, then the link to the docs catalog."""
+    speed = catalog()._speed
     out = [f"**{GGUF}**", "", GGUF_LINE, ""]
-    if top:
-        n = f"{min(len(top), TOP_GGUF)} of {len(top)} " if len(top) > TOP_GGUF else ""
-        out += [f"Tested on TPU ({n}files with a passing chip test):" if n else "Tested on TPU:", "",
-                _gguf_table(top[:TOP_GGUF], speed, run=False), ""]
-    return "\n".join(out + [f"[Full catalog]({catalog_url}): {count_line(reg)}."])
+    if not reg.get("gguf"):
+        out += ["No GGUF file is listed in this version.", ""]
+    for pub, names, rows in by_publisher(reg):
+        out += [(f"<details><summary><b>{html.escape(pub)}</b> ({_n(len(rows), 'file', 'files')}): "
+                 f"{html.escape(', '.join(names))}</summary>"), "", _gguf_table(rows, speed, run=False), "", "</details>", ""]
+    return "\n".join(out + [f"[Full catalog]({catalog_url}), with the run command for each file."])
 
 
 def llms_lines(reg, catalog_url):
