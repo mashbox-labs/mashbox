@@ -106,9 +106,12 @@ def is_moe(family):
 
 def refused(family):
     """-> None, or the strict-xfail reason for a family whose architecture has no line in mashbox.gguf.archs ARCHS, or
-    that the catalog does not list (archs.held: an unlisted mixture-of-experts architecture): `mashbox run` refuses its
-    file (cli.load_gguf: GGUFError, archs.module / archs.held). Read from the code each run, so the rows run gated the
-    day the line or the listing comes back (no xfail to remove, nothing to flip). Never a bypass of the refusal."""
+    that the hold refuses (archs.held with the family's moe: a mixture-of-experts file with no passing chip row of its
+    own, under a MoE architecture or a dense one's name): `mashbox run` refuses its file (cli.load_gguf: GGUFError,
+    archs.module / archs.held). Read from the code each run, so the rows run gated the day the architecture's line comes
+    back (no xfail to remove, nothing to flip). A tiny fixture is never a proven file (held reads no path here, and a
+    passing row releases only the file whose sha256 it names), so a MoE family stays refused. Never a bypass of the
+    refusal."""
     if family == BSHJ:
         return None
     from mashbox.gguf import archs
@@ -116,10 +119,10 @@ def refused(family):
     if arch not in archs.ARCHS:
         return (f"open: src/mashbox/gguf/archs/__init__.py ARCHS has no {arch!r} line, so `mashbox run` refuses this "
                 "file (the architecture's graph exists; its line comes back when the file's pre-tokenizer is read)")
-    if archs.held(arch):
-        return (f"listed: the catalog does not list {arch!r} (catalog.arch_rows), so `mashbox run` refuses this file "
-                "with the unsupported-architecture line (gguf.archs.held, cli.load_gguf); its rows run gated the day a "
-                "passing chip row lists it")
+    if archs.held(arch, moe=is_moe(family)):
+        return (f"held: a {arch!r} file with routed experts runs only when a passing chip row names that file (its "
+                "sha256), and this tiny fixture is no proven file, so `mashbox run` refuses it with the held line "
+                "(gguf.archs.held, cli.load_gguf)")
     return None
 
 

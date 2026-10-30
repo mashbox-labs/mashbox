@@ -83,17 +83,25 @@ def draft_only(f):
 
 def plan(f, c, kernel_types=None, chip=None, mem=None):
     """One plan line: architecture, layers, block types with byte shares, which run on kernels and which on the exact
-    reference (slow), the MTP layer, and the bytes the weights take."""
+    reference (slow), the MTP layer, and the bytes the weights take. The path is decided per tensor (ops.weight_path):
+    one block type can run native for stacked experts and on the exact path for dense weights. The embedding table of a
+    file with its own output weight is gathered, not multiplied, so it is on neither path."""
     from .. import ops
     kernel_types = ops.kernel_types() if kernel_types is None else kernel_types
     census, total = f.census()
+    # token_embd.weight is only gathered (one row per token) when the file has its own output.weight, as the load's
+    # weights event counts it; without one it is the head and is multiplied
+    gathered = {"token_embd.weight"} if "output.weight" in f.tensors else set()
+    exact = {}
+    for n, t in f.tensors.items():
+        if n not in gathered and ops.weight_path(t.type, t.shape, kernel_types=kernel_types) == "exact":
+            exact[t.type_name] = exact.get(t.type_name, 0) + t.nbytes
     parts, ref, ref_types = [], 0, []
     for name, e in census.items():
         share = 100.0 * e["bytes"] / max(1, total)
-        on_k = e["type"] in kernel_types
         parts.append(f"{name} {share:.1f}%")
-        if not on_k and name not in ("F32",):
-            ref += e["bytes"]
+        if exact.get(name) and name not in ("F32",):
+            ref += exact[name]
             ref_types.append(name)
     line = dict(arch=f.arch, layers=c.L, mtp_layers=getattr(c, "nextn", 0), weights_gb=round(total / 1e9, 2),
                 types=", ".join(parts), kernel_types=sorted(ops.type_name(t) for t in kernel_types),
@@ -105,7 +113,7 @@ def plan(f, c, kernel_types=None, chip=None, mem=None):
     return line, warn
 
 
-def need_bytes(f, c, ctx, slots, kernel_types=frozenset(), roles=None):
+def need_bytes(f, c, ctx, slots, kernel_types=frozenset(), roles=None, tokens=2048):
     """-> (weights, state, scratch) device bytes, an estimate (XLA's own scratch comes on top):
       weights  the blocks `load` puts on the device, as stored in the file; a multiplied weight whose type runs on the
                kernel package counts the package's planes when it reports them (ops.device_nbytes; the MTP layer is not
@@ -113,7 +121,8 @@ def need_bytes(f, c, ctx, slots, kernel_types=frozenset(), roles=None):
       state    K/V and linear-attention state for slots + 1 rows of ctx tokens
       scratch  the float32 values the exact reference path rebuilds at a time: the largest chunk of rows
                (ops.exact_chunk_rows) of a multiplied weight on that path (0 when every multiplied weight has a kernel in
-               kernel_types)"""
+               kernel_types), plus for a mixture of experts the routed op's own scratch in a call of `tokens` rows (the
+               engine's tokens_per_call; mashbox.moe.need_bytes asks the kernel package for its tiling)"""
     import numpy as np
     from . import archs
     loaded, mult = roles if roles is not None else archs.module(f.arch).tensor_roles(f, c)
@@ -123,8 +132,14 @@ def need_bytes(f, c, ctx, slots, kernel_types=frozenset(), roles=None):
     act = np.dtype(c.act).itemsize
     kv = 2 * c.NG * (slots + 1) * ctx * c.KV * c.HD * act
     rec = c.NG * (c.FI - 1) * (slots + 1) * (c.HV * c.DK * c.DV * 4 + (c.CK - 1) * c.CONV * act)
-    sh = [tuple(int(v) for v in f.tensors[n].shape) for n in mult if f.tensors[n].type not in kernel_types]
+    sh = [tuple(int(v) for v in f.tensors[n].shape) for n in mult
+          if ops.weight_path(f.tensors[n].type, f.tensors[n].shape, kernel_types=kernel_types) == "exact"]
     big = max([ops.exact_chunk_rows(s[-2], s[-1]) * s[-1] * 4 for s in sh if len(s) >= 2], default=0)
+    spec = getattr(c, "spec", None) if getattr(c, "moe", False) else None
+    if spec is not None:
+        from .. import moe
+        ex = [(f.tensors[n].type, f.tensors[n].shape, f.tensors[n].nbytes) for n in mult if len(f.tensors[n].shape) > 2]
+        big += moe.need_bytes(spec, c.D, tokens, ex, act, kernel_types)
     return w, kv + rec, big
 
 
@@ -177,7 +192,7 @@ def check_fits(f, c, ctx, slots, kernel_types=frozenset(), warn=None):
     if need > lim:
         fit = [n for n, b in CHIPS if b * HEADROOM >= need]
         raise GGUFError(f"mashbox: this file needs about {need / 1e9:.1f} GB on the chip (weights {w / 1e9:.1f} GB, state for "
-                        f"{slots} x {ctx} tokens {st / 1e9:.2f} GB, largest float32 weight {big / 1e9:.2f} GB) and this chip "
+                        f"{slots} x {ctx} tokens {st / 1e9:.2f} GB, float32 and routed-expert scratch {big / 1e9:.2f} GB) and this chip "
                         f"has {lim / 1e9:.1f} GB. " + (f"It fits: {', '.join(fit)}. " if fit else "") +
                         "A smaller quant of the same model, a shorter --ctx or fewer --slots also helps.")
     return need
@@ -196,12 +211,16 @@ def inspect(path, repo=None, quant=None):
                gguf_reader=reader_version(), llama_cpp=llama_cpp_command(path, repo, quant))
     try:
         _, A, c = open_model(path, repo=repo, quant=quant)
-        held = archs.held(f.arch, path, repo, quant)                # as `run`: an unlisted MoE architecture does not run here
+        held = archs.held(f.arch, path, repo, quant, moe=archs.moe_file(f))   # as `run`: a MoE file with no passing row of its own does not run here
         if held:
             raise GGUFError(held)
         from .. import ops
         ops.load_kernels()                          # which types this install runs on a kernel (none without the package)
         line, warn = plan(f, c)
+        ex = sorted({int(t.type) for n, t in f.tensors.items() if "_exps." in n})
+        if ex:                                      # the routed experts' path on this install: the kernel, or why not
+            path, why = ops.expert_plan(ex)
+            out.update(routed_experts=dict(path=path, why=why, kernel=ops.expert_kernel()))
         est = {}
         for which, kt in (("this_install", ops.kernel_types()), ("reference_path", frozenset())):
             w, st, big = need_bytes(f, c, 2048, 8, kt)

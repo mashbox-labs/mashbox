@@ -26,7 +26,7 @@ from jax import lax
 
 from ... import ops
 from ..reader import GGUFError
-from .qwen35 import rms, kv_write, _T
+from .qwen35 import rms, kv_write, _T, new_stats, book, tied_head, routes
 from .dense import rope
 
 f32, bf16 = jnp.float32, jnp.bfloat16
@@ -107,7 +107,7 @@ def load(f, c, use_kernels=True, log=None):
     """-> (W, info). Every layer is its own entry (the two layer kinds have different shapes): big linears as ops handles
     from the file's blocks, small tensors as exact float32."""
     import time
-    t0, stats = time.time(), dict(bytes=0, values=0, kernel_bytes=0, ref_bytes=0, ref_types={})
+    t0, stats = time.time(), new_stats()
 
     def count(t):
         stats["bytes"] += t.nbytes
@@ -119,11 +119,7 @@ def load(f, c, use_kernels=True, log=None):
         if t.type not in ops.reference.TYPES:
             raise GGUFError(f"mashbox: {name} is ggml type {t.type}, which the GGUF reader in this version cannot read")
         h = ops.prepare(t.rows(), t.type, t.shape, use_kernel=use_kernels)
-        if isinstance(h, ops.Packed):
-            stats["kernel_bytes"] += sum(int(a.nbytes) for a in jax.tree_util.tree_leaves(h.packed))
-        else:
-            stats["ref_bytes"] += t.nbytes
-            stats["ref_types"][t.type_name] = stats["ref_types"].get(t.type_name, 0) + t.nbytes
+        book(stats, h, t, name, int(t.nbytes))
         return h
 
     def small(name):
@@ -149,14 +145,13 @@ def load(f, c, use_kernels=True, log=None):
     W["embed"] = ops.prepare(t.rows(), t.type, t.shape, use_kernel=False)       # rows are gathered, not multiplied
     count(t)
     W["norm"] = small("output_norm.weight")
-    W["head"] = big("output.weight") if not c.tie else ops.prepare(t.rows(), t.type, t.shape, use_kernel=use_kernels)
+    W["head"] = big("output.weight") if not c.tie else tied_head(stats, t, use_kernels)
     if c.freqs:
         W["freqs"] = small("rope_freqs.weight")
     jax.block_until_ready(jax.tree_util.tree_leaves(W))
     info = dict(load_s=round(time.time() - t0, 2), device_bytes=int(stats["bytes"]), n_weights=int(stats["values"]),
                 bpw=round(stats["bytes"] * 8 / max(1, stats["values"]), 3), file=f.path.rsplit("/", 1)[-1],
-                layers_stacked=False, kernel_bytes=stats["kernel_bytes"], reference_bytes=stats["ref_bytes"],
-                reference_types=stats["ref_types"], mtp_layers=0)
+                layers_stacked=False, mtp_layers=0, **routes(stats))
     if log:
         log(info)
     return W, info

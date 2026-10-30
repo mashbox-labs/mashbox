@@ -753,6 +753,32 @@ def test_moe_refused_from_both_config_forms(tmp_path, monkeypatch):
     assert SEL.applies("ngram", SEL.meta_of(dense, SimpleNamespace(moe=False), "gguf"))[0]
 
 
+@pytest.mark.parametrize("name", ["qwen3moe-f32", "qwen2moe-f32", "llama-moe-f32"])
+def test_routed_expert_files_on_the_dense_module_decode_without_speculation(tmp_path, monkeypatch, name):
+    """qwen3moe, qwen2moe and llama with experts load on the dense module, which declares a verify pass: their files
+    are refused at the MoE flag their config sets from the routed-expert tensors (cfg.moe), never by name, forced
+    n-gram included (through cli.gguf_speculation on the real fixture)"""
+    from mashbox import cli
+    from mashbox.gguf import GGUFError, open_model
+    _, A, c = open_model(FXT.build(name, str(tmp_path)), act=jnp.float32)
+    assert getattr(A, "SPEC_VERIFY", False) and c.moe
+    lines = []
+    monkeypatch.setattr(cli, "log", lines.append)
+    with pytest.raises(GGUFError, match="MoE"):
+        cli.gguf_speculation(SimpleNamespace(speculation="ngram", draft_k=3), c, A)
+    assert cli.gguf_speculation(SimpleNamespace(speculation=None, draft_k=None), c, A) == {} and "MoE" in lines[-1]
+
+
+def test_no_mixture_of_experts_architecture_can_draft():
+    """archs.drafting() is what --draft-model's error names as the architectures that can draft: a mixture-of-experts
+    architecture (catalog.moe_arch, the release check's rule) is never in it, though its module declares SPEC_DRAFT for
+    the dense files it also loads"""
+    from mashbox import catalog
+    from mashbox.gguf import archs
+    got = archs.drafting()
+    assert got and not [a for a in got if catalog.moe_arch(a, catalog.arch_models().get(a))], got
+
+
 def test_server_loop_ngram_equals_plain(fams, tmp_path, monkeypatch):
     """one GGUF request through the real server (cli.load_gguf, Server.complete and its scheduler thread) with
     --speculation ngram: the same text and token count as the plain server, and speculation rounds ran"""

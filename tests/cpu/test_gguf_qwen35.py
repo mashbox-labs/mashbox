@@ -480,7 +480,7 @@ def _random_blocks(rng, t, rows, cols):
     _, bs, ts = R.TYPES[t]
     b = rng.integers(0, 256, size=(rows, cols // bs, ts), dtype=np.uint8)
     h = np.array([0.01], np.float16).view(np.uint8)
-    pos = {14: [208], 12: [0, 2], 23: [0]}[t]                      # byte offsets of the float16 fields
+    pos = {14: [208], 12: [0, 2], 23: [0], 8: [0]}[t]              # byte offsets of the float16 fields
     for p in pos:
         b[..., p], b[..., p + 1] = h[0], h[1]
     return b.reshape(rows, -1)
@@ -548,6 +548,43 @@ def test_exact_handles_keep_each_tensor_as_one_byte_run_with_the_same_bits():
         for a, b in pairs:
             a, b = np.asarray(a), np.asarray(b)
             assert a.shape == b.shape and (a.view(np.uint32) == b.view(np.uint32)).all()
+
+
+def test_take_rows_of_a_byte_run_gathers_whole_rows():
+    """the embedding lookup of a byte run is one gather whose slice is one whole row of blocks, not one index per byte
+    (Qwen3.6-35B-A3B's Q8_0 table, 2176 bytes a row, on one v6e: 8 ids took 983 us one index per byte, 123 us as rows)"""
+    import re
+    import jax
+    from mashbox import ops
+    from mashbox.ops import reference as R
+    rng = np.random.default_rng(12)
+    rows, cols = 64, 512
+    for t in (8, 14, 12, 23):                                       # Q8_0, Q6_K, Q4_K, IQ4_XS
+        h = ops.prepare(_random_blocks(rng, t, rows, cols), t, (rows, cols), use_kernel=False)
+        rb = cols // R.TYPES[t][1] * R.TYPES[t][2]
+        def sizes(txt):
+            return sorted(re.findall(r"stablehlo\.gather.*?slice_sizes = array<i64: ([0-9, ]+)>", txt))
+        for shape in ((1,), (8,), (3, 5)):
+            got = sizes(jax.jit(ops.take_rows).lower(h, jnp.zeros(shape, jnp.int32)).as_text())
+            own = sizes(jax.jit(lambda b: R.dequant(b, t, cols)).lower(jnp.zeros(shape + (rb,), jnp.uint8)).as_text())
+            assert got == sorted(own + [str(rb)]), (t, shape, got, own)       # the dequant's own lookups, plus one row gather
+
+
+def test_take_rows_of_a_byte_run_equals_the_row_handle_for_every_id_form():
+    """the byte run's lookup equals the (rows, row_bytes) handle's bit for bit for 1-D and 2-D ids, the first and last
+    rows, repeated ids and negative ids (counted from the end, as numpy indexing)"""
+    import jax
+    from mashbox import ops
+    rng = np.random.default_rng(13)
+    rows, cols = 64, 512
+    for t in (8, 14, 12, 23):
+        raw = _random_blocks(rng, t, rows, cols)
+        h = ops.prepare(raw, t, (rows, cols), use_kernel=False)
+        h2 = ops.Raw(jnp.asarray(raw), t, (rows, cols))
+        for ids in ([0], [rows - 1, 0, 5, 5], [-1, -rows, 7], [[3, -2, 0], [63, 1, 1]]):
+            ids = jnp.asarray(ids, jnp.int32)
+            a, b = np.asarray(jax.jit(ops.take_rows)(h, ids)), np.asarray(ops.take_rows(h2, ids))
+            assert a.shape == b.shape == ids.shape + (cols,) and (a.view(np.uint32) == b.view(np.uint32)).all(), (t, ids)
 
 
 def test_qwen35moe_file_without_feed_forward_length(tmp_path):
@@ -764,3 +801,58 @@ def test_kq_layer_failure_keeps_the_sliced_path(tmp_path, monkeypatch, capsys):
     warns = [ln for ln in err.splitlines() if "kq layer= for" in ln]
     assert len(warns) == len(failed) and all("sliced per layer" in ln for ln in warns), err
     assert np.array_equal(lg, got[False][0]), "logits differ from the sliced-planes path"
+
+
+# ------------------------------------------------------------------------------------------- K/V cache read and write
+# On TPU the decode program copied the whole K/V cache to another layout at every step (profile 2026-10-30, Qwen3.6-35B-A3B
+# on v6e: 2 x 377.5 MB per token): once for the one-row write (XLA turns its dropping scatter into a select that reads the
+# old K/V) and once for the read (the attention dot's layout was given to the whole cache, not to the slice it reads).
+# These check the program's form on CPU; the copies themselves are measured on the chip.
+KV_SHAPE = (3, 5, 16, 2, 4)        # (groups, slots incl. scratch, CTX, KV heads, head dim)
+
+
+def _kv(seed=0):
+    r = np.random.default_rng(seed)
+    return (jnp.asarray(r.standard_normal(KV_SHAPE, dtype=np.float32)),
+            jnp.asarray(r.standard_normal(KV_SHAPE, dtype=np.float32)))
+
+
+def _prims(fn, *args):
+    return [e.primitive.name for e in jax.make_jaxpr(fn)(*args).eqns]
+
+
+def test_one_token_row_write_never_reads_the_cache():
+    Kc, Vc = _kv()
+    ks = jnp.ones((3, 1, 1, 2, 4))
+    prims = _prims(lambda K, V, s, p: A.kv_write(K, V, s, p, ks, ks), Kc, Vc, jnp.array([2]), jnp.array([[7]]))
+    assert "scatter" not in prims and "cond" in prims, prims
+    many = _prims(lambda K, V, s, p: A.kv_write(K, V, s, p, jnp.ones((3, 2, 1, 2, 4)), jnp.ones((3, 2, 1, 2, 4))),
+                  Kc, Vc, jnp.array([0, 1]), jnp.array([[3], [4]]))
+    assert "scatter" in many        # rows of a batch keep the one scatter
+
+
+@pytest.mark.parametrize("p", [0, 9, 15, 16, 19], ids=lambda p: f"pos{p}")
+def test_one_token_row_write_matches_the_dropping_scatter(p):
+    Kc, Vc = _kv(1)
+    r = np.random.default_rng(2)
+    ks, vs = (jnp.asarray(r.standard_normal((3, 1, 1, 2, 4), dtype=np.float32)) for _ in range(2))
+    s, pos = jnp.array([2], jnp.int32), jnp.array([[p]], jnp.int32)
+    want = (Kc.at[:3, s[:, None], pos].set(ks, mode="drop"), Vc.at[:3, s[:, None], pos].set(vs, mode="drop"))
+    got = jax.jit(A.kv_write)(Kc, Vc, s, pos, ks, vs)
+    for g, w in zip(got, want):
+        assert np.array_equal(np.asarray(g), np.asarray(w))
+    if p >= KV_SHAPE[2]:            # past the cache: nothing written
+        assert np.array_equal(np.asarray(got[0]), np.asarray(Kc)) and np.array_equal(np.asarray(got[1]), np.asarray(Vc))
+
+
+def test_contig_read_is_one_slice_held_in_the_cache_layout():
+    Kc, Vc = _kv(3)
+    slots = jnp.arange(3, dtype=jnp.int32)
+    prims = _prims(lambda K, V: A.kv_read(K, V, 1, slots, 8, True), Kc, Vc)
+    assert "gather" not in prims and prims.count("layout_constraint") == 2, prims
+    got = jax.jit(lambda K, V: A.kv_read(K, V, 1, slots, 8, True))(Kc, Vc)
+    for g, c in zip(got, (Kc, Vc)):
+        assert np.array_equal(np.asarray(g), np.asarray(c[1][slots, :8]))
+    other = jnp.array([4, 0], jnp.int32)          # rows on other slots (prefill) still gather their slots
+    got = A.kv_read(Kc, Vc, 2, other, 8, False)
+    assert np.array_equal(np.asarray(got[0]), np.asarray(Kc[2][other, :8]))

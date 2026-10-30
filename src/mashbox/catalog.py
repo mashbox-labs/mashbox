@@ -228,7 +228,7 @@ def arch_rows(reg, src=None):
     file of it (the record guard holds that row to its sealed chip record), and for a mixture-of-experts architecture a
     passing chip row of a MoE file of it (no MoE is listed before its routed experts run on the kernel). This is the
     listing (docs/gguf.md and the views) only: an unlisted dense architecture still runs on the exact path, and
-    gguf.archs.held refuses only an unlisted MoE one."""
+    gguf.archs.held runs a MoE file only when a passing row is of that file (its sha256), listed or not."""
     rows, labels = [], arch_models(src)
     for a in archs(src):
         gg = [g for g in reg.get("gguf") or [] if g["arch"] == a]

@@ -244,6 +244,16 @@ def cache_view(engine):
             tuple(tuple(sn) for sn in (getattr(engine, "snaps", None) or ())))
 
 
+def routed_experts():
+    """/health's routed_experts, read where the engine runs (as compiles_after_ready): mashbox.ops.expert_report() for
+    this process, the path a mixture-of-experts model's routed experts took in the programs traced since load (kernel
+    with the kernel's id and version, exact, or mixed; call sites by path; why any site ran exact), or None when no
+    routed op was traced here (a dense model, or before the warm-up)."""
+    from .. import ops
+    rep = ops.expert_report()
+    return rep if rep["path"] is not None else None
+
+
 class Server:
     def __init__(self, engine, chat, model_id, info, log=None):
         self.engine, self.chat, self.model_id, self.info = engine, chat, model_id, info
@@ -283,7 +293,7 @@ class Server:
                     host_cache_evictions=host.evicted if host is not None else 0,
                     cache_namespace=getattr(E, "cache_ns", None), deployment_id=getattr(E, "deployment_id", None),
                     component_set_sha=getattr(E, "component_set_sha", None), certification="not_certified",
-                    compiles_after_ready=programs.counts()["compiles_after_ready"])
+                    compiles_after_ready=programs.counts()["compiles_after_ready"], routed_experts=routed_experts())
 
     def publish_cache_view(self):
         """The engine loop, at a call boundary: keep cache_view(engine) for /health, which another thread reads (the HTTP

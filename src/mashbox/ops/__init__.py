@@ -44,6 +44,8 @@ runs the kernel once, compiled, on one row (the preflight). If the repack or the
 compile or run, weights of that type and shape load on the exact path, with a warning.
 """
 import importlib
+import importlib.metadata
+import importlib.util
 import inspect
 import os
 import sys
@@ -60,7 +62,8 @@ from . import dense16
 f32 = jnp.float32
 HI = lax.Precision.HIGHEST
 KERNEL_MODULE = "mashbox_engine_kernels"     # the licensed kernel wheel's module (release item `engine`)
-_KERNELS = {"module": None, "types": frozenset(), "nb": frozenset(), "name": None, "error": None}
+_KERNELS = {"module": None, "types": frozenset(), "nb": frozenset(), "name": None, "error": None, "source": None,
+            "version": None}
 _KQ_RAN = {}             # kq preflight per (type, shape) since load_kernels: True = the kernel ran, else why it failed
 _KQ_LAYER = {}           # kq layer= preflight per (type, shape) on a layer stack: True = it ran, else why it failed
 PREFLIGHT_DTYPE = jnp.bfloat16   # the preflight's input dtype: the forward's activation dtype (the archs' Config act)
@@ -88,6 +91,52 @@ class Raw:
 
     def __repr__(self):
         return f"Raw({type_name(self.t)}, {self.shape})"
+
+
+@jax.tree_util.register_pytree_node_class
+class Dense32:
+    """Exact-path handle for one F32 tensor: w (rows, cols) float32, the file's values as stored. An F32 block IS its
+    float32 value, so this holds the same bytes as Raw; it multiplies with the exact path's own float32 dot (bit for bit
+    a Raw F32 weight's product) without rebuilding the values from the bytes at every call. That rebuild of Qwen3.6-35B's
+    60 small F32 gate weights was 61% of a v6e decode step. A weight the exact path chunks, a stack and every other type
+    keep Raw."""
+
+    def __init__(self, w, t, shape):
+        self.w, self.t, self.shape = w, int(t), tuple(int(s) for s in shape)
+
+    def tree_flatten(self):
+        return (self.w,), (self.t, self.shape)
+
+    @classmethod
+    def tree_unflatten(cls, aux, ch):
+        return cls(ch[0], *aux)
+
+    def __repr__(self):
+        return f"Dense32({self.shape})"
+
+
+def _dense32(raw, t, shape):
+    """-> Dense32 for one unstacked F32 tensor the exact path multiplies whole, else None"""
+    rows, cols = (int(v) for v in shape[-2:])
+    if t != 0 or raw.ndim != 2 or len(tuple(shape)) != 2 or exact_chunk_rows(rows, cols) != rows:
+        return None
+    if isinstance(raw, jax.Array):
+        return Dense32(lax.bitcast_convert_type(raw.reshape(rows, cols, 4), f32), t, shape)
+    return Dense32(jnp.asarray(np.ascontiguousarray(np.asarray(raw)).view("<f4").reshape(rows, cols)), t, shape)
+
+
+def route(h):
+    """the path a weight handle is multiplied on, as a load's weights event counts it: 'kernel' (kq or native planes),
+    'resident_f32' (Dense32: float32 values held on the device and the exact path's own float32 dot, no rebuild per
+    call: exact, never a kernel), 'native_bf16' (Dense16), else 'reference' (the exact path rebuilds the values from
+    the blocks at every call)"""
+    if isinstance(h, (Packed, NB)):
+        return "kernel"
+    if isinstance(h, Dense32):
+        return "resident_f32"
+    if isinstance(h, dense16.Dense16):
+        return "native_bf16"
+    return "reference"
 
 
 @jax.tree_util.register_pytree_node_class
@@ -205,19 +254,35 @@ def _switch(h, fn, *args):
 
 
 def load_kernels(log=None, module=None):
-    """Import the TPU kernel package if it is installed (env MASHBOX_GGUF_KERNELS names another module, `off` disables).
+    """Load the TPU kernel package. With no flag: the installed package if there is one, else the catalog's
+    engine_kernels row for this chip and JAX (ops/bundle.py catalog_wheel: from the cache, downloaded once, sha256 and
+    libtpu checked against the row). Env MASHBOX_GGUF_KERNELS names another module or a payload bundle wheel
+    (mashbox_engine_kernels-*.whl, which must still be a catalog row); `off` disables.
     -> the ggml type ids it runs. Without it every type uses the exact reference."""
     module = module or os.environ.get("MASHBOX_GGUF_KERNELS", KERNEL_MODULE)
-    _KERNELS.update(module=None, types=frozenset(), nb=frozenset(), name=None, error=None)
+    _KERNELS.update(module=None, types=frozenset(), nb=frozenset(), name=None, error=None, source=None, version=None)
     _EXPERT_CHECKED.clear()
+    _EXPERT_JIT.clear()
+    _EXPERT_SITES.update(kernel=0, exact=0, why=[])
     _KQ_RAN.clear()
     _KQ_LAYER.clear()
     if module in ("", "off", "none"):
         return _KERNELS["types"]
     try:
-        m = importlib.import_module(module)
+        if str(module).endswith(".whl"):          # a payload bundle (no code): the routed-expert half of the surface
+            from .bundle import Bundle
+            m, source, name = Bundle(module), "file", module
+        elif module == KERNEL_MODULE and importlib.util.find_spec(module) is None:
+            from .bundle import Bundle, catalog_wheel
+            path = catalog_wheel(log)
+            if path is None:
+                raise ImportError(f"No module named '{module}' and no engine_kernels row for this chip and JAX")
+            m, source, name = Bundle(path), "catalog", path
+        else:
+            m, source, name = importlib.import_module(module), "installed", module
         nb = frozenset(int(t) for t in m.nb_types()) if hasattr(m, "nb_types") else frozenset()
-        _KERNELS.update(module=m, types=frozenset(int(t) for t in getattr(m, "TYPES", ())), nb=nb, name=module)
+        _KERNELS.update(module=m, types=frozenset(int(t) for t in getattr(m, "TYPES", ())), nb=nb, name=name, source=source,
+                        version=getattr(m, "version", None) or _dist_version(module))
     except ImportError as e:
         _KERNELS["error"] = str(e)
     except Exception as e:                      # a broken install must not stop the exact path
@@ -225,6 +290,22 @@ def load_kernels(log=None, module=None):
         if log:
             log(f"mashbox: kernel package {module} did not load ({_KERNELS['error']}); every type runs on the exact path")
     return _KERNELS["types"] | _KERNELS["nb"]
+
+
+def _dist_version(module):
+    try:
+        return importlib.metadata.version(str(module))
+    except (importlib.metadata.PackageNotFoundError, ValueError):
+        return None
+
+
+def kernel_package():
+    """what load_kernels loaded: name (module or wheel path), source ("installed" | "catalog" | "file" | None), version,
+    sha256 (a bundle's), error. A record names the version from here: a bundle read from the cache or a path is not
+    pip-installed, so importlib.metadata has no version for it."""
+    m = _KERNELS["module"]
+    return {"name": _KERNELS["name"], "source": _KERNELS["source"], "version": _KERNELS["version"],
+            "sha256": getattr(m, "sha256", None), "error": _KERNELS["error"]}
 
 
 def kernel_types():
@@ -250,10 +331,17 @@ def weight_path(t, shape=(), experts=None, kernel_types=None):
     if t not in allowed:
         return "exact"
     experts = len(tuple(shape)) > 2 if experts is None else bool(experts)
-    kq = t in _KERNELS["types"]
+    kq = t in _KERNELS["types"] and _kq_covers(t, shape)
     if t in _KERNELS["nb"] and (experts or DENSE_NATIVE):
         return "native"
     return "kq" if kq else "exact"
+
+
+def _kq_covers(t, shape):
+    """a package that lists its kq shapes (a payload bundle: kq_covers) runs kq only for those; a package without
+    kq_covers runs every shape of its TYPES; a type-only question (no (rows, cols)) asks about the type"""
+    f = getattr(_KERNELS["module"], "kq_covers", None)
+    return f is None or len(tuple(shape)) < 2 or bool(f(int(t), tuple(int(v) for v in tuple(shape)[-2:])))
 
 
 def device_nbytes(t, shape, nbytes, kernel_types=None, experts=None):
@@ -327,6 +415,8 @@ def prepare(raw, t, shape, use_kernel=True, experts=None):
     path = weight_path(t, shape, experts, None if use_kernel else frozenset())
     if path == "native":
         try:
+            if faults.forced("native-planes"):          # the fallback test's switch (MASHBOX_FAULT=force:native-planes)
+                raise RuntimeError("forced by MASHBOX_FAULT=force:native-planes")
             planes = _KERNELS["module"].repack_nb_host(np.asarray(raw), t, tuple(int(v) for v in shape[-2:]))
             return NB(jax.device_put(planes, jax.devices()[0]), t, shape)
         except Exception as e:                  # a fast path must never stop the load: fall back, loudly
@@ -352,6 +442,9 @@ def prepare(raw, t, shape, use_kernel=True, experts=None):
         h = dense16.prepare(raw, t, shape)
         if h is not None:
             return h
+    h = _dense32(raw, t, shape)
+    if h is not None:
+        return h
     return Raw(jnp.asarray(_flat(raw)), t, shape)
 
 
@@ -407,6 +500,8 @@ def dequant(h):
         return _KERNELS["module"].dequant(h.packed)
     if isinstance(h, dense16.Dense16):
         return dense16.dequant(h)
+    if isinstance(h, Dense32):
+        return h.w
     return R.dequant(_mat(h.raw, h.t, h.shape), h.t, h.shape[-1])
 
 
@@ -418,12 +513,18 @@ def take_rows(h, ids):
         return _KERNELS["module"].dequant(h.packed)[ids]
     if isinstance(h, dense16.Dense16):
         return dense16.take_rows(h, ids)
+    if isinstance(h, Dense32):
+        return h.w[ids]
     rows, cols = h.shape[-2], h.shape[-1]
     _, bs, ts = R.TYPES[h.t]
     rb = cols // bs * ts
-    if h.raw.ndim == 1:               # gather the rows' bytes from the run (no row-major copy of the whole table)
-        rb_ids = jnp.asarray(ids)[..., None] * rb + jnp.arange(rb, dtype=jnp.int32)
-        return R.dequant(h.raw[rb_ids], h.t, cols)
+    if h.raw.ndim == 1:               # each id's row is one window of the run (no row-major copy of the whole table)
+        ids = jnp.asarray(ids)
+        flat = ids.reshape(-1)
+        flat = jnp.where(flat < 0, flat + rows, flat)               # a negative id counts from the end, as numpy indexing
+        # one gather whose slice is a whole row (8 ids of a 2176-byte row on one v6e: 123 us; one index per byte: 983 us)
+        b = jax.vmap(lambda i: lax.dynamic_slice(h.raw, (i * rb,), (rb,)))(flat)
+        return R.dequant(b.reshape(ids.shape + (rb,)), h.t, cols)
     return R.dequant(_mat(h.raw, h.t, h.shape)[ids], h.t, cols)
 
 
@@ -480,6 +581,9 @@ def qmatmul(x, h):
         return _KERNELS["module"].matmul(x, h.packed, layer=h.layer).astype(x.dtype)
     if isinstance(h, dense16.Dense16):
         return dense16.matmul(x, h)
+    if isinstance(h, Dense32):
+        return lax.dot_general(x.astype(f32), h.w, (((x.ndim - 1,), (1,)), ((), ())), precision=HI,
+                               preferred_element_type=f32).astype(x.dtype)
     x, raw = lax.optimization_barrier((x, h.raw))
     rows, cols = h.shape[-2], h.shape[-1]
     rc = exact_chunk_rows(rows, cols)
@@ -584,7 +688,11 @@ def warn(msg):
 # EXACT_CHUNK values per projection on any backend.
 EXPERT_IMPL = None          # None: by backend ("ragged" on TPU/GPU, "gather" on CPU); tests set "ragged" or "gather"
 SWIGLU_OAI = (1.702, 7.0)   # llama.cpp LLM_FFN_SWIGLU_OAI_MOE: alpha, limit
+UNGATED_ACTS = ("relu2",)   # acts with no gate projection: the routed experts are exactly up and down (NemotronH)
+GATED_ACTS = ("silu", "gelu", "swiglu_oai")     # what a kernel package that does not list EXPERT_ACTS runs
 _EXPERT_CHECKED = {}        # (module, act, E, argument shapes) -> None when the kernel compiles, else the error text
+_EXPERT_JIT = {}            # (module, act, E, layered) -> the package's expert_ffn under one jax.jit (see _kernel_fn)
+_EXPERT_SITES = {"kernel": 0, "exact": 0, "why": []}    # routed-op call sites traced since load_kernels, by path taken
 
 
 def _expert_impl():
@@ -594,7 +702,12 @@ def _expert_impl():
 
 
 def expert_act(g, u, act):
-    """float32 gate / up projections -> activation (llama.cpp swiglu / geglu / swiglu_oai)"""
+    """float32 gate / up projections -> activation (llama.cpp swiglu / geglu / swiglu_oai). relu2 is ungated
+    (NemotronH's ReLUSquaredActivation): g is None and the result is relu(u)^2; the callers round u to the activation
+    dtype before it and the result after it, as the reference does on bfloat16 activations."""
+    if act == "relu2":
+        r = jnp.maximum(u, 0.0)
+        return r * r
     if act == "silu":
         return jax.nn.silu(g) * u
     if act == "gelu":
@@ -714,7 +827,11 @@ def _expert_ref(x_sorted, e_sorted, w_sorted, W, act, E, layer=None):
         return y.astype(ad).astype(f32)                       # rounded to the activation dtype, as qmatmul returns it
 
     x = x_sorted
-    if "gate_up" in W:
+    if act in UNGATED_ACTS:
+        if "gate" in W or "gate_up" in W:
+            raise ValueError(f"mashbox: expert activation '{act}' is ungated, but the layer has a gate projection")
+        g, u = None, proj(x, "up")
+    elif "gate_up" in W:
         gu = proj(x, "gate_up")
         F = gu.shape[-1] // 2
         g, u = gu[:, :F], gu[:, F:]
@@ -725,11 +842,26 @@ def _expert_ref(x_sorted, e_sorted, w_sorted, W, act, E, layer=None):
     return jnp.where((e_sorted < E)[:, None], y * w_sorted[:, None], 0.0)
 
 
+def _kernel_fn(mod, act, E, layered):
+    """the package's expert_ffn(xs, es, ws, W, act, E[, layer=]) under ONE jax.jit per (package, act, E, layered), made
+    once: a forward then traces and lowers the kernel once per argument shapes and emits one function that every MoE
+    layer of those shapes calls, instead of tracing and lowering its Pallas body again at each of the model's MoE layers
+    (the 35B target's warm-up spent most of its compile workers' time there, 40 layers x every warm program). The
+    compile check below goes through the same function, so its trace is the forward's."""
+    key = (mod, act, E, layered)
+    f = _EXPERT_JIT.get(key)
+    if f is None:
+        if layered:
+            f = jax.jit(lambda x, e, w, W, layer: mod.expert_ffn(x, e, w, W, act, E, layer=layer))
+        else:
+            f = jax.jit(lambda x, e, w, W: mod.expert_ffn(x, e, w, W, act, E))
+        _EXPERT_JIT[key] = f
+    return f
+
+
 def _kernel_call(mod, args, act, E):
     """the package's expert_ffn(xs, es, ws, W, act, E), with layer= when args carry the layer-group index"""
-    if len(args) == 4:
-        return mod.expert_ffn(*args, act, E)
-    return mod.expert_ffn(*args[:4], act, E, layer=args[4])
+    return _kernel_fn(mod, act, E, len(args) == 5)(*args)
 
 
 def _expert_kernel_error(mod, args, act, E):
@@ -740,7 +872,7 @@ def _expert_kernel_error(mod, args, act, E):
     key = (mod, act, E, tree, tuple((a.shape, str(a.dtype)) for a in leaves))
     if key not in _EXPERT_CHECKED:
         try:
-            jax.jit(lambda *a: _kernel_call(mod, a, act, E)).lower(*spec).compile()
+            _kernel_fn(mod, act, E, len(args) == 5).lower(*spec).compile()
             _EXPERT_CHECKED[key] = None
         except Exception as e:
             _EXPERT_CHECKED[key] = f"{type(e).__name__}: {e}"
@@ -757,9 +889,8 @@ def expert_ffn(x_sorted, e_sorted, w_sorted, W, act="silu", n_expert=None, layer
     E = int(n_expert if n_expert is not None else next(h.shape[0] for k, h in W.items() if not k.endswith("_b")))
     mod = _KERNELS["module"]
     hs = [h for k, h in W.items() if not k.endswith("_b")]
-    et = getattr(mod, "EXPERT_TYPES", ()) if mod is not None else ()
-    if (mod is not None and hasattr(mod, "expert_ffn") and all(isinstance(h, (Packed, NB)) for h in hs)
-            and all(h.t in et for h in hs)):
+    why = _expert_ineligible(mod, hs, act)
+    if why is None:
         Wp = {k: (h.packed if isinstance(h, Packed) else h.planes if isinstance(h, NB) else h) for k, h in W.items()}
         args = (x_sorted, e_sorted, w_sorted, Wp) + (() if layer is None else (jnp.asarray(layer, jnp.int32),))
         if faults.forced("moe-routed"):                     # the fallback test's switch (MASHBOX_FAULT=force:moe-routed)
@@ -768,9 +899,113 @@ def expert_ffn(x_sorted, e_sorted, w_sorted, W, act="silu", n_expert=None, layer
             err = _expert_kernel_error(mod, args, act, E)
         if err is None:
             try:
-                return _kernel_call(mod, args, act, E).astype(f32)
+                y = _kernel_call(mod, args, act, E).astype(f32)
+                _expert_site("kernel")
+                return y
             except Exception as e:
                 err = f"{type(e).__name__}: {e}"
         # the fast path falls back to the exact routed path, never silently
         warn(f"mashbox: kernel expert_ffn failed ({err}); routed experts run on the exact path")
+        why = f"kernel expert_ffn failed ({err})"
+    _expert_site("exact", why)
     return _expert_ref(x_sorted, e_sorted, w_sorted, W, act, E, layer)
+
+
+def expert_kernel_acts():
+    """the activations the kernel package's expert_ffn runs: its EXPERT_ACTS, or the gated three when it does not list
+    them (packages before version 0.2.0 of the routed-expert kernel); empty when it has no expert_ffn"""
+    mod = _KERNELS["module"]
+    if mod is None or not hasattr(mod, "expert_ffn"):
+        return ()
+    return tuple(getattr(mod, "EXPERT_ACTS", GATED_ACTS))
+
+
+def _expert_ineligible(mod, hs, act="silu"):
+    """-> None when the kernel package's expert_ffn takes these expert handles and this act, else why not (expert_ffn's
+    own test)"""
+    if mod is None:
+        return "no kernel package"
+    if not hasattr(mod, "expert_ffn"):
+        return f"kernel package {_KERNELS['name']} has no expert_ffn"
+    if act not in expert_kernel_acts():
+        return f"act '{act}' not in the kernel package's EXPERT_ACTS"
+    raw = sorted({type_name(h.t) for h in hs if not isinstance(h, (Packed, NB))})
+    if raw:
+        return f"expert weights of {', '.join(raw)} loaded on the exact path"
+    et = getattr(mod, "EXPERT_TYPES", ())
+    out = sorted({type_name(h.t) for h in hs if h.t not in et})
+    return f"{', '.join(out)} not in the kernel package's EXPERT_TYPES" if out else None
+
+
+def _expert_site(path, why=None):
+    _EXPERT_SITES[path] += 1
+    if why and why not in _EXPERT_SITES["why"] and len(_EXPERT_SITES["why"]) < 8:
+        _EXPERT_SITES["why"].append(why)
+
+
+def expert_kernel():
+    """the kernel package's routed-expert kernel as it names it (EXPERT_KERNEL {id, version}) plus the package module
+    name, or None when the package has no expert_ffn"""
+    mod = _KERNELS["module"]
+    if mod is None or not hasattr(mod, "expert_ffn"):
+        return None
+    named = getattr(mod, "EXPERT_KERNEL", None) or {"id": "unnamed", "version": "unknown"}
+    return dict(named, package=_KERNELS["name"])
+
+
+def expert_report():
+    """-> the routed-expert report (mashbox.moe.record: its keys, and problems() checks its shape): path "kernel" |
+    "exact" | "mixed" | None, kernel = expert_kernel(), sites {"kernel": n, "exact": n} and the reasons any site ran
+    exact: the path the routed op took in the programs traced since load_kernels (None before the first).
+    The counts are trace-time: one per routed-op call site per traced program (decode and prefill), not per step run.
+    inspect, /health and chip records report it; an MoE run is MoE speed only when path == "kernel"."""
+    from ..moe import record as RX   # here, not at the top: mashbox.moe imports ops
+    k, x = _EXPERT_SITES["kernel"], _EXPERT_SITES["exact"]
+    path = None if k + x == 0 else "kernel" if x == 0 else "exact" if k == 0 else "mixed"
+    return {RX.PATH: path, RX.KERNEL_KEY: expert_kernel(), RX.SITES: dict(zip(RX.SITE_PATHS, (k, x))),
+            RX.WHY: list(_EXPERT_SITES["why"])}
+
+
+def expert_plan(types, act="silu"):
+    """-> (path, why): the path the routed op will take on this install for stacked expert weights of these ggml types
+    and this activation, decided as expert_ffn decides it: "kernel" (why None) when the package has expert_ffn, runs the
+    act (EXPERT_ACTS) and every type loads on a kernel path (weight_path) and is in its EXPERT_TYPES, else "exact" and
+    the reason"""
+    types = sorted({int(t) for t in types})
+    mod = _KERNELS["module"]
+    if mod is None or not hasattr(mod, "expert_ffn") or act not in expert_kernel_acts():
+        return "exact", _expert_ineligible(mod, [], act)
+    raw = [type_name(t) for t in types if weight_path(t, (), experts=True) == "exact"]
+    if raw:
+        return "exact", f"expert weights of {', '.join(raw)} load on the exact path"
+    out = [type_name(t) for t in types if t not in expert_kernel_types()]
+    return ("exact", f"{', '.join(out)} not in the kernel package's EXPERT_TYPES") if out else ("kernel", None)
+
+
+def expert_kernel_types():
+    """the ggml types the kernel package's expert_ffn takes: its EXPERT_TYPES (empty when it has no expert_ffn)"""
+    mod = _KERNELS["module"]
+    if mod is None or not hasattr(mod, "expert_ffn"):
+        return frozenset()
+    return frozenset(int(t) for t in getattr(mod, "EXPERT_TYPES", ()))
+
+def expert_scratch_bytes(P, D, F, E, act_itemsize=2, kernel=True, expert_bytes=0):
+    """-> device bytes one routed-expert call of P sorted pairs (model width D, expert width F, E experts) holds besides
+    the weights, an estimate as gguf.need_bytes' are: the pairs' gathered activations (act dtype) and their float32
+    outputs, P x D x (act + 4), plus
+      kernel=True   the kernel package's working memory for the call. Its tiling is the package's rule, so the package
+                    is asked (expert_ffn_scratch(P, D, F, E)) and the rule is never copied here. Fallback, stated: a
+                    package that runs expert_ffn but does not report its scratch is counted at P rows, its input in
+                    bfloat16 and its output in float32, P x 6D: the least a kernel that reads every pair and writes its
+                    output holds (its tile padding is then not counted).
+      kernel=False  the exact path's: the picked experts' blocks gathered into min(P, E) slots for one projection at a
+                    time (expert_bytes: one expert's largest projection as loaded) and their float32 rebuild, at most
+                    EXACT_CHUNK values."""
+    P, D, F, E = int(P), int(D), int(F), int(E)
+    pairs = P * D * (int(act_itemsize) + 4)
+    if not kernel:
+        return pairs + min(P, E) * int(expert_bytes) + 4 * min(EXACT_CHUNK, min(P, E) * F * D)
+    mod = _KERNELS["module"]
+    if mod is not None and hasattr(mod, "expert_ffn_scratch"):
+        return pairs + int(mod.expert_ffn_scratch(P, D, F, E))
+    return pairs + P * 6 * D

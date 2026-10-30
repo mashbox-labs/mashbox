@@ -9,6 +9,10 @@ A change that moves no contract result (a catalog view, docs, a wording) leaves 
 """
 import importlib.util
 import os
+import subprocess
+import sys
+
+import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location("mashbox_contracts", os.path.join(ROOT, "tools", "contracts.py"))
@@ -77,3 +81,16 @@ def test_only_a_named_case_that_moved_flags_a_row():
     r = _res(fp={"tok/qwen2": "new"}, status={"tok/qwen2": "FAIL"})
     r["tok/qwen2"]["case_sha256"] = {"t.py::a": "h1"}
     assert C.row_state(SET, named, r, cases)[0] == "BROKEN"                    # a FAIL is never saved by a case
+
+
+def test_a_new_architecture_only_adds_path_run_cases():
+    """path/run's catalog refusal records one case per ARCHS architecture, so adding an architecture adds a case and
+    moves none a record named (GGUF-ENGINE 2, 10-30: one record over every architecture moved a named case, so adding
+    qwen3vl would have flagged every row)"""
+    pytest.importorskip("jax")
+    from mashbox.gguf import archs
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "--collect-only", "-p", "no:cacheprovider",
+                        os.path.join(ROOT, "tests", "contracts", "test_path_run.py")],
+                       capture_output=True, text=True, cwd=ROOT, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    got = {ln.split("::", 1)[1] for ln in r.stdout.splitlines() if "::test_catalog_refusal_on_the_run_path" in ln}
+    assert got == {f"test_catalog_refusal_on_the_run_path[{a}]" for a in archs.ARCHS}, r.stdout[-3000:] + r.stderr[-2000:]

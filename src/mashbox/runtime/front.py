@@ -382,7 +382,7 @@ class Front(Server):
         return r
 
     HEALTH_FIELDS = ("live_rows", "cache_bytes", "host_cache_bytes", "snapshot_bytes", "cache_namespace", "deployment_id",
-                     "component_set_sha")
+                     "component_set_sha", "routed_experts")
 
     def health(self):
         """/health's load fields for API callers, read where the engine runs: the worker's last HEALTH frame (null while

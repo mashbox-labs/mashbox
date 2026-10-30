@@ -10,6 +10,9 @@ Archs: dense (llama, qwen2, qwen3) and qwen35 (layer groups of 4). Bars, fixed b
     max |diff| <= 1e-5 x max |logit| (both float32 at HIGHEST), prefill and K/V-cache decode;
   - with a stub kernel package for one of the two types (a role then holds a kq-plane stack and a block stack), logits
     equal the exact path's (NMSE <= 1e-10, the bar of test_gguf_qwen35.py's stub-kernel tests).
+Dense files with routed experts (qwen3moe): the routed op takes whole expert stacks over the layers (moe/ffn.py), never
+an ops.Mixed, so a file whose expert types differ by layer keeps the unrolled path and runs; when only other roles differ,
+one lax.scan runs them with the experts as whole stacks, under the first two bars above.
 """
 import os
 import sys
@@ -135,6 +138,62 @@ def test_mixed_scan_with_a_kernel_type(tmp_path, monkeypatch):
     e = float(np.sum((b.astype(np.float64) - a) ** 2) / np.sum(a.astype(np.float64) ** 2))
     print(f"mixed scan, stub kernel for Q8_0 vs exact path: NMSE {e:.3e}")
     assert e <= 1e-10, e
+
+
+# ---------------------------------------------------------------------------------- dense with routed experts (qwen3moe)
+MOE = dict(E=8, K=2, FE=32)
+
+
+def moe_file(tmp, layers, quant, override=None):
+    return FXT.write_dense(str(tmp / f"qwen3moe-{layers}.gguf"), arch="qwen3moe", seed=5, layers=layers, quant=quant,
+                           override=override, moe=MOE)
+
+
+def attn_v_f32(layers):
+    """attn_v of every odd layer as float32, every other big linear in the file's one quant type: only attn_v's type
+    differs by layer (as Q4_K_M keeps some layers' attn_v in Q6_K), the routed experts' does not"""
+    d = FXT.DENSE["qwen3moe"]
+    rng = np.random.default_rng(9)
+    return {f"blk.{i}.attn_v.weight": (rng.standard_normal((d["KV"] * d["HD"], d["D"])) / np.sqrt(d["D"])).astype(np.float32)
+            for i in range(1, layers, 2)}
+
+
+def test_moe_expert_types_differ_keeps_unrolled(tmp_path):
+    """7 big linears per layer and 2 types cycled: every role alternates by layer, the expert stacks too. The routed op
+    takes whole stacks over the layers, so the layers stay unrolled (no ops.Mixed) and the forward runs"""
+    c, W, info = load(moe_file(tmp_path, 6, QUANT))
+    assert c.moe and isinstance(W["g"], list) and info["layers_stacked"] is False and info["mixed_roles"] == [], info
+    lg = logits(c, W, list(range(3, 19)), 8)
+    assert lg.shape[0] == 16 and np.isfinite(lg).all()
+
+
+@pytest.mark.parametrize("split", [None, 8], ids=["prefill", "decode"])
+def test_moe_mixed_attention_scan_equals_unrolled(split, tmp_path, monkeypatch):
+    p = moe_file(tmp_path, 6, ["Q8_0"], override=attn_v_f32(6))
+    toks = list(range(3, 19))
+    c, W, info = load(p)
+    assert c.moe and info["layers_stacked"] and info["mixed_roles"] == ["attn_v.weight"], info
+    assert isinstance(W["g"]["wv"], ops.Mixed), W["g"]["wv"]
+    assert not any(isinstance(W["g"][k], ops.Mixed) for k in ("ge", "ue", "de")), W["g"]
+    a = logits(c, W, toks, split)
+    monkeypatch.setattr(A, "MIXED_SCAN", False)
+    c2, W2, info2 = load(p)
+    assert info2["layers_stacked"] is False and isinstance(W2["g"], list) and info2["mixed_roles"] == [], info2
+    b = logits(c2, W2, toks, split)
+    d = float(np.max(np.abs(a - b)))
+    print(f"qwen3moe {split}: max |scan - unrolled| {d:.3e} of max |logit| {float(np.max(np.abs(b))):.3e}")
+    assert np.array_equal(a.argmax(-1), b.argmax(-1))
+    assert d <= 1e-5 * float(np.max(np.abs(b))), d
+
+
+def test_moe_program_does_not_grow_with_layers(tmp_path):
+    n = {}
+    for L in (4, 12):
+        c, W, info = load(moe_file(tmp_path, L, ["Q8_0"], override=attn_v_f32(L)))
+        assert info["layers_stacked"] and info["mixed_roles"] == ["attn_v.weight"], info
+        n[L] = decode_ops(c, W)
+    print(f"qwen3moe decode program HLO ops: 4 layers {n[4]}, 12 layers {n[12]}")
+    assert n[12] <= 1.10 * n[4], n
 
 
 # ------------------------------------------------------------------------------------------------ qwen35 (layer groups)

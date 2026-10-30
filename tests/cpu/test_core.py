@@ -997,3 +997,17 @@ def test_shipped_tests_comments_name_no_internal_spec_section():
             bad += [f"{rel}:{n}: {m.group(0)!r}" for m in _INTERNAL_WORDS.finditer(t)]
             bad += [f"{rel}:{n}: {m.group(0)!r}" for m in id_re.finditer(t) if m.group(0) not in labels | names]
     assert not bad, bad
+
+
+def test_the_docs_modules_import_without_jax():
+    """The package, the CLI and the modules the docs check renders from import on a python with no jax (the docs and
+    export tools run on one): runtime.openapi reads mashbox.moe.record, so mashbox.moe must load its jax-backed routed
+    FFN on first use, not at import."""
+    code = ("import importlib, sys\n"
+            "sys.modules['jax'] = None\nsys.modules['jaxlib'] = None\n"
+            "for m in sys.argv[1:]:\n    importlib.import_module(m)\n"
+            "print('imported')\n")
+    mods = ["mashbox", "mashbox.cli", "mashbox.tpu", "mashbox.catalog", "mashbox.runtime.openapi", "mashbox.moe.record"]
+    p = subprocess.run([sys.executable, "-c", code, *mods], capture_output=True, text=True, timeout=300, cwd=ROOT,
+                       env={**__import__("os").environ, "PYTHONPATH": str(ROOT / "src")})
+    assert p.returncode == 0 and p.stdout.strip() == "imported", p.stderr[-1500:]

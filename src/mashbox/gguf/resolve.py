@@ -77,6 +77,32 @@ def shards(primary):
     return [primary] if n == 1 else [f"{prefix}-{k:05d}-of-{n:05d}.gguf" for k in range(1, n + 1)]
 
 
+def file_identity(path):
+    """-> (sha256 of a weights file, how it was found), sha256 None when it does not exist. A Hugging Face cache blob is
+    named by the Hub's sha256 of its bytes (blobs/<sha256>): that name is used; any other file is read once."""
+    from ..runtime import tenancy
+    real = os.path.realpath(path)
+    name = os.path.basename(real)
+    if os.path.basename(os.path.dirname(real)) == "blobs" and len(name) == 64 and all(ch in "0123456789abcdef" for ch in name):
+        return name, "hub_blob_name"
+    return tenancy.file_sha256(path), "read"
+
+
+def identity(path):
+    """-> (sha256, shards, how): a GGUF file's identity, the one its deployment logs (gguf_identity) and a catalog row
+    names: the file's sha256, or for a split file the sha256 of its shards' sha256s joined by spaces (the shards beside
+    the first, by its name); sha256 None when a shard does not exist"""
+    import hashlib
+    sh = shards(os.path.basename(path))
+    paths = [os.path.join(os.path.dirname(path), s) for s in sh] if len(sh) > 1 else [path]
+    ids = [file_identity(p) for p in paths]
+    if any(i[0] is None for i in ids):
+        sha = None
+    else:
+        sha = ids[0][0] if len(ids) == 1 else hashlib.sha256(" ".join(i[0] for i in ids).encode()).hexdigest()
+    return sha, len(ids), sorted({i[1] for i in ids})
+
+
 def resolve(model, log=print, download=True):
     """-> dict(path, repo, tag, file, revision, files, bytes). Local paths pass through; repos are listed and downloaded
     (Hugging Face cache, HF_TOKEN if set)."""

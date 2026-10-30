@@ -392,7 +392,11 @@ def validate_catalog(reg, problems):
                 problems.add(where, f"{key} is empty")
         if k.get("for") != "gguf":
             problems.add(where, "for must be \"gguf\"")
-        if k.get("file") and not KERNELS_FILE_RE.match(k["file"].rsplit("/", 1)[-1]):
+        f = k.get("file")
+        if f and (f in (".", "..") or "/" in f or "\\" in f or os.path.isabs(f) or f != os.path.basename(f)):
+            problems.add(where, "file must be a bare file name (no directory, no separator, no . or ..): the engine "
+                                "keeps the wheel in its cache under the row's sha256")
+        elif f and not KERNELS_FILE_RE.match(f):
             problems.add(where, "file must be a mashbox_engine_kernels-*.whl (the engine's one kernels package)")
         build = (tuple(k.get("chips") or []), k.get("jax"))
         if len(build[0]) != 1 or build in builds:
