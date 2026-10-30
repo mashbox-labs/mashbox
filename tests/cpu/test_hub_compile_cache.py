@@ -137,16 +137,51 @@ def test_a_row_that_names_no_accelerator_is_never_unpacked(env):
     assert list(env.cache_dir.iterdir()) == []
 
 
-def test_every_shipped_cache_row_names_its_deployment():
+def shipped_cache_rows():
+    """{model id: [every xla-cache row of that model]} from the packaged models.json (a model can ship one per deployment)."""
     from pathlib import Path
-    import re
     data = json.loads((Path(hub.__file__).parent / "models.json").read_text())
     entries = data.get("models", data) if isinstance(data, dict) else data
     entries = entries.values() if isinstance(entries, dict) else entries
-    rows = {e.get("id"): f for e in entries if isinstance(e, dict) for f in e.get("files", []) if f.get("kind") == "xla-cache"}
+    rows = {}
+    for e in entries:
+        if isinstance(e, dict):
+            for f in e.get("files", []):
+                if f.get("kind") == "xla-cache":
+                    rows.setdefault(e.get("id"), []).append(f)
+    return rows
+
+
+def test_every_shipped_cache_row_names_its_deployment():
+    import re
+    rows = shipped_cache_rows()
     assert rows, "no compile cache row in models.json"
-    for mid, f in rows.items():
-        assert isinstance(f.get("accelerator"), str) and re.fullmatch(r"[a-z0-9]+-[0-9]+", f["accelerator"]), (mid, f["name"])
-        assert isinstance(f.get("tp", 1), int) and f.get("tp", 1) >= 1, (mid, f["name"])
-    assert (rows["qwen3-8-27b"]["accelerator"], rows["qwen3-8-27b"].get("tp", 1)) == ("v6e-1", 1)   # built on one v6e chip
-    assert rows["hy-nomas"]["accelerator"] == "v6e-4"                                               # built on a v6e-4
+    for mid, fs in rows.items():
+        for f in fs:
+            assert isinstance(f.get("accelerator"), str) and re.fullmatch(r"[a-z0-9]+-[0-9]+", f["accelerator"]), (mid, f["name"])
+            assert isinstance(f.get("tp", 1), int) and f.get("tp", 1) >= 1, (mid, f["name"])
+        deployments = [(f["accelerator"], f.get("tp", 1), f["jax"], f["libtpu"]) for f in fs]
+        assert len(set(deployments)) == len(deployments), (mid, deployments)      # one cache per deployment
+        assert len({f["name"] for f in fs}) == len(fs), (mid, [f["name"] for f in fs])
+    # Qwen3.8-27B: one cache built on one v6e chip (tp 1) and one built on a v6e-4 at its default tensor parallel (tp 4)
+    assert sorted((f["accelerator"], f.get("tp", 1)) for f in rows["qwen3-8-27b"]) == [("v6e-1", 1), ("v6e-4", 4)]
+    assert [f["accelerator"] for f in rows["hy-nomas"]] == ["v6e-4"]                               # built on a v6e-4
+
+
+@pytest.mark.parametrize("acc,tp", [("v6e-1", 1), ("v6e-4", 4)])
+def test_each_host_unpacks_its_own_shipped_qwen_cache(env, monkeypatch, tmp_path, acc, tp):
+    # the shipped Qwen3.8-27B rows as they are (names, accelerator, tp, versions), each pointed at its own tiny tar
+    rows = shipped_cache_rows()["qwen3-8-27b"]
+    tars = {}
+    for i, f in enumerate(rows):
+        t = tmp_path / f"q{i}.tar"
+        tars[f["name"]] = (str(t), make_tar(t, {f"prog-{f['accelerator']}": b"x" * (i + 1)}))
+    monkeypatch.setattr(hub, "fetch", lambda repo, filename, revision, local_dir=None: tars[filename][0])
+    ver = {k: rows[0][k] for k in ("jax", "jaxlib", "libtpu")}
+    monkeypatch.setattr(sys.modules["mashbox.kernels"], "versions", lambda: ver)
+    on_host(monkeypatch, acc)
+    m = model_rows(*[dict(f, sha256=tars[f["name"]][1]) for f in rows])
+    mine = [f for f in rows if (f["accelerator"], f.get("tp", 1)) == (acc, tp)]
+    assert len(mine) == 1, (acc, tp, [(f["accelerator"], f.get("tp", 1)) for f in rows])
+    assert hub.compile_cache(m, str(env.cache_dir), env.log, tp=tp) == tars[mine[0]["name"]][0]
+    assert sorted(p.name for p in env.cache_dir.iterdir()) == [f"prog-{acc}"]
