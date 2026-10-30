@@ -21,11 +21,20 @@ MASHBOX builds:
 - [Track2Rig](https://mashbox.gg/docs/models/track2rig): 3D point tracks in, rig (JSON and glTF) out. Rigging. Experimental. Runs on: CPU, TPU v6e.
 
 GGUF files that run in our engine:
+- Llama-3.2-1B-Instruct Q4_K_M by Meta (llama, GGUF from bartowski): Tested, runs on TPU v6e-1. `mashbox run bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M`
 - Qwen2.5-0.5B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Tested, runs on TPU v6e-1. `mashbox run bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M`
+- Qwen2.5-0.5B-Instruct q4_k_m by Qwen (qwen2, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m`
 - Qwen2.5-1.5B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Tested, runs on TPU v6e-1. `mashbox run bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M`
+- Qwen2.5-1.5B-Instruct q4_k_m by Qwen (qwen2, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen2.5-1.5B-Instruct-GGUF:q4_k_m`
+- Qwen2.5-7B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Tested, runs on TPU v6e-1. `mashbox run bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M`
+- Qwen2.5-Coder-1.5B-Instruct q4_k_m by Qwen (qwen2, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF:q4_k_m`
 - Qwen3-0.6B Q8_0 by Qwen (qwen3, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3-0.6B-GGUF:Q8_0`
+- Qwen3-14B Q4_K_M by Qwen (qwen3, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen3-14B-GGUF:Q4_K_M`
+- Qwen3-4B Q4_K_M by Qwen (qwen3, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen3-4B-GGUF:Q4_K_M`
 - Qwen3.5-0.8B Q8_0 by Qwen (qwen35, GGUF from ggml-org): Tested, runs on TPU v6e-1. `mashbox run ggml-org/Qwen3.5-0.8B-GGUF:Q8_0`
 - Qwen3.5-4B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-4B-GGUF:Q4_K_M`
+- Qwen3.5-9B Q4_K_M by Qwen (qwen35, GGUF from lmstudio-community): Tested, runs on TPU v6e-1. `mashbox run lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M`
+- Qwen3.5-9B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-9B-GGUF:Q4_K_M`
 - [Full catalog](https://mashbox.gg/docs/supported-models): 26 entries: 2 MASHBOX ports, 1 MASHBOX model and 23 GGUF files of 18 models.
 <!-- models:end -->
 
