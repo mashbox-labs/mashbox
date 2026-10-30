@@ -26,12 +26,34 @@ def registry():
     return json.loads(resources.files("mashbox").joinpath("models.json").read_text())
 
 
+HF_HOSTS = ("https://huggingface.co/", "http://huggingface.co/", "huggingface.co/", "hf.co/")
+
+
+def find_row(target, reg=None):
+    """-> (the models.json models[] row a run target names, the field it matched) or (None, None). A target names a row
+    by its id (any case, '.' read as '-': Qwen3.8-27B), its name, or its Hugging Face repo (owner/name, with or without
+    https://huggingface.co/ or hf.co/). The catalog only: no network, nothing imported, no id written here."""
+    key = str(target).strip()
+    for h in HF_HOSTS:
+        if key.lower().startswith(h):
+            key = key[len(h):]
+    key = key.strip("/")
+    low = key.lower()
+    for m in (registry() if reg is None else reg).get("models") or []:
+        if m["id"] == low.replace(".", "-"):
+            return m, "id"
+        if low and low == (m.get("name") or "").lower():
+            return m, "name"
+        if low and low == (m.get("hf_repo") or "").lower():
+            return m, "hf_repo"
+    return None, None
+
+
 def model_entry(model_id):
-    want = model_id.replace(".", "-").lower()
-    for m in registry()["models"]:
-        if m["id"] == want:
-            return m
-    raise SystemExit(f"unknown model {model_id!r}; known: {[m['id'] for m in registry()['models']]}")
+    m, _ = find_row(model_id)
+    if m is not None:
+        return m
+    raise SystemExit(f"unknown model {model_id!r}; known: {[m['id'] for m in registry().get('models') or []]}")
 
 
 def _sha256(path):
@@ -63,9 +85,42 @@ def verify(path, sha256, log=print):
     return path
 
 
-def fetch(repo, filename, revision, local_dir=None):
+class DownloadError(Exception):
+    """A download from the Hub that failed: refused (HTTP 401, 403, 404), unreachable, offline, or the disk full. str() is
+    the one line to show. Running the same command again is safe: files already downloaded are kept."""
+
+
+def download_errors():
+    """What hf_hub_download raises when a download is refused or cannot finish, never a programming error: OSError
+    (huggingface_hub 0.x's requests errors, its LocalEntryNotFoundError, disk errors) and, from 1.0, its HTTP library's
+    HTTPError (a connection, DNS or read failure is not an OSError there) and XetDownloadError."""
+    try:
+        from huggingface_hub import errors as E
+    except ImportError:
+        return (OSError,)
+    more = (getattr(E, n, None) for n in ("HfHubHTTPError", "HTTPError", "XetDownloadError"))
+    return (OSError,) + tuple(c for c in more if isinstance(c, type) and issubclass(c, Exception))
+
+
+def download_error(filename, repo, revision, e, hint=""):
+    """the one line for a failed download: the file, its repo and revision, why, and that running again is safe"""
+    import re
+    code = getattr(getattr(e, "response", None), "status_code", None)
+    first = (str(e).strip().splitlines() or [""])[0]
+    first = re.split(r"(?<=[.!?])\s+", first, maxsplit=1)[0].rstrip(".")[:200]     # its first sentence, whole
+    why = f"Hugging Face answered HTTP {code}" if code else type(e).__name__ + (f": {first}" if first else "")
+    return (f"mashbox: could not download {filename} from https://huggingface.co/{repo} (revision {(revision or 'main')[:8]}): "
+            f"{why}. Check the network and run the same command again (files already downloaded are kept){hint}.")
+
+
+def fetch(repo, filename, revision, local_dir=None, hint=""):
+    """hf_hub_download of one file at a pinned revision. A download that fails raises DownloadError, one line (hint: what
+    else the person can do, appended to it)."""
     from huggingface_hub import hf_hub_download
-    return hf_hub_download(repo_id=repo, filename=filename, revision=revision, local_dir=local_dir)
+    try:
+        return hf_hub_download(repo_id=repo, filename=filename, revision=revision, local_dir=local_dir)
+    except download_errors() as e:
+        raise DownloadError(download_error(filename, repo, revision, e, hint)) from e
 
 
 def upstream_dir(m, log=print):
@@ -161,7 +216,8 @@ def kernel_bundle(m, log=print):
     fam, ver = K.chip_family(), K.versions()
     for row in m.get("kernels", []):
         if fam in row["chips"] and ver["jax"] == row["jax"]:
-            p = fetch(m["hf_repo"], row["file"], m["hf_revision"])
+            p = fetch(m["hf_repo"], row["file"], m["hf_revision"],
+                      hint=", or start with --no-kernels to run without it, in plain JAX (slower)")
             return verify(p, row["sha256"], log), row
     log(json.dumps(dict(event="kernels", used=False, reason=f"no bundle for chip {fam}, jax {ver['jax']}")))
     return None, None

@@ -756,7 +756,7 @@ def test_up_chip_never_says_not_on_for_a_chip_the_model_ran_on():
     host to ask for ("On v6e: use --chip v6e-1"), a measured one prints its measured line. "Not on" is left for a chip
     with no row or a failing one."""
     seen = 0
-    for m in (tpu.model(r["id"]) for r in tpu.registry()["models"] if "cloud" in r):
+    for m in (tpu.model(r["id"]) for r in tpu.registry()["models"] if "port" in (r.get("cloud") or {})):
         for key, row in m["chips"].items():
             if not isinstance(row, dict) or row.get("status") not in ("passing", "measured"):
                 continue
@@ -878,8 +878,27 @@ def test_top_help_lists_tpu_and_every_tpu_command_has_help(capsys):
         assert line is not None and len(line.split(None, 1)) == 2, (n, out)
 
 
-UP_CHIPS = [(r["id"], chip) for r in tpu.registry()["models"] if "cloud" in r
+UP_CHIPS = [(r["id"], chip) for r in tpu.registry()["models"] if "port" in (r.get("cloud") or {})
             for chip in [None] + [c for c, _ in tpu.offered(tpu.model(r["id"]))]]
+
+# `tpu up` starts a server on the chip and tunnels to its port. A model whose cloud settings carry no server port (a
+# one-shot job, such as TRELLIS.2) stops with a plain message before any VM exists; the `tpu up` tests take the rest.
+NO_SERVER = [r["id"] for r in tpu.registry()["models"] if "cloud" in r and "port" not in r["cloud"]]
+
+
+@pytest.mark.parametrize("mid", NO_SERVER)
+@pytest.mark.parametrize("chip", [None, "v6e-1"])
+def test_up_stops_before_any_vm_for_a_model_with_no_server(tmp_path, monkeypatch, capsys, mid, chip):
+    mark = tmp_path / "gcloud-ran"
+    g = tmp_path / "gcloud"
+    g.write_text(f'#!/bin/sh\ntouch "{mark}"\nexit 1\n')
+    g.chmod(0o755)
+    monkeypatch.setenv("MASHBOX_GCLOUD", str(g))
+    m = tpu.model(mid)
+    assert tpu.main(["up", mid, "--yes"] + (["--chip", chip] if chip else [])) == 2
+    assert capsys.readouterr().err == (f"mashbox tpu: {m['name']} runs as a one-shot job, not a server: the VM steps are "
+                                       f"on docs/models/{mid}.md\n")
+    assert not mark.exists(), "tpu up called gcloud for a model with no server"
 
 
 @pytest.mark.parametrize("mid,chip", UP_CHIPS)

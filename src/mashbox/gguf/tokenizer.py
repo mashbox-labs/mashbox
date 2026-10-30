@@ -39,8 +39,24 @@ def _bytes_level():
     return bs
 
 
+def no_tokenizer(f, path=None):
+    """None, or the one line for a model file with no tokenizer: no tokenizer.ggml.model key (maya1's GGUF has no
+    tokenizer.* key at all; llama.cpp a37cc46 requires that key and does not load the file: "error loading model
+    vocabulary: key not found in model: tokenizer.ggml.model"), or "none" / "no_vocab" (a file with no vocabulary, which
+    takes no text)"""
+    kind = f.get("tokenizer.ggml.model")
+    if kind not in (None, "none", "no_vocab"):
+        return None
+    name = path.rsplit("/", 1)[-1] if path else "this file"
+    what = "no tokenizer.ggml.model key" if kind is None else f'tokenizer.ggml.model is "{kind}"'
+    return (f"mashbox: {name} has no tokenizer ({what}), so mashbox cannot turn text into its tokens and does not run it."
+            + (' llama.cpp does not load it either ("key not found in model: tokenizer.ggml.model").' if kind is None else ""))
+
+
 def files_dict(f, path=None):
     """-> {file name: text} for tokenizer.json, chat_template.jinja, generation_config.json"""
+    if no_tokenizer(f, path):
+        raise GGUFError(no_tokenizer(f, path))
     kind = f.get("tokenizer.ggml.model")
     pre = f.get("tokenizer.ggml.pre", "default")
     if kind == "gemma4":

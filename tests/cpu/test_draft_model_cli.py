@@ -188,7 +188,7 @@ def test_cmd_gguf_with_a_draft_model_resolves_both_files_and_runs(monkeypatch, e
     with both (a.gguf, a.draft_gguf); download fetches both and stops"""
     from mashbox.gguf import resolve as GR
     got = []
-    monkeypatch.setattr(GR, "resolve", lambda m, log=None: dict(path=m, repo=None, tag=None, file=m))
+    monkeypatch.setattr(GR, "resolve", lambda m, log=None, download=True: dict(path=m, repo=None, tag=None, file=m))
     monkeypatch.setattr(cli, "cmd_run", lambda a, argv=None: got.append((a.gguf["path"], a.draft_gguf["path"])) or 0)
     for sv in (None, "draft"):
         a = SimpleNamespace(cmd="run", model="t.gguf", weights=None, mtp=None, mtp_file=None, speculation=sv,

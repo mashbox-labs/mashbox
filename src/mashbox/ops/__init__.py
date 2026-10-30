@@ -286,6 +286,8 @@ def load_kernels(log=None, module=None):
     if module in ("", "off", "none"):
         return _KERNELS["types"]
     try:
+        if faults.forced("kernels-package"):        # the fallback test's switch (MASHBOX_FAULT=force:kernels-package)
+            raise RuntimeError("MASHBOX_FAULT=force:kernels-package")
         if str(module).endswith(".whl"):          # a payload bundle (no code): the routed-expert half of the surface
             from .bundle import Bundle
             m, source, name = Bundle(module), "file", module

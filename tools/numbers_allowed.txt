@@ -126,3 +126,4 @@ packages/track2rig-video/README.md | with one array over 256 MiB once decompress
 packages/track2rig-video/README.md | body size between two frames | the camera-cut rule (a setting)
 packages/track2rig-video/README.md | in `refine_endpoints` on a 24 GB GPU | NVIDIA L4 memory, NVIDIA's published spec
 packages/track2rig-video/README.md | its first 5 seconds at every 2nd frame | clip trim setting of the example (--max-frames 60 --frame-step 2), not a measurement
+docs/models/trellis-2.md | first run downloads 11.0 GB into | TRELLIS.2 download, the sum of its pinned files (upstream.json)

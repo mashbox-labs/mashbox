@@ -111,14 +111,18 @@ def check_row(row, sha256):
 
 def catalog_wheel(log=None):
     """zero flags: -> the local path of the engine_kernels row's wheel for this chip family and JAX, or None off TPU or
-    when no row lists them. The file comes from the cache; a missing one is downloaded once from the row's url to a .part
-    file and moved under its name only when its sha256 is the row's (else ValueError, and nothing is cached)."""
+    when no row lists them (on TPU, one log line). The file comes from the cache; a missing one is downloaded once from
+    the row's url to a .part file and moved under its name only when its sha256 is the row's (else ValueError, and
+    nothing is cached)."""
     from .. import kernels as K
     fam = K.chip_family()
     if fam is None:
         return None
     row = next((r for r in rows() if fam in r.get("chips", ()) and r.get("jax") == jax.__version__), None)
     if row is None:
+        if log:
+            log(f"mashbox: no engine_kernels row for {fam} and JAX {jax.__version__} in this version's catalog; every "
+                f"quantized type runs on the exact path")
         return None
     path = cache_path(row)
     if not os.path.exists(path):

@@ -226,7 +226,7 @@ def probe(hdr, size, path_hint):
 
 
 def scan_repo(r, out):
-    from mashbox.gguf import resolve as GR
+    from mashbox import gguf as GR
     info = json.loads(get(f"{HF}/api/models/{r['repo']}?blobs=true"))
     sib = [s for s in info.get("siblings", []) if s["rfilename"].endswith(".gguf")]
     files = [s["rfilename"] for s in sib]

@@ -9,7 +9,7 @@ mashbox models
 Each row names the chips it runs on and the command that runs it. A GGUF link opens the exact file revision that ran.
 
 <!-- catalog:start -->
-**31 entries: 2 MASHBOX ports, 1 MASHBOX model and 28 GGUF files of 19 models.**
+**32 entries: 3 MASHBOX ports, 1 MASHBOX model and 28 GGUF files of 19 models.**
 
 ## MASHBOX builds
 
@@ -20,6 +20,7 @@ Models we port or make ourselves. A BSHJ build is our weights file for the model
 | **[Hy-Nomas](models/hy-nomas.md)**<br>Made by Tencent Hunyuan, ported to TPU by MASHBOX Labs | TPU port<br>World model: text and movement keys in, video out<br>[Hugging Face](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU) | MASHBOX build | TPU v6e-4 | Compute per second of video, quality preset, Tencent decoder, 1.00 = real time: **1.045 s** (TPU v6e-4)<br>Compute per second of video, quality preset, MASHBOX Fast decoder: **0.689 s** (TPU v6e-4) | `~/.local/bin/mashbox run hy-nomas --ui` |
 | **[Qwen3.8-27B](models/qwen3-8-27b.md)**<br>Made by Qwen, ported to TPU by MASHBOX Labs | BSHJ build: BQ8_R<br>LLM: text in, text out<br>[Hugging Face](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) | MASHBOX build | TPU v5e-4, TPU v6e-1, TPU v6e-4 | **38.1 vs 31.4 tok/s** vs vLLM on the same chip, 1 request at a time (TPU v6e-1)<br>**74.84 tok/s** with speculative decoding (--mtp 2), 1 request at a time, greedy; 37.77 tok/s with it off (TPU v6e-1)<br>**326.6 vs 1,606.7 s** first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type (TPU v6e-1) | `~/.local/bin/mashbox run qwen3-8-27b` |
 | **[Track2Rig](models/track2rig.md)** (Experimental)<br>Trained by MASHBOX Labs | MASHBOX model<br>Rigging: 3D point tracks in, rig (JSON and glTF) out<br>[Hugging Face](https://huggingface.co/mashbox-labs/Track2Rig) | MASHBOX build | CPU, TPU v6e | **0.784% vs 0.915%** held-out error vs SSDR at the same bone count, synthetic test set with noisy, partly hidden tracks, % of body size, lower is better (CPU, AMD EPYC 7502P)<br>**6.24% vs 7.73%** joint error vs SSDR, % of body size, lower is better (CPU, AMD EPYC 7502P) | `mashbox run track2rig examples/track2rig/tracks/grison_walk.npz -o grison_rig` |
+| **[TRELLIS.2](models/trellis-2.md)** (Experimental)<br>Made by Microsoft, ported to TPU by MASHBOX Labs | TPU port<br>image-to-3d: an RGBA image (background cut out) in, a textured 3D mesh (GLB) out<br>[Hugging Face](https://huggingface.co/mashbox-labs/TRELLIS.2-TPU) | MASHBOX build | TPU v6e-1 | One picture in, a textured GLB out: the whole command: **15 min 32.4 s to 30 min 11.7 s** (TPU v6e-1)<br>Picture in to mesh out: the model's stages on the chip, with the host work between them: **46.7 s to 1 min 37.5 s** (TPU v6e-1) | `~/.local/bin/mashbox run trellis-2 --image object.png --out object.glb` |
 
 ## GGUF files that run in our engine
 

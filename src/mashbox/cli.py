@@ -1,18 +1,18 @@
 """mashbox command line.
 
-  mashbox run qwen3-8-27b                   download (first time), load, serve on 127.0.0.1:8000
-  mashbox run unsloth/Qwen3.8-27B-GGUF      a GGUF repo (llama.cpp's file pick: Q4_K_M, then Q8_0) or a .gguf path
-  mashbox inspect unsloth/Qwen3.8-27B-GGUF  what a GGUF file holds and how it would run, without loading it
-  mashbox run qwen3-8-27b --prompt "Hi"     one chat turn, printed
-  mashbox run qwen3-8-27b --ui              the same server plus the chat page at http://127.0.0.1:8000/
-  mashbox download qwen3-8-27b              download and check the files only
+  mashbox run MODEL                         download (first time), load, serve on 127.0.0.1:8000
+  mashbox run MODEL --prompt "Hi"           one chat turn, printed
+  mashbox run MODEL --ui                    the same server plus the chat page at http://127.0.0.1:8000/
+  mashbox download MODEL                    download and check the files only
+  mashbox inspect MODEL                     how MODEL resolves and would run, without loading it
   mashbox models                            the models this version runs, by publisher, then model, then file
-  mashbox run hy-nomas --ui                 world model in the browser on 127.0.0.1:8790 (TPU v6e-4)
-  mashbox run track2rig TRACKS.npz -o OUT   rig from 3D point tracks: OUT/rig.json and OUT/rig.glb (CPU)
   mashbox env                               versions and chip, for bug reports
-  mashbox tpu up qwen3-8-27b                from your machine: a chip, install, server, tunnel (mashbox tpu -h)
+  mashbox tpu up MODEL                      from your machine: a chip, install, server, tunnel (mashbox tpu -h)
 
-A model with its own options (MODEL_CLI) gets `run` and `download` handed to its package; see `run <model> --help`.
+MODEL is resolved by the one resolver (resolve.py), from data only: a models.json id, name or Hugging Face repo (the
+runtime package its row names), a GGUF row's id, a .gguf file or GGUF repo[:quant tag] (llama.cpp's file pick), or a
+model folder or repo with config.json and safetensors weights. A catalog package with its own options (main(cmd, argv))
+gets `run` and `download` handed to it; see `mashbox run <model> --help`. What no probe can run stops with one line.
 """
 import argparse
 import json
@@ -28,34 +28,45 @@ def log(s):
 
 
 def catalog_runtimes(reg):
-    """(RUNNABLE, MODEL_CLI) read from the catalog, so no model id is typed into this file. A models.json row is runnable
-    when the package its path names (src/mashbox/models/<package>) ships in this version of mashbox; that package parses
-    its own `run` / `download` options when its __init__ defines main(cmd, argv) (read from the source, nothing is
-    imported)."""
-    import ast
-    import importlib.util
-    import pathlib
+    """(RUNNABLE, MODEL_CLI) read from the catalog, so no model id is typed into this file: the models.json rows whose
+    runtime package (resolve.runtime: the package their path names, src/mashbox/models/<package>) ships in this version
+    of mashbox and runs, and of those the ones whose package parses its own `run` / `download` options (main(cmd, argv),
+    read from the source; nothing is imported). `run` and `download` dispatch through resolve.py; these lists are for
+    the docs check (tools/hf_github_sync_check.py)."""
+    from . import resolve as R
     runnable, own = [], {}
     for m in reg.get("models", []):
-        parts = pathlib.PurePosixPath(m.get("path") or "").parts
-        parts = parts[1:] if parts[:1] == ("src",) else parts
-        if len(parts) != 3 or parts[:2] != (__package__, "models"):
-            continue
-        mod = ".".join(parts)
-        spec = importlib.util.find_spec(mod)
-        if spec is None or not spec.origin:
+        try:
+            mod, entry = R.runtime(m)
+        except R.ResolveError:
             continue
         runnable.append(m["id"])
-        body = ast.parse(pathlib.Path(spec.origin).read_text(encoding="utf-8")).body
-        if any(isinstance(n, ast.FunctionDef) and n.name == "main" for n in body):
+        if entry == "own":
             own[m["id"]] = mod
     return tuple(runnable), own
 
 
-# Models whose runtime is in this version of the package. `run` and `download` for any other model in models.json
-# stop with a clear message (exit 2) instead of starting a download it cannot use. MODEL_CLI: the models whose package
-# parses its own `run` / `download` options, model id -> module with main(cmd, argv).
+# Models whose runtime is in this version of the package (MODEL_CLI: those whose package parses its own `run` /
+# `download` options, model id -> module with main(cmd, argv)). Data for the docs check; `run` reads the catalog at call
+# time through resolve.py, so a row added to models.json runs with no edit here.
 RUNNABLE, MODEL_CLI = catalog_runtimes(hub.registry())
+
+
+def engine_package(m):
+    """-> (package, its weights module, its shard module or None) of a models.json row that runs on the engine
+    (resolve.runtime entry "engine"): the model definition (Config, new_state, make_forward), the weights loader, and
+    the tensor-parallel split when the package has one. Imported by the name the row's path gives, never typed here."""
+    import importlib
+    import importlib.util
+    from . import resolve as R
+    try:
+        mod, entry = R.runtime(m)
+    except R.ResolveError as e:
+        raise SystemExit(str(e))
+    if entry != "engine":
+        raise SystemExit(f"mashbox: {m['id']} runs through its own command line: `mashbox run {m['id']} --help`")
+    shard = importlib.import_module(mod + ".shard") if importlib.util.find_spec(mod + ".shard") else None
+    return importlib.import_module(mod), importlib.import_module(mod + ".weights"), shard
 
 
 def setup_cache(d=None):
@@ -68,11 +79,142 @@ def setup_cache(d=None):
     return d
 
 
-def cmd_env(a):
-    import platform
-    from . import kernels as K, __version__
-    out = dict(mashbox=__version__, python=platform.python_version(), **K.versions())
+# What this install has. install.sh installs `mashbox` with no extras on any machine that is not a Cloud TPU VM: the client
+# for `mashbox tpu`, with no JAX. A command that needs JAX, or a model's extras, says so in one line with the line that
+# installs them, before any device check or download.
+INSTALL_SH = "curl -fsSL https://mashbox.gg/install.sh"
+
+
+def has_jax():
+    """JAX can be imported here (checked without importing it)"""
+    import importlib.util
+    if "jax" in sys.modules:
+        return sys.modules["jax"] is not None
+    return importlib.util.find_spec("jax") is not None
+
+
+def uv_tool():
+    """this Python is a uv tool's own environment (install.sh's, or the catalog's `uv tool install` lines): uv writes
+    uv-receipt.toml in the tool's prefix"""
+    return os.path.isfile(os.path.join(sys.prefix, "uv-receipt.toml"))
+
+
+def install_line(extras, m=None):
+    """the one line that installs mashbox with `extras` (e.g. "cpu,track2rig") in place of this install: install.sh again
+    with MASHBOX_EXTRAS in a uv tool (uv replaces the tool's environment when its extras change), else the models.json
+    model's own install line, else pip for this Python"""
+    if uv_tool():
+        return f"{INSTALL_SH} | MASHBOX_EXTRAS={extras} sh"
+    if m is not None and m.get("install"):
+        return m["install"]
+    import shlex
+    return f'{shlex.quote(sys.executable)} -m pip install "mashbox[{extras}]"'
+
+
+def model_extras(m):
+    """the extras of a models.json model's install line (its own `install`, else the catalog's), e.g. "tpu,hy-nomas" """
+    import re
+    got = re.search(r"mashbox\[([^\]]*)\]", m.get("install") or hub.registry().get("install", ""))
+    return got.group(1) if got else ""
+
+
+def requirements():
+    """mashbox's requirement lines as its installed metadata lists them (e.g. 'torch>=2.5; extra == "hy-nomas"'); run
+    from a source tree that is not installed, its pyproject.toml's in the same form; [] when neither is there"""
+    import importlib.metadata as md
     try:
+        return list(md.requires(__package__) or [])
+    except md.PackageNotFoundError:
+        pass
+    import pathlib
+    import tomllib
+    try:
+        proj = tomllib.loads((pathlib.Path(__file__).resolve().parents[2] / "pyproject.toml").read_text())["project"]
+    except (OSError, ValueError, KeyError):
+        return []
+    if proj.get("name") != __package__:
+        return []
+    return list(proj.get("dependencies", [])) + [f'{r}; extra == "{x}"' for x, rs in
+                                                 proj.get("optional-dependencies", {}).items() for r in rs]
+
+
+def installed(dist):
+    """a distribution of that name is installed in this Python"""
+    import importlib.metadata as md
+    try:
+        md.distribution(dist)
+        return True
+    except md.PackageNotFoundError:
+        return False
+
+
+def lacking(extras):
+    """the distributions mashbox's `extras` (e.g. "tpu,hy-nomas") add that this Python does not have, in requirements()
+    order"""
+    import re
+    norm = lambda s: re.sub(r"[-_.]+", "-", s.strip()).lower()      # noqa: E731
+    want, out = {norm(x) for x in extras.split(",") if x.strip()}, []
+    for r in requirements():
+        spec, _, marker = r.partition(";")
+        x = re.search(r"""extra\s*==\s*["']([^"']+)["']""", marker)
+        name = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", spec)
+        if x and name and norm(x.group(1)) in want and name.group(1) not in out and not installed(name.group(1)):
+            out.append(name.group(1))
+    return out
+
+
+def extras_refusal(model, cmd="run"):
+    """None, or the one line `mashbox <cmd> <model>` stops with, before its chip check and any download, when this install
+    lacks part of the extras of the model's install line: no JAX -> no_jax's line; JAX but not the rest (Hy-Nomas on a
+    Cloud TPU VM installed with mashbox[tpu] only: no torch) -> those distributions and the line that installs them. A
+    model calls it where its run starts needing them (Hy-Nomas: `run`, not --stub or download)."""
+    m = hub.model_entry(model)
+    if not has_jax():
+        return no_jax(cmd, m["id"])
+    extras = model_extras(m)
+    lack = [d for d in lacking(extras) if d != "jax"]               # JAX: has_jax, which imports nothing
+    if not lack:
+        return None
+    names = lack[0] if len(lack) == 1 else ", ".join(lack[:-1]) + f" and {lack[-1]}"
+    return (f"mashbox: {cmd} {m['id']} needs {names} (mashbox[{extras}]), which this install does not have. "
+            f"Install {'it' if len(lack) == 1 else 'them'}, then run the same command again: {install_line(extras, m)}")
+
+
+def not_in_version(mid):
+    from . import __version__
+    return f"{mid} is not in mashbox {__version__}. Models in this version: https://mashbox.gg/docs/models"
+
+
+def no_jax(cmd, model):
+    """the one line `mashbox <cmd> <model>` stops with on an install without JAX: a models.json model that runs on a TPU
+    -> `mashbox tpu up` and its Cloud TPU VM install line; another models.json model -> the line that installs it here; a
+    GGUF file, a Hugging Face repo or folder, or any other name -> the CPU install"""
+    head = f"mashbox: {cmd} {model} needs JAX, which this install does not have (it is the client for mashbox tpu)."
+    mid = model.replace(".", "-").lower()
+    m = None if cmd == "inspect" else next((r for r in hub.registry()["models"] if r["id"] == mid), None)
+    if m is None:
+        return (f"{head} For GGUF files and Hugging Face models on this machine, install it with: {install_line('cpu')}. "
+                "This version's models: mashbox models")
+    if mid not in RUNNABLE:
+        return not_in_version(mid)
+    if m.get("cloud"):
+        return (f"{head} From this machine: mashbox tpu up {mid}. On a Cloud TPU VM: "
+                f"{m.get('install') or hub.registry()['install']}")
+    return f"{head} Install it with: {install_line(model_extras(m), m)}"
+
+
+def cmd_env(a):
+    """versions and chip, for bug reports; never a traceback (an install without JAX prints jax null and why)"""
+    import platform
+    from . import __version__
+    out = dict(mashbox=__version__, python=platform.python_version())
+    if not has_jax():
+        out.update(jax=None, jaxlib=None, libtpu=None, devices="none: this install has no JAX (it is the client for mashbox tpu)")
+        print(json.dumps(out, indent=1))
+        return
+    try:
+        from . import kernels as K
+        out.update(K.versions())
         import jax
         d = jax.devices()[0]
         out.update(platform=d.platform, device_kind=d.device_kind, devices=len(jax.devices()), chip=K.chip_family())
@@ -507,15 +649,14 @@ def fit_check(a, m, d, tp):
     import jax
     import numpy as np
     from . import hub, kernels as K, tpu as T
-    from .models import qwen3_8_27b as Q
     devs = jax.devices()
     try:
         have = min(int(x.memory_stats()["bytes_limit"]) for x in devs)
     except Exception:
         return None
     wb = os.path.getsize(a.weights) if a.weights else int(hub.weights_row(m)["bytes"])
+    Q = engine_package(m)[0]                  # the model definition the row's runtime package holds
     try:
-        from .runtime.engine import Engine
         cfg = Q.Config(d)
         # the engine's slot state (Engine.__init__: one scratch slot for padding rows above 2 slots), shapes only
         st = jax.eval_shape(lambda: Q.new_state(cfg, a.slots - 1 if a.slots <= 2 else a.slots, a.ctx))
@@ -552,15 +693,20 @@ def load(a):
         raise SystemExit(draft_refusal(a))              # before the config, the weights or any cache work
     from . import hub
     m = hub.model_entry(a.model)
+    Q, QW, QS = engine_package(m)                        # the model definition the row's runtime package holds
     d = hub.upstream_dir(m, log)                         # config and tokenizer only (small)
     cache = setup_cache(a.cache_dir)
     tp = tensor_parallel(getattr(a, "tensor_parallel_size", 0))
+    if tp > 1 and QS is None:                            # a package with no tensor-parallel split runs on one chip
+        if getattr(a, "tensor_parallel_size", 0):
+            raise SystemExit(f"mashbox: {m['id']} runs on one chip in this version (its package has no shard module); "
+                             f"use --tensor-parallel-size 1")
+        log(json.dumps(dict(event="tensor_parallel", tp=1, reason="the package has no shard module: one chip")))
+        tp = 1
     dflash_slots(a)                                      # before the fit check and the kernels (built for 8 slots)
     fit_check(a, m, d, tp)                               # before the weights download, check or load
     w = hub.weights_file(m, path=a.weights, log=log)
     from . import kernels as K
-    from .models import qwen3_8_27b as Q
-    from .models.qwen3_8_27b import weights as QW
     from .runtime.engine import Engine
     from .runtime.chat import Chat
     hub.compile_cache(m, cache, log, tp=tp)            # the cache built for this accelerator and tensor-parallel size
@@ -585,7 +731,6 @@ def load(a):
     cfg = Q.Config(d)
     model = Q
     if tp > 1:
-        from .models.qwen3_8_27b import shard as QS
         mesh = QS.mesh_for(tp)
         W, info = QS.load(w, cfg, mesh, log=lambda i: log(json.dumps(dict(event="weights", **i))))
         model = QS.TPModel(Q, mesh)
@@ -651,6 +796,9 @@ def load_gguf(a):
     held = G.archs.held(f.arch, r["path"], r["repo"], r["tag"], moe=G.archs.moe_file(f))   # a MoE file with no passing row of its own: one line, nothing loaded
     if held:
         raise G.GGUFError(held)
+    from .gguf import tokenizer as GT
+    if GT.no_tokenizer(f, r["path"]):                   # no tokenizer in the file: one line, nothing loaded
+        raise G.GGUFError(GT.no_tokenizer(f, r["path"]))
     return _load_gguf_for_record(a, f, A, c, t0)
 
 
@@ -703,17 +851,17 @@ def _load_gguf_for_record(a, f, A, c, t0):
 
 
 def file_identity(path):
-    """-> (sha256 of a weights file, how it was found): gguf.resolve.file_identity"""
-    from .gguf import resolve as GR
-    return GR.file_identity(path)
+    """-> (sha256 of a weights file, how it was found): gguf.file_identity (the file pick's, gguf/resolve.py)"""
+    from . import gguf as G
+    return G.file_identity(path)
 
 
 def gguf_file_sha(r):
     """-> (the sha256 of a resolved GGUF file r: of its bytes, or for a split file of its shards' sha256s, [(sha256, how
     it was found) per shard])"""
     import hashlib
-    from .gguf import resolve as GR
-    shards = GR.shards(os.path.basename(r["path"]))
+    from . import gguf as G
+    shards = G.shards(os.path.basename(r["path"]))
     paths = [os.path.join(os.path.dirname(r["path"]), s) for s in shards] if len(shards) > 1 else [r["path"]]
     ids = [file_identity(p) for p in paths]
     return (ids[0][0] if len(ids) == 1 else hashlib.sha256(" ".join(i[0] for i in ids).encode()).hexdigest()), ids
@@ -724,10 +872,10 @@ def gguf_deployment(eng, f, r, W):
     and component set (/health, the startup log), and the prefix cache namespace. The file's sha256 (every shard of a
     split file) stands for its weights, tokenizer and chat template, which it all holds."""
     import hashlib
-    from .gguf import resolve as GR
+    from . import gguf as G
     from .runtime import tenancy, compile_key as CK
     t = time.time()
-    fsha, n, how = GR.identity(r["path"])
+    fsha, n, how = G.identity(r["path"])
     log(json.dumps(dict(event="gguf_identity", sha256=fsha, shards=n, how=how, seconds=round(time.time() - t, 1))))
     mid = r["repo"] or r["file"]
     _, eng.deployment_id, eng.component_set_sha = CK.for_engine(eng, mid, fsha, CK.weights_layout(W), kernel_bundle_sha=None, tp=1,
@@ -752,12 +900,26 @@ def cmd_models(a):
 
 
 def cmd_inspect(a):
-    from . import gguf as G
-    from .gguf import resolve as GR
-    r = GR.resolve(a.model, log=log, download=not a.no_download)
-    if r["path"] is None:
-        return 0
-    print(json.dumps(G.inspect(r["path"], repo=r["repo"], quant=r["tag"]), indent=1))
+    """`mashbox inspect MODEL`: the resolver's plan (one log line, its why lines), then what the target holds: a GGUF
+    file's header (gguf.inspect), a safetensors model's config and headers (hf.inspect), or a catalog row's runtime and
+    files. Nothing is loaded; a repo's GGUF file is downloaded unless --no-download."""
+    from . import resolve as R
+    plan = R.resolve(a.model, download=False, log=log)
+    log(json.dumps(dict(event="plan", format=plan.format, why=plan.why)))
+    if plan.format == "gguf":
+        if a.no_download and plan.source["path"] is None:
+            return 0
+        from . import gguf as G
+        s = R.fetch(plan, log).source
+        print(json.dumps(G.inspect(s["path"], repo=s["repo"], quant=s["tag"]), indent=1))
+    elif plan.format == "safetensors":
+        from . import hf as H
+        print(json.dumps(H.inspect(a.model, log=log), indent=1))
+    else:
+        m = plan.row
+        print(json.dumps(dict(model=m["id"], name=m.get("name"), hf_repo=m.get("hf_repo"), runtime=plan.module,
+                              entry=plan.entry, files=[f["name"] for f in m.get("files") or []],
+                              chips={c: r.get("status") for c, r in (m.get("chips") or {}).items()}), indent=1))
     return 0
 
 
@@ -847,17 +1009,15 @@ def cmd_run(a, argv=None):
         log(f"mashbox: {draft_refusal(a)}")
         return 2                                         # before an API key is made or the server starts
     keys = api_keys(a) if a.prompt is None else []       # before the load: a bad key file fails at once
-    if a.prompt is None and not getattr(a, "gguf", None) and not getattr(a, "hf", None):
+    from . import resolve as R
+    plan = getattr(a, "plan", None) or R.given(a) or R.resolve(a.model, download=False, log=log)   # main() resolved it
+    if a.prompt is None and plan.format == "catalog":
         # serving a models.json model: this process is the HTTP front; the engine (load, warm-up, chip) runs in a
         # worker process that the front restarts by itself after a device fault, out of memory, a hung call or a kill
-        # (runtime/front.py). A GGUF file or a Hugging Face model is still served in this one process (below).
+        # (runtime/front.py). A GGUF file or safetensors model is still served in this one process (below).
         from .runtime.front import serve_cli          # serve() logs the "ui" url once the port is bound
         return serve_cli(a, sys.argv[1:] if argv is None else list(argv), keys, log, t0=time.time())
-    if getattr(a, "hf", None):
-        from . import hf as HF
-        m, eng, chat, info, t0 = HF.load(a)
-    else:
-        m, eng, chat, info, t0 = load_gguf(a) if getattr(a, "gguf", None) else load(a)
+    m, eng, chat, info, t0 = R.load(plan, a)
     if a.prompt is not None:
         ids = chat.chat_ids([dict(role="user", content=a.prompt)], enable_thinking=a.thinking)
         samp = None if a.temperature == 0 else [dict(temperature=a.temperature, top_p=a.top_p, top_k=a.top_k, seed=a.seed)]
@@ -961,9 +1121,10 @@ def build_parser():
     for name in ("run", "download"):
         p = sub.add_parser(name, help="download (first time), load and serve a model, or answer one prompt" if name == "run"
                            else "download and check a model's files without loading them")
-        p.add_argument("model", help="model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, a Hugging Face GGUF "
-                       "repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or "
-                       "a Hugging Face safetensors repo or model folder (e.g. Qwen/Qwen3-4B)")
+        p.add_argument("model", help="a model in `mashbox models` by its id, name or Hugging Face repo (e.g. qwen3-8-27b or "
+                       "mashbox-labs/Qwen3.8-27B-TPU), a .gguf file, a Hugging Face GGUF repo with an optional quant tag "
+                       "(e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or a model folder or Hugging "
+                       "Face repo with config.json and safetensors weights (e.g. Qwen/Qwen3-4B)")
         p.add_argument("--weights", metavar="FILE", help="a local .bshj file instead of the download (its sha256 is still checked)")
         p.add_argument("--no-kernels", action="store_true", help="plain JAX only: a catalog model runs without its TPU kernels "
                        "(slower decode, same outputs within rounding)")
@@ -1030,44 +1191,49 @@ def build_parser():
                            help="minimum tokens between kept user-message points, as llama-server (default 8192)")
     p = sub.add_parser("models", help="the models in this version's catalog, by publisher, then model, then file")
     p.add_argument("--json", action="store_true", help="the same list as JSON")
-    p = sub.add_parser("inspect", help="what a GGUF file or repo holds (architecture, block types, tokenizer) and how it "
-                       "would run here, without loading it")
-    p.add_argument("model", help="a .gguf file, a Hugging Face GGUF repo[:quant tag], or a Hugging Face safetensors repo "
-                   "or model folder")
-    p.add_argument("--no-download", action="store_true", help="for a repo: only show which file llama.cpp's rule picks")
+    p = sub.add_parser("inspect", help="how a model resolves (one line per decision) and what it holds: a GGUF file's "
+                       "architecture, block types and tokenizer, a safetensors model's config, or a catalog model's "
+                       "runtime and files; nothing is loaded")
+    p.add_argument("model", help="what `run` takes: a model in `mashbox models`, a .gguf file or GGUF repo[:quant tag], or "
+                   "a model folder or safetensors repo")
+    p.add_argument("--no-download", action="store_true", help="for a GGUF repo: only show which file llama.cpp's rule picks")
     return ap
 
 
 def main(argv=None):
-    argv = sys.argv[1:] if argv is None else list(argv)
+    """`mashbox <command>`. A download that fails ends the command with hub.DownloadError's one line and exit 1."""
+    try:
+        return dispatch(sys.argv[1:] if argv is None else list(argv))
+    except hub.DownloadError as e:
+        log(str(e))
+        return 1
+
+
+def dispatch(argv):
     if argv[:1] == ["tpu"]:
         from . import tpu
         return tpu.main(argv[1:])
-    if len(argv) >= 2 and argv[0] in ("run", "download") and argv[1].replace(".", "-").lower() in MODEL_CLI:
-        import importlib
-        return importlib.import_module(MODEL_CLI[argv[1].replace(".", "-").lower()]).main(argv[0], argv[2:])
+    if len(argv) >= 2 and argv[0] in ("run", "download"):
+        from . import resolve as R
+        own = R.own_command_line(argv[1])     # a catalog package that parses its own options (its main(cmd, argv))
+        if own:
+            import importlib
+            try:
+                return importlib.import_module(own).main(argv[0], argv[2:])
+            except ModuleNotFoundError as e:    # an install without JAX: the model's package imports it before any download
+                if e.name not in ("jax", "jaxlib") or has_jax():
+                    raise
+                log(no_jax(argv[0], argv[1].replace(".", "-").lower()))
+                return 2
     a = build_parser().parse_args(argv)
     if a.cmd == "env":
         return cmd_env(a)
     if a.cmd == "models":
         return cmd_models(a)
-    from .gguf import resolve as GR
-    if a.cmd == "inspect" or GR.is_gguf_request(a.model):
-        return cmd_gguf(a)
-    if a.cmd != "download" and draft_refusal(a):
-        log(f"mashbox: {draft_refusal(a)}")
-        return 2                                         # before the model row, an API key or the server
-    from . import __version__
-    mid = hub.model_entry(a.model)["id"]
-    if mid not in RUNNABLE:
-        log(f"{mid} is not in mashbox {__version__}. Models in this version: https://mashbox.gg/docs/models")
+    if not has_jax():                                    # run, download and inspect read every model with JAX
+        log(no_jax(a.cmd, a.model))
         return 2
-    if a.cmd == "download":
-        return cmd_download(a)
-    if a.host not in ("127.0.0.1", "localhost", "::1"):
-        log("note: serving on a non-loopback address exposes the server to your network (an API key is required); "
-            "prefer an SSH tunnel")
-    return cmd_run(a, argv)
+    return cmd_target(a, argv)
 
 
 def host_note(a):
@@ -1076,72 +1242,67 @@ def host_note(a):
             "prefer an SSH tunnel")
 
 
-def cmd_gguf(a):
-    """GGUF files and repos: every refusal is one clear line and exit 2, never a stack trace. A model folder, or a repo
-    whose listing has no GGUF file but config.json and safetensors, goes to cmd_hf"""
-    from .gguf import GGUFError, resolve as GR
-    if os.path.isdir(a.model):                       # a GGUF model is a file; a folder is a Hugging Face model folder
-        return cmd_hf(a)
+def cmd_target(a, argv=None):
+    """run, download and inspect: the target through the one resolver (resolve.py) into its loader. The flags each kind
+    of target refuses are checked before any file is fetched; every refusal is one clear line and exit 2, never a stack
+    trace. A models.json model's own problems (fit, sha256, drafter) still stop as before (SystemExit)."""
+    from . import resolve as R
     try:
         if a.cmd == "inspect":
-            try:
-                return cmd_inspect(a)
-            except GR.NoGGUF as e:
-                return hf_listed(a, e)
-        if getattr(a, "weights", None):
-            raise GGUFError("mashbox: --weights is for models.json models; pass the .gguf file as the model")
-        if getattr(a, "mtp", None) or getattr(a, "mtp_file", None):
-            raise GGUFError("mashbox: --mtp and --mtp-file are for models.json models; for a GGUF file use --speculation")
-        if a.cmd != "download" and draft_refusal(a, gguf=True):
-            raise GGUFError(f"mashbox: {draft_refusal(a, gguf=True)}")     # before the file is fetched
-        try:
-            a.gguf = GR.resolve(a.model, log=log)
-        except GR.NoGGUF as e:
-            return hf_listed(a, e)
-        if getattr(a, "draft_model", None):
-            a.draft_gguf = GR.resolve(a.draft_model, log=log)
+            return cmd_inspect(a)
+        if R.is_file_target(a.model):                # a file, folder, repo or GGUF row: the file flags apply
+            return cmd_gguf(a, argv)
+        if a.cmd != "download" and draft_refusal(a):
+            log(f"mashbox: {draft_refusal(a)}")
+            return 2                                 # before the model row, an API key or the server
+        a.plan = R.resolve(a.model, download=False, log=log)       # a models.json model: nothing is fetched here
+        if a.plan.entry == "own":                    # its package parses its own options
+            import importlib
+            return importlib.import_module(a.plan.module).main(a.cmd, list(argv or [a.cmd, a.model])[2:])
         if a.cmd == "download":
-            log(json.dumps(dict(event="downloaded", path=a.gguf["path"])))
-            return 0
+            return cmd_download(a)
         host_note(a)
-        return cmd_run(a)
-    except GGUFError as e:
+        return cmd_run(a, argv)
+    except R.refusals() as e:
         log(str(e))
         return 2
 
 
-def hf_listed(a, e):
-    """a repo the GGUF resolver listed and found no .gguf file in: the Hugging Face path when that listing has config.json
-    and safetensors weights, else the resolver's own refusal"""
+def cmd_gguf(a, argv=None):
+    """files and repos (a GGUF row's id, a GGUF file or repo, a model folder or safetensors repo) through the resolver:
+    the flags such a target cannot take stop it before anything is fetched (a folder's and a safetensors repo's are
+    hf.run_refusal's); then the plan is fetched and run"""
     from . import hf as HF
-    if not HF.claims(a.model, e.files):
-        raise e
-    return cmd_hf(a, e.files)
-
-
-def cmd_hf(a, files=None):
-    """Hugging Face safetensors (mashbox/hf), one chip: a model folder, or an owner/name repo whose listing has config.json
-    and safetensors weights and no GGUF file (files: that listing, when cmd_gguf already made it). Every refusal is one
-    clear line and exit 2; the flag refusals and an architecture this path does not read stop before any weights download,
-    the other checks (config fields, weight types, tokenizer, fit) run after it"""
-    from .gguf import GGUFError
-    from . import hf as HF
+    from . import resolve as R
     try:
-        if not HF.claims(a.model, files):
-            raise HF.HFError(f"mashbox: {a.model}: no config.json with safetensors weights here. mashbox runs a model folder, "
-                             "a Hugging Face repo with safetensors or GGUF files, a .gguf file and the models in "
-                             "`mashbox models`")
-        if a.cmd == "inspect":
-            print(json.dumps(HF.inspect(a.model, log=log), indent=1))
-            return 0
-        if HF.run_refusal(a):
-            raise HF.HFError(HF.run_refusal(a))
-        a.hf = HF.resolve(a.model, log=log)
+        folder = os.path.isdir(a.model)              # a model folder: the safetensors path's own refusals, below
+        if not folder and getattr(a, "weights", None):
+            raise R.ResolveError("mashbox: --weights is for models.json models; pass the .gguf file as the model")
+        if not folder and (getattr(a, "mtp", None) or getattr(a, "mtp_file", None)):
+            raise R.ResolveError("mashbox: --mtp and --mtp-file are for models.json models; for a GGUF file use --speculation")
+        if not folder and a.cmd != "download" and draft_refusal(a, gguf=True):
+            raise R.ResolveError(f"mashbox: {draft_refusal(a, gguf=True)}")     # before the file is fetched
+        a.plan = R.resolve(a.model, download=False, log=log)
+        if a.plan.format == "safetensors" and a.cmd != "download" and HF.run_refusal(a):
+            raise R.ResolveError(HF.run_refusal(a))                          # before the weights download
+        if a.plan.format != "gguf" and getattr(a, "draft_model", None):
+            raise R.ResolveError(f"mashbox: --draft-model drafts for a GGUF file; {a.model} is a {a.plan.format} model")
+        R.fetch(a.plan, log)
+        if a.plan.format == "gguf":
+            a.gguf = a.plan.source
+        elif a.plan.format == "safetensors":
+            a.hf = a.plan.source
+        if getattr(a, "draft_model", None):
+            d = R.resolve(a.draft_model, download=True, log=log)
+            if d.format != "gguf":
+                raise R.ResolveError(f"mashbox: --draft-model {a.draft_model}: a draft model is a GGUF file or repo, "
+                                     f"not a {d.format} model")
+            a.draft_gguf = d.source
         if a.cmd == "download":
-            log(json.dumps(dict(event="downloaded", path=a.hf["path"])))
+            log(json.dumps(dict(event="downloaded", path=a.plan.source["path"])))
             return 0
         host_note(a)
-        return cmd_run(a)
-    except (HF.HFError, GGUFError) as e:
+        return cmd_run(a, argv)
+    except R.refusals() as e:
         log(str(e))
         return 2

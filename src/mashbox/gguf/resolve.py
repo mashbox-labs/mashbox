@@ -97,19 +97,24 @@ def file_identity(path):
     return tenancy.file_sha256(path), "read"
 
 
+def joined_identity(shas):
+    """-> the identity of a GGUF file from its shards' sha256s, in shard order: the one sha256 of a single file, else the
+    sha256 of the shards' sha256s joined by spaces; None when any is None"""
+    import hashlib
+    shas = list(shas)
+    if not shas or any(x is None for x in shas):
+        return None
+    return shas[0] if len(shas) == 1 else hashlib.sha256(" ".join(shas).encode()).hexdigest()
+
+
 def identity(path):
     """-> (sha256, shards, how): a GGUF file's identity, the one its deployment logs (gguf_identity) and a catalog row
     names: the file's sha256, or for a split file the sha256 of its shards' sha256s joined by spaces (the shards beside
     the first, by its name); sha256 None when a shard does not exist"""
-    import hashlib
     sh = shards(os.path.basename(path))
     paths = [os.path.join(os.path.dirname(path), s) for s in sh] if len(sh) > 1 else [path]
     ids = [file_identity(p) for p in paths]
-    if any(i[0] is None for i in ids):
-        sha = None
-    else:
-        sha = ids[0][0] if len(ids) == 1 else hashlib.sha256(" ".join(i[0] for i in ids).encode()).hexdigest()
-    return sha, len(ids), sorted({i[1] for i in ids})
+    return joined_identity(i[0] for i in ids), len(ids), sorted({i[1] for i in ids})
 
 
 def resolve(model, log=print, download=True):

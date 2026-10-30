@@ -175,7 +175,10 @@ def test_catalog_blocks_on_our_models():
 
 
 def test_kind_labels_match_the_views():
-    assert catalog.KIND_LABEL == {k: v["label"] for k, v in SC.KINDS.items()}
+    """every kind reads the same in `mashbox models` and the supported-models page (catalog.entries: KIND_LABEL, else
+    the kind id) as in README, llms.txt and the cards (the kind table of tools/hf_github_sync_check.py)"""
+    assert set(catalog.KIND_LABEL) <= set(SC.KINDS)
+    assert {k: catalog.KIND_LABEL.get(k, k) for k in SC.KINDS} == {k: v["label"] for k, v in SC.KINDS.items()}
     assert catalog.CHIPS == SC.CHIPS
 
 

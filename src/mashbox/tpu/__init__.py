@@ -1240,8 +1240,17 @@ def info(m, name, zone, acc, spot, lport, deadline, life, agents=False):
 
 
 # ------------------------------------------------------------------------------------------------------------- commands
+def need_server(m):
+    """`tpu up` starts a server on the chip and tunnels to its port. A model whose cloud settings carry no server port
+    (a one-shot job, such as TRELLIS.2) stops here, before any VM exists."""
+    if "port" not in (m.get("cloud") or {}):
+        raise Stop(f"{m['name']} runs as a one-shot job, not a server: the VM steps are on docs/models/{m['id']}.md")
+
+
 def cmd_up(a):
-    m = pick_chip(model(a.model), a.chip)
+    m = model(a.model)
+    need_server(m)
+    m = pick_chip(m, a.chip)
     c, acc = m["cloud"], m["cloud"]["accelerator"]
     name = a.name or f"mashbox-{m['id']}"[:60]
     if a.max_hours < 0:

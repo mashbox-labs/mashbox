@@ -23,7 +23,7 @@ mashbox run MODEL [options]
 
 | Option | Default | What it does |
 |---|---|---|
-| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or a Hugging Face safetensors repo or model folder (e.g. Qwen/Qwen3-4B) |
+| `MODEL` |  | a model in `mashbox models` by its id, name or Hugging Face repo (e.g. qwen3-8-27b or mashbox-labs/Qwen3.8-27B-TPU), a .gguf file, a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or a model folder or Hugging Face repo with config.json and safetensors weights (e.g. Qwen/Qwen3-4B) |
 | `--weights FILE` |  | a local .bshj file instead of the download (its sha256 is still checked) |
 | `--no-kernels` | off | plain JAX only: a catalog model runs without its TPU kernels (slower decode, same outputs within rounding) |
 | `--prompt TEXT` |  | answer one chat turn, print it and exit; without it, start the server |
@@ -64,7 +64,7 @@ mashbox download MODEL [options]
 
 | Option | Default | What it does |
 |---|---|---|
-| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or a Hugging Face safetensors repo or model folder (e.g. Qwen/Qwen3-4B) |
+| `MODEL` |  | a model in `mashbox models` by its id, name or Hugging Face repo (e.g. qwen3-8-27b or mashbox-labs/Qwen3.8-27B-TPU), a .gguf file, a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or a model folder or Hugging Face repo with config.json and safetensors weights (e.g. Qwen/Qwen3-4B) |
 | `--weights FILE` |  | a local .bshj file instead of the download (its sha256 is still checked) |
 | `--no-kernels` | off | plain JAX only: a catalog model runs without its TPU kernels (slower decode, same outputs within rounding) |
 
@@ -82,7 +82,7 @@ mashbox models [options]
 
 ## mashbox inspect
 
-What a GGUF file or repo holds (architecture, block types, tokenizer) and how it would run here, without loading it.
+How a model resolves (one line per decision) and what it holds: a GGUF file's architecture, block types and tokenizer, a safetensors model's config, or a catalog model's runtime and files; nothing is loaded.
 
 ```
 mashbox inspect MODEL [options]
@@ -90,8 +90,8 @@ mashbox inspect MODEL [options]
 
 | Option | Default | What it does |
 |---|---|---|
-| `MODEL` |  | a .gguf file, a Hugging Face GGUF repo[:quant tag], or a Hugging Face safetensors repo or model folder |
-| `--no-download` | off | for a repo: only show which file llama.cpp's rule picks |
+| `MODEL` |  | what `run` takes: a model in `mashbox models`, a .gguf file or GGUF repo[:quant tag], or a model folder or safetensors repo |
+| `--no-download` | off | for a GGUF repo: only show which file llama.cpp's rule picks |
 
 ## mashbox tpu up
 

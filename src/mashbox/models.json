@@ -7,7 +7,7 @@
   "hf": {
     "org": "mashbox-labs"
   },
-  "version": "0.1.9",
+  "version": "0.1.10",
   "license": "Apache-2.0",
   "company_line": "MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.",
   "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]\"",
@@ -240,7 +240,7 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "14238985d7468db70510b09b1a5e3ed7499a214e",
+      "hf_revision": "dda6a06e03029ac0ac26b09cb024f6f912994efd",
       "card_release": "0.1.5",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
@@ -634,8 +634,8 @@
           "format": "XLA compile cache (tar)",
           "default": false,
           "variant": false,
-          "bytes": 681113600,
-          "sha256": "86b841a0a4ce252927aaa7144f99c86c4a245c4233f36d9c1b6556b2efc4536f",
+          "bytes": 681932800,
+          "sha256": "b0704813808badb13165d05f6f6e234f592fe376005f8cd1d3c22b411f313b6d",
           "gb": 0.68,
           "chips": [
             "v6e"
@@ -881,6 +881,190 @@
           "sha256": "0fa4ba9a7aa94fcc1a47b80b253a8f63cb6122dcbe825282f5bad4a2befb4028"
         }
       ]
+    },
+    {
+      "id": "trellis-2",
+      "name": "TRELLIS.2",
+      "kind": "image-to-3d",
+      "version": "0.1.0",
+      "summary": "Microsoft's open image-to-3D model: one RGBA picture in, a textured GLB mesh out, on a TPU v6e-1 VM (the model on the chip, the GLB export on the VM's CPU).",
+      "in": "an RGBA image (background cut out)",
+      "out": "a textured 3D mesh (GLB)",
+      "path": "src/mashbox/models/trellis_2",
+      "run": "~/.local/bin/mashbox run trellis-2 --image object.png --out object.glb",
+      "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu,trellis-2]>=0.1.10\" --with-executables-from huggingface_hub --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match",
+      "upstream": {
+        "name": "TRELLIS.2",
+        "maker": "Microsoft",
+        "hf": "microsoft/TRELLIS.2-4B",
+        "github": "microsoft/TRELLIS.2",
+        "license": "mit",
+        "revision": "af44b45f2e35a493886929c6d786e563ec68364d",
+        "components": [
+          {
+            "role": "code (the port follows it)",
+            "github": "microsoft/TRELLIS.2",
+            "revision": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+            "license": "MIT",
+            "license_sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb"
+          },
+          {
+            "role": "sparse-structure decoder",
+            "hf": "microsoft/TRELLIS-image-large",
+            "revision": "25e0d31ffbebe4b5a97464dd851910efc3002d96",
+            "license": "mit"
+          },
+          {
+            "role": "image encoder (gated by Meta; each user downloads it with their own login)",
+            "hf": "facebook/dinov3-vitl16-pretrain-lvd1689m",
+            "revision": "ea8dc2863c51be0a264bab82070e3e8836b02d51",
+            "license": "other",
+            "license_name": "dinov3-license",
+            "gated": true,
+            "license_link": "https://ai.meta.com/resources/models-and-libraries/dinov3-license"
+          },
+          {
+            "role": "code (the GLB export's mesh simplification is a port of its simplify path; its remesh and mesh clean-up follow its documented behaviour, and the UV unwrap keeps the two steps of its uv_unwrap: chart clustering, then xatlas)",
+            "github": "JeffreyXiang/CuMesh",
+            "revision": "12289e1062f0603f2f0d0771b02e1395d247f26f",
+            "license": "MIT License",
+            "license_sha256": "8eef85c2c0648a4d42a898f5e6d8bf35f532c477a6233a9647718b61228d275a",
+            "notice": "src/mashbox/models/trellis_2/glb_bake/LICENSE-CuMesh"
+          },
+          {
+            "role": "code (the sparse 3D convolution and the GLB export's texture sampling follow its op semantics and explicit-GEMM math)",
+            "github": "JeffreyXiang/FlexGEMM",
+            "revision": "6dd94a859c26ee8246888502eada3dd8ad85532e",
+            "license": "MIT License",
+            "license_sha256": "d98159921cc2bfa41fff0cea296bd9876ed8fc7b64ae8ef314e5e47c787e705d",
+            "notice": "src/mashbox/models/trellis_2/LICENSE-FlexGEMM"
+          },
+          {
+            "role": "code (stage 0's image resize and alpha handling reproduce the arithmetic of its 12.1.1.post0 release)",
+            "github": "uploadcare/pillow-simd",
+            "revision": "aa38aa687d4bcb79fa6c7712610ac3ffc1193234",
+            "license": "MIT-CMU License",
+            "license_sha256": "17f240ae101143707e5e7303a5d800450d9ccc7475b463cedb555cefdb3c6ece",
+            "notice": "src/mashbox/models/trellis_2/LICENSE-Pillow-SIMD"
+          },
+          {
+            "role": "reference (the image encoder's layer math was checked against its DINOv3ViTModel definition; read, not copied)",
+            "github": "huggingface/transformers",
+            "revision": "e7d351cebad5f6dcdd169b0c034fdee0a000e6a9",
+            "license": "Apache License, Version 2.0",
+            "reference": true
+          }
+        ],
+        "license_sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb"
+      },
+      "hf_repo": "mashbox-labs/TRELLIS.2-TPU",
+      "hf_revision": "c308c341b1a13c06a4fd94b1aaedff36130d5cdc",
+      "pipeline_tag": "image-to-3d",
+      "chips": {
+        "v5e": {
+          "status": "pending",
+          "not_run_reason": "Outside the chip types this release was tested on"
+        },
+        "v6e": {
+          "status": "passing",
+          "date": "2026-10-30",
+          "accelerator": "v6e-1",
+          "gcloud_type": "v6e-1",
+          "chip_count": 1,
+          "note": "one chip (v6e-1)"
+        },
+        "v5p-8": {
+          "status": "pending",
+          "not_run_reason": "Outside the chip types this release was tested on"
+        },
+        "v6e-4": {
+          "status": "pending",
+          "not_run_reason": "Outside the chip types this release was tested on"
+        }
+      },
+      "results": [
+        {
+          "chip": "TPU v6e-1",
+          "metric": "One picture in, a textured GLB out: the whole command (sha256 check, load, every stage, GLB export; the weights were already on disk, so the download is not in it), one run per picture",
+          "value": "15 min 32.4 s to 30 min 11.7 s",
+          "baseline": "n/a",
+          "date": "2026-10-30"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Picture in to mesh out: the model's stages on the chip, with the host work between them",
+          "value": "46.7 s to 1 min 37.5 s",
+          "baseline": "n/a",
+          "date": "2026-10-30"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "GLB export (remesh, simplify, UV unwrap, texture bake) on the VM's own CPU",
+          "value": "14 min 26.8 s to 28 min 14.6 s",
+          "baseline": "n/a",
+          "date": "2026-10-30"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "First run on a new chip, load to ready: loading the weights and compiling, timed from the start of the load (weights on disk; the seconds before the load starts are not in it)",
+          "value": "6 min 28.6 s",
+          "baseline": "n/a",
+          "date": "2026-10-30"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Programs compiled after ready, per run: new compile-cache entries from the chip stages and from the GLB export's JAX work on the VM's CPU together (so no run here is a warm run)",
+          "value": "17 to 55",
+          "baseline": "n/a",
+          "date": "2026-10-30"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Chip memory peak",
+          "value": "14.4 GB",
+          "baseline": "n/a",
+          "date": "2026-10-30"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Whole-command VM maximum RSS: one value per run for the whole command, all stages together (no per-stage memory is recorded)",
+          "value": "72.9 to 89.1 GB",
+          "baseline": "n/a",
+          "date": "2026-10-30"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Cost per picture: the whole command (weights already on disk) at the Google Cloud on-demand list price of a v6e-1 in us-east1 and us-east5",
+          "value": "$0.70 to $1.36",
+          "baseline": "n/a",
+          "date": "2026-10-30"
+        }
+      ],
+      "files": [],
+      "kernels": [],
+      "plain_jax": {
+        "status": "tested",
+        "note": "the port is plain JAX; CPU tests on tiny models of the same architecture"
+      },
+      "cloud": {
+        "accelerator": "v6e-1",
+        "runtime": "v2-alpha-tpuv6e",
+        "extras": "tpu,trellis-2"
+      },
+      "catalog": {
+        "source": "ours",
+        "format": "port",
+        "family": "TRELLIS.2",
+        "params_b": {
+          "total": null,
+          "active": null
+        },
+        "quants": [],
+        "number": null,
+        "experimental": true
+      },
+      "card_release": "0.1.10",
+      "notes": "Host memory: the whole command's VM maximum RSS was 72.9 to 89.1 GB per run here, out of the VM's 185.7 GB. A run of an earlier build of this port, on another picture, took 42 min 26.2 s and peaked at 122.9 GB, so plan for at least that much host memory and run one picture at a time."
     }
   ],
   "gguf": [
