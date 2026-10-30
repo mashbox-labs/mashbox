@@ -715,6 +715,23 @@ def _git(git_dir, *args):
     return r.stdout if r.returncode == 0 else None
 
 
+# code files that moved, as reviewed (path now: its earlier paths): a record whose commit holds such a file under an
+# earlier path is compared with it there, as code, so a move alone never voids a record; a moved file whose code changed
+# still differs
+CODE_RENAMED = {"src/mashbox/gguf/pick.py": ("src/mashbox/gguf/resolve.py",)}
+
+
+def _code_at(git_dir, commit, f):
+    """f's bytes at the commit, or at its first earlier path there (CODE_RENAMED) when the commit has no f; None when
+    the commit has neither"""
+    got = _git(git_dir, "show", f"{commit}:{f}")
+    for old in CODE_RENAMED.get(f, ()) if got is None else ():
+        got = _git(git_dir, "show", f"{commit}:{old}")
+        if got is not None:
+            break
+    return got
+
+
 def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None, equiv=()):
     """the record's code commit (in git_dir) against this tree: ARCHS maps the arch to the same module, every file of
     gguf_code_files holds the same code (_code_only: comments, docstrings and import lines never void a record, as for
@@ -732,7 +749,7 @@ def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None,
         out.append(f"{what}: no module for {arch} in ARCHS")
     out += [f"{what}: code set member {f} is not in this tree" for f in GGUF_CODE if not (repo / f).is_file()]
     for f in need:
-        old = _git(git_dir, "show", f"{commit}:{f}")
+        old = _code_at(git_dir, commit, f)
         if old is None:
             out.append(f"{what}: {f} is not in the code the record ran ({commit[:12]})")
         elif _code_only(f, old) != _code_only(f, (repo / f).read_bytes()):
@@ -836,7 +853,7 @@ def equivalent_file(repo, git_dir, f, commit, equiv, what):
     """[] when a held equivalence's run C hashed f and C's f is this tree's f as code; else the problem"""
     now = _code_only(f, (repo / f).read_bytes())
     for c, files in equiv:
-        then = _git(git_dir, "show", f"{c}:{f}") if f in files else None
+        then = _code_at(git_dir, c, f) if f in files else None
         if then is not None and _code_only(f, then) == now:
             return []
     tail = (" and from the code of the equivalence's run C " + ", ".join(c[:12] for c, _ in equiv)) if equiv else ""
@@ -1346,10 +1363,12 @@ def cpu_record_problems(g, e, read, root, repo, git_dir, what):
                            f"{str((rec.get('code') or {}).get('sha256'))[:16]}")
             need = cpu_record_files(repo, g["arch"])
             decides = list(e.get("decides") or [])
-            if not need or set(need) - set(decides):
-                out.append(f"{what}: decides must list every file that decides the record: {sorted(set(need) - set(decides))}")
-            for f in sorted(set(need) | set(decides)):
-                old, now = _git(git_dir, "show", f"{commit}:{f}"), repo / f
+            moved = {f for f in need if set(CODE_RENAMED.get(f, ())) & set(decides)}   # listed by an earlier path
+            if not need or set(need) - set(decides) - moved:
+                out.append(f"{what}: decides must list every file that decides the record: "
+                           f"{sorted(set(need) - set(decides) - moved)}")
+            for f in sorted(set(need) | set(decides) - {o for n in moved for o in CODE_RENAMED[n]}):
+                old, now = _code_at(git_dir, commit, f), repo / f
                 if old is None:
                     out.append(f"{what}: {f} is not in the code the record ran ({commit[:12]})")
                 elif not now.is_file() or _code_only(f, old) != _code_only(f, now.read_bytes()):
@@ -1850,6 +1869,301 @@ def _quick_forced_problems(cmp, runs, files, d, listed, tokens, what):
     return out, got
 
 
+# The kernel-bits route. A kernel-path QUICK record ran code X on package P; this
+# tree runs code T on the engine_kernels row's package P'. The record holds when X and T differ only in the
+# kernel-dispatch files and the evidence cites a sealed kernel-bits check ("kbits"): every 2-D kernel-type weight of the
+# record's pinned header packed (the loader's host repack) and multiplied (Bundle.matmul, plain and layer form) at every
+# row class of its route's ladder plus one split row count, on a tree A with X's code and P and a tree C with T's code
+# and P', the same seeded blocks and inputs, with the same route, ladder, layer form and plane bytes and the output
+# bytes equal call by call. When P' is not P, the two packages differ only in the matmul-path entries the check ran
+# (kq_classes / payloads: cpu repack, chip matmul) and the two engine_kernels rows only in their file: every other entry
+# is equal but for the fields naming the build that made it (KBITS_BUILD), and its payload bytes, hashed from each
+# wheel, are its sha256; every other file of the two wheels is byte-equal.
+KERNEL_DISPATCH = ("src/mashbox/ops/bundle.py",)
+KBITS_MANIFEST = "mashbox_engine_kernels/manifest.json"
+KBITS_FREE_KEYS = ("version", "kq_classes", "payloads", "kernels")   # manifest keys a package swap may change (below)
+# the fields of a kernel entry that name the kernel module which built it (its source hash and version): a module that
+# changes any one of its kernels restamps every entry it built, so they are left out when entries are compared; the
+# entry's bytes (file, sha256) and every field the engine reads stay compared
+KBITS_BUILD = ("impl", "kernel_version")
+KBITS_ROLES = ("kq_classes", "payloads", "moe_payloads")   # manifest keys whose entries name a payload file
+KBITS_ROW_KEYS = ("for", "jax", "libtpu", "chips")         # engine_kernels row fields a package swap keeps
+COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+GGUF_VALUE = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
+
+
+def _header_tensors(path):
+    """[(name, GGUF type id, dims as ne0, ne1, ...)] of every tensor of a GGUF header cut (the file up to its tensor
+    data; version 2 or 3, little-endian), read from its bytes without the tensor data"""
+    import struct
+    b, o = Path(path).read_bytes(), 0
+
+    def rd(fmt):
+        nonlocal o
+        v = struct.unpack_from(fmt, b, o)[0]
+        o += struct.calcsize(fmt)
+        return v
+
+    def text():
+        nonlocal o
+        n = rd("<Q")
+        o += n
+        return b[o - n:o].decode("utf-8", "replace")
+
+    def skip(t):
+        if t == 8:
+            text()
+        elif t == 9:
+            at, n = rd("<I"), rd("<Q")
+            for _ in range(n):
+                skip(at)
+        else:
+            rd(GGUF_VALUE[t])
+
+    if b[:4] != b"GGUF":
+        raise ValueError("not a GGUF header")
+    o = 4
+    if rd("<I") not in (2, 3):
+        raise ValueError("GGUF version is not 2 or 3")
+    nt, nkv = rd("<Q"), rd("<Q")
+    for _ in range(nkv):
+        text()
+        skip(rd("<I"))
+    out = []
+    for _ in range(nt):
+        name = text()
+        dims = [rd("<Q") for _ in range(rd("<I"))]
+        t = rd("<I")
+        rd("<Q")
+        out.append((name, t, dims))
+    return out
+
+
+def kbits_types(man):
+    """the type ids a package has a matmul for on the chip: a kq_classes matmul entry or an exact payload"""
+    out = {int(t) for c in man.get("kq_classes") or () if c.get("op") == "matmul" and c.get("platform") != "cpu"
+           for t in c.get("types") or ()}
+    return out | {int(e["type"]) for e in (man.get("payloads") or {}).values()
+                  if e.get("op") == "matmul" and e.get("platform") != "cpu"}
+
+
+def kbits_shapes(header, types):
+    """-> ({(type id, n, k)}, [(name, type id, dims)]): every 2-D weight of a type in types (n = ne1 rows, k = ne0 cols;
+    token_embd only when the file has no output.weight, as then it is the head); apart, any weight of such a type with
+    more than 2 dims (the route covers none)"""
+    ts = _header_tensors(header)
+    names = {n for n, _, _ in ts}
+    shapes, other = set(), []
+    for n, t, d in ts:
+        if t not in types or (n == "token_embd.weight" and "output.weight" in names):
+            continue
+        if len(d) == 2:
+            shapes.add((t, d[1], d[0]))
+        elif len(d) > 2:
+            other.append((n, t, d))
+    return shapes, other
+
+
+def kbits_split(ladder):
+    """the one row count past the ladder's top every shape also runs: Bundle.matmul splits it into top-row calls plus
+    a remainder on a smaller row class (the route a long prefill takes)"""
+    return 2 * max(ladder) + 3
+
+
+def kbits_ladder(man, t, n, k, route):
+    """the row classes of a (type, n, k) weight's route in a package: a class's ladder (its type's matmul classes on
+    the chip), an override's the manifest's row_classes (None when the payloads do not list the shape for each one),
+    [] for no route (the weight stays off the package)"""
+    if route is None:
+        return []
+    if route == "class":
+        return sorted({int(r) for c in man.get("kq_classes") or () if c.get("op") == "matmul" and not c.get("layer")
+                       and c.get("platform") != "cpu" and t in [int(x) for x in c.get("types") or ()]
+                       for r in c.get("rows") or ()})
+    have = {(e.get("op"), int(e.get("type", -1)), int(e.get("rows", -1)), int(e.get("cols", -1)),
+             e.get("platform") != "cpu", int(e.get("row_class", -1)) if e.get("op") == "matmul" else -1)
+            for e in (man.get("payloads") or {}).values()}
+    rcs = sorted(int(r) for r in man.get("row_classes") or ())
+    ok = rcs and ("repack", t, n, k, False, -1) in have and all(("matmul", t, n, k, True, rc) in have for rc in rcs)
+    return rcs if route == "exact" and ok else None
+
+
+def _kbits_matmul_path(e):
+    return isinstance(e, dict) and ((e.get("op") == "repack" and e.get("platform") == "cpu")
+                                    or (e.get("op") == "matmul" and e.get("platform") != "cpu"))
+
+
+def _kbits_entries(m, role):
+    v = m.get(role) or ([] if role == "kq_classes" else {})
+    items = v.items() if isinstance(v, dict) else ((str(e.get("id")), e) for e in v if isinstance(e, dict))
+    return {str(k): e for k, e in items}
+
+
+def kbits_package_problems(man_a, man_c, what, wheels=None):
+    """two packages may differ (a swap) only in version and in the matmul-path entries a kernel-bits check runs: a
+    kq_classes or payloads entry that is a cpu repack or a chip matmul. Every other key is equal; every other entry is
+    equal but for KBITS_BUILD; the kernels list differs only in the impl and version of a module serving kq_classes or
+    payloads. wheels (A's, C's zip paths): every entry outside the matmul path that names a file has those bytes in both
+    wheels with its sha256 (hashed here), and every file but the dist-info, the manifest and the matmul-path entries'
+    files is in both wheels with the same bytes."""
+    out = [f"{what}: the packages differ in manifest {k}" for k in sorted(set(man_a) | set(man_c))
+           if k not in KBITS_FREE_KEYS and man_a.get(k) != man_c.get(k)]
+    ka, kc = man_a.get("kernels") or [], man_c.get("kernels") or []
+    strip = lambda e, keys: {k: v for k, v in e.items() if k not in keys} if isinstance(e, dict) else e   # noqa: E731
+    if len(ka) != len(kc) or any(strip(x, ("impl", "version")) != strip(y, ("impl", "version"))
+                                 or (x != y and (x.get("serves") not in ("kq_classes", "payloads")))
+                                 for x, y in zip(ka, kc)):
+        out.append(f"{what}: the packages differ in manifest kernels outside the matmul modules' impl and version")
+    for role in KBITS_ROLES:
+        ia, ic = _kbits_entries(man_a, role), _kbits_entries(man_c, role)
+        bad = sorted(k for k in set(ia) | set(ic) if strip(ia.get(k), KBITS_BUILD) != strip(ic.get(k), KBITS_BUILD)
+                     and (role == "moe_payloads" or not all(e is None or _kbits_matmul_path(e) for e in (ia.get(k), ic.get(k)))))
+        if bad:
+            out.append(f"{what}: the packages differ outside the matmul path in {role} " + ", ".join(bad[:4])
+                       + (" ..." if len(bad) > 4 else ""))
+    if wheels is None:
+        return out
+    return out + [f"{what}: {x}" for x in _kbits_wheel_problems(*(str(w) for w in wheels), *(_sha(w) for w in wheels))]
+
+
+@functools.lru_cache(maxsize=8)
+def _kbits_wheel_problems(wa, wc, sa, sc):
+    """kbits_package_problems' byte half for the wheels at wa, wc (sha256 sa, sc: the cache key)"""
+    import zipfile
+    out = []
+    try:
+        za, zc = zipfile.ZipFile(wa), zipfile.ZipFile(wc)
+        man = {s: json.loads(z.read(KBITS_MANIFEST)) for s, z in (("A", za), ("C", zc))}
+        pre = KBITS_MANIFEST.rsplit("/", 1)[0] + "/"
+        have = {"A": set(za.namelist()), "C": set(zc.namelist())}
+        sha = lambda s, n: hashlib.sha256((za if s == "A" else zc).read(n)).hexdigest() if n in have[s] else None  # noqa: E731
+        free = {pre + str(e.get("file")) for s in man for role in ("kq_classes", "payloads")
+                for e in _kbits_entries(man[s], role).values() if _kbits_matmul_path(e)}
+        names = {n for s in have for n in have[s] if ".dist-info/" not in n and n != KBITS_MANIFEST} - free
+        diff = sorted(n for n in names if sha("A", n) is None or sha("A", n) != sha("C", n))
+        if diff:
+            out.append(f"the package wheels differ in {len(diff)} files outside the matmul path: "
+                       + ", ".join(diff[:3]) + (" ..." if len(diff) > 3 else ""))
+        wrong = sorted(f"{s} {role} {k}" for s in man for role in KBITS_ROLES
+                       for k, e in _kbits_entries(man[s], role).items()
+                       if (role == "moe_payloads" or not _kbits_matmul_path(e)) and "file" in e
+                       and sha(s, pre + str(e["file"])) != e.get("sha256"))
+        if wrong:
+            out.append(f"{len(wrong)} payloads outside the matmul path are not the bytes their sha256 names: "
+                       + ", ".join(wrong[:3]) + (" ..." if len(wrong) > 3 else ""))
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as x:
+        out.append(f"the package wheels do not read for kbits ({type(x).__name__}: {x})")
+    return tuple(out)
+
+
+def kbits_problems(g, e, read, root, repo, git_dir, commit, krow, ran_wheel, chip, header, what):
+    """-> (problems, held, row_a). The evidence's kbits names a seal (sha256sums, listing kbits.json) and the two
+    package wheels the check ran (wheel_a, wheel_c; under the records root). kbits.json: a and c, each {commit, files
+    {path: sha256} of every KERNEL_DISPATCH file, wheel_sha256}; shapes [{type, n, k, a: {route, ladder, layer,
+    plane_bytes, outs {"<rows>:<plain|layer>": sha256}}, c: {...}}]. It holds when: wheel_c is the engine_kernels row's
+    package and wheel_a the one the record's runs loaded, which the record's code commit's own engine_kernels row names
+    (row_a), the two rows equal in KBITS_ROW_KEYS and the packages equal outside the matmul path
+    (kbits_package_problems); run A's commit has the code set of the record's commit and run C's this tree's (_code_only,
+    every file of gguf_code_files), each dispatch file hashed as at its commit; every weight shape of kbits_shapes has one
+    entry whose two sides state the same route, ladder (the package's own, kbits_ladder), layer form and plane bytes,
+    ran every row class of the ladder and kbits_split in plain form and, with a layer form, in layer form too, and give
+    the same output sha256 for each. held = [(C's commit, KERNEL_DISPATCH)] for code_problems, row_a for the record's
+    package checks; ([], None) when anything fails."""
+    kb, out = e.get("kbits"), []
+    if not isinstance(kb, dict) or not {"sha256sums", "wheel_a", "wheel_c"} <= set(kb):
+        return [f"{what}: the kbits evidence names no sha256sums, wheel_a and wheel_c"], [], None
+    sums = read(kb["sha256sums"], f"{what} kbits")
+    wa, wc = read(kb["wheel_a"], f"{what} kbits wheel_a"), read(kb["wheel_c"], f"{what} kbits wheel_c")
+    if sums is None or wa is None or wc is None:
+        return [f"{what}: the kbits seal or a wheel does not read"], [], None
+    out += seal_problems(sums, root, f"{what} kbits")
+    p = sums.parent / "kbits.json"
+    if _sums(sums).get(os.path.normpath(p)) != (_sha(p) if p.is_file() else None):
+        return out + [f"{what}: kbits.json is not in the kbits {sums.name} with its sha256"], [], None
+    import zipfile
+    try:
+        b = json.loads(p.read_text())
+        man = {s: json.loads(zipfile.ZipFile(w).read(KBITS_MANIFEST)) for s, w in (("a", wa), ("c", wc))}
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile) as x:
+        return out + [f"{what}: the kbits check or a wheel's manifest does not read ({type(x).__name__}: {x})"], [], None
+    sa, sc = _sha(wa), _sha(wc)
+    try:
+        then_k = json.loads(_git(git_dir, "show", f"{commit}:models.json") or b"{}").get("engine_kernels") or []
+    except ValueError:
+        then_k = []
+    row_a = next((k for k in then_k if chip in (k.get("chips") or [])), None)
+    if sc != (krow or {}).get("sha256") or (b.get("c") or {}).get("wheel_sha256") != sc:
+        out.append(f"{what}: the kbits run C ran package {str((b.get('c') or {}).get('wheel_sha256'))[:16]}... "
+                   f"({sc[:16]}...), the engine_kernels row is {str((krow or {}).get('sha256'))[:16]}...")
+    if not (sa == ran_wheel == (row_a or {}).get("sha256") == (b.get("a") or {}).get("wheel_sha256")):
+        out.append(f"{what}: the kbits run A ran package {sa[:16]}..., the record's runs loaded {str(ran_wheel)[:16]}..., "
+                   f"its code commit's engine_kernels row names {str((row_a or {}).get('sha256'))[:16]}...")
+    if sa != sc:
+        diff = [k for k in KBITS_ROW_KEYS if (row_a or {}).get(k) != (krow or {}).get(k)]
+        if diff:
+            out.append(f"{what}: the record's engine_kernels row and this tree's differ in {', '.join(diff)}")
+        out += kbits_package_problems(man["a"], man["c"], what, (wa, wc))
+    runs = {}
+    for side, label in (("a", "the code the record ran"), ("c", "this tree's code")):
+        r = b.get(side) if isinstance(b.get(side), dict) else {}
+        c = r.get("commit")
+        if not isinstance(c, str) or not COMMIT_RE.fullmatch(c) or _git(git_dir, "cat-file", "-e", f"{c}^{{commit}}") is None:
+            out.append(f"{what}: the kbits run {side.upper()}'s commit {c!r} is not in {git_dir}")
+            continue
+        runs[side] = c
+        for f in gguf_code_files(repo, g["arch"]):
+            then = _code_at(git_dir, c, f)
+            ref = _code_at(git_dir, commit, f) if side == "a" else (repo / f).read_bytes()
+            if then is None or ref is None or _code_only(f, then) != _code_only(f, ref):
+                out.append(f"{what}: the kbits run {side.upper()} ({c[:12]}) has another {f} than {label}")
+        for f in KERNEL_DISPATCH:
+            blob = _git(git_dir, "show", f"{c}:{f}")
+            if (r.get("files") or {}).get(f) != (None if blob is None else hashlib.sha256(blob).hexdigest()):
+                out.append(f"{what}: the kbits run {side.upper()} hashed another {f} than its commit {c[:12]}'s")
+    try:
+        shapes, other = kbits_shapes(header, kbits_types(man["a"]) | kbits_types(man["c"]))
+    except (ValueError, KeyError, IndexError) as x:
+        return out + [f"{what}: the sealed header does not read for kbits ({type(x).__name__}: {x})"], [], None
+    out += [f"{what}: weight {n} (type {t}, dims {d}) has no kbits form" for n, t, d in other]
+    got = {}
+    for x in b.get("shapes") or []:
+        if isinstance(x, dict):
+            got.setdefault((x.get("type"), x.get("n"), x.get("k")), []).append(x)
+    name = lambda s: f"type {s[0]} n {s[1]} k {s[2]}"      # noqa: E731
+    missing = sorted(s for s in shapes if len(got.get(s, ())) != 1)
+    if missing:
+        out.append(f"{what}: the kbits check has no one entry for {len(missing)} of the file's {len(shapes)} weight "
+                   "shapes: " + "; ".join(map(name, missing[:4])) + (" ..." if len(missing) > 4 else ""))
+    unequal = []
+    for s in sorted(shapes - set(missing)):
+        x = got[s][0]
+        sides = {v: x.get(v) if isinstance(x.get(v), dict) else {} for v in ("a", "c")}
+        for v, y in sides.items():
+            lad = kbits_ladder(man[v], s[0], s[1], s[2], y.get("route"))
+            if y.get("route") not in ("class", "exact", None) or lad is None or y.get("ladder") != lad:
+                out.append(f"{what}: kbits run {v.upper()} {name(s)}: route {y.get('route')!r} ladder {y.get('ladder')}, "
+                           f"the package's ladder for that route is {lad}")
+                continue
+            want = {f"{rc}:{f}" for rc in ([*lad, kbits_split(lad)] if lad else ())
+                    for f in ("plain",) + (("layer",) if y.get("layer") else ())}
+            if (y.get("layer") and y.get("route") != "class") or set(y.get("outs") or {}) != want:
+                out.append(f"{what}: kbits run {v.upper()} {name(s)} ran calls {sorted(y.get('outs') or {})[:3]}..., not "
+                           f"each row class, the split count and the forms of its route ({len(want)} calls)")
+        a, c = sides["a"], sides["c"]
+        for k in ("route", "ladder", "layer", "plane_bytes"):
+            if a.get(k) != c.get(k):
+                out.append(f"{what}: kbits {name(s)}: {k} {a.get(k)} on A, {c.get(k)} on C")
+        oa, oc = a.get("outs") or {}, c.get("outs") or {}
+        bad = sorted(q for q in set(oa) | set(oc) if not SHA256_RE.fullmatch(str(oa.get(q))) or oa.get(q) != oc.get(q))
+        unequal += [f"{name(s)} rows {q.replace(':', ' ')}" for q in bad]
+    if unequal:
+        out.append(f"{what}: the kbits outputs of A and C differ (or are no sha256) for {len(unequal)} calls: "
+                   + "; ".join(unequal[:4]) + (" ..." if len(unequal) > 4 else ""))
+    if out or "c" not in runs:
+        return out, [], None
+    return [], [(runs["c"], frozenset(KERNEL_DISPATCH))], row_a
+
+
 def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what, work=None):
     """A chip row from a quick-check run, every value read from its seal under the records root, never typed: the
     row and evidence both name the kind; the four runs ran `mashbox run REPO:TAG --prompt <sealed prompt i>
@@ -1903,6 +2217,17 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
         out += _quick_header_problems(g, have["header"], work, chip, what)
     if len(files) != len(need):
         return out
+    held, kernels_then = [], kernels
+    if git_dir and "kbits" in e:    # a kernel-bits check may hold a dispatch change and a package swap (kbits_problems)
+        if not bundle or have["header"] is None:
+            out.append(f"{what}: a kbits check holds a kernel-path record with its sealed header only")
+        else:
+            ran = (files["kernel-wheel.sha256"].read_text().split() or [None])[0]
+            kp, held, row_a = kbits_problems(g, e, read, root, repo, git_dir, e["code"]["commit"], krow, ran, chip,
+                                             have["header"], what)
+            out += kp
+            if held and row_a is not None:
+                krow, kernels_then = row_a, [row_a]     # the record ran row_a's package: its own checks read that row
     tag, runs, loaded = f"{g['repo']}:{g['tag']}", [], []
     for i in range(QUICK_RUNS):
         try:
@@ -2008,9 +2333,9 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
                 out.append(f"{what}: models.json says {measured.get('decode_tok_s_1_user')}, the sealed runs 1-3 give "
                            f"{got}")
     if {"steady_decode_tok_s_1_user", "steady_condition"} & set(measured) or "steady" in e:
-        out += steady_problems(g, r, e, root, kernels, chip, what)
+        out += steady_problems(g, r, e, root, kernels, chip, what, read, repo, git_dir, have["header"])
     if git_dir:
-        out += code_problems(repo, git_dir, e["code"]["commit"], g["arch"], what, kernels, chip)
+        out += code_problems(repo, git_dir, e["code"]["commit"], g["arch"], what, kernels_then, chip, equiv=held)
     return out
 
 
@@ -2052,7 +2377,7 @@ def _host_shared(text, what):
     return shared, []
 
 
-def steady_problems(g, r, e, root, kernels, chip, what):
+def steady_problems(g, r, e, root, kernels, chip, what, read=None, repo=None, git_dir=None, header=None):
     """A QUICK row's steady-decode speed (measured.steady_decode_tok_s_1_user with its steady_condition), every value read
     from its own seal (the evidence's <chip>.steady.sha256sums), never typed: one `mashbox run REPO:TAG --prompt
     <prompt.txt> --max-tokens 8 --temperature 0` process on one chip that exited 0, whose engine ran one warm request and
@@ -2062,7 +2387,8 @@ def steady_problems(g, r, e, root, kernels, chip, what):
     is its decode_s / (new tokens - 1); the number is 1000 / their median (2 decimals) and their spread (max / min - 1) is
     at most STEADY_SPREAD; the condition is the one the sealed host log gives (_host_shared); its code commit is the
     evidence's. The steady run's code is recorded, not held to this tree: a speed is a measurement of the version it ran
-    on, never a gate."""
+    on, never a gate. A steady run on another kernel package than the row's holds only as a carry (the evidence's
+    steady.carry, steady_carry_problems): then its package checks read the row its code commit names."""
     out, m, se = [], r.get("measured") or {}, e.get("steady")
     if not isinstance(se, dict) or not isinstance(se.get("sha256sums"), dict):
         return [f"{what}: a steady-decode speed needs its steady record in the evidence (steady.sha256sums)"]
@@ -2128,10 +2454,19 @@ def steady_problems(g, r, e, root, kernels, chip, what):
     if gp.get("arch") != g["arch"]:
         out.append(f"{what}: the steady run ran it as {gp.get('arch')}, the row says {g['arch']}")
     krow = next((k for k in kernels if chip in (k.get("chips") or [])), None)
-    out += _quick_bundle_run_problems(g, gp, w, text, krow, chip, "the steady run", what)
     kw = files["kernel-wheel.sha256"].read_text().split()
     name = Path(kw[1]).name if len(kw) > 1 else None
-    if krow is None or kw[:1] != [krow.get("sha256")] or name != krow.get("file"):
+    krun = krow     # the row the steady run's own package checks read: this tree's, or under a carry its code's
+    if "carry" in se:
+        if read is None or git_dir is None or header is None:
+            out.append(f"{what}: a steady carry is checked against the code repo and the record's sealed header")
+        else:
+            cp, row_a = steady_carry_problems(g, se, kw[0] if kw else None, read, repo, git_dir, krow, chip, header,
+                                              what)
+            out += cp
+            krun = krun if cp else row_a
+    out += _quick_bundle_run_problems(g, gp, w, text, krun, chip, "the steady run", what)
+    if krun is None or kw[:1] != [krun.get("sha256")] or name != krun.get("file"):
         out.append(f"{what}: the steady run loaded the kernel package {name} sha256 {kw[0] if kw else None}, the "
                    f"engine_kernels row for {chip} is {(krow or {}).get('file')} sha256 {(krow or {}).get('sha256')}")
     if files["CODE_SHA"].read_text().split()[:1] != [(se.get("code") or {}).get("commit")]:
@@ -2144,6 +2479,168 @@ def steady_problems(g, r, e, root, kernels, chip, what):
         if m.get("steady_condition") != want:
             out.append(f"{what}: steady_condition {m.get('steady_condition')!r}, the sealed host log gives {want!r}")
     return out
+
+
+# A steady number measured on one kernel package carries to a tree whose engine_kernels row is another package only when
+# the speed it measured is the one this tree runs: every kernel call the file makes resolves to a payload of the same
+# bytes in both packages, over the same planes, and the rest of the code the run executed is this tree's.
+def _carry_reader(src, side):
+    """a fresh module run from one ops/bundle.py source, its relative imports this tree's mashbox.ops (the code check
+    of steady_carry_problems holds every other file equal), so the record's reader and this tree's resolve side by side"""
+    mod = types.ModuleType(f"mashbox.ops._steady_carry_{side}")
+    mod.__package__ = "mashbox.ops"
+    exec(compile(src, f"<{side}: {KERNEL_DISPATCH[0]}>", "exec"), mod.__dict__)
+    return mod
+
+
+def carry_shapes(header, types_):
+    """every 2-D weight (type id, n = ne1 rows, k = ne0 cols) of a type in types_, token_embd too: a weight a reader
+    could call a kernel for, whatever the engine then calls"""
+    return sorted({(t, d[1], d[0]) for _, t, d in _header_tensors(header) if t in types_ and len(d) == 2})
+
+
+def carry_calls(mod, man, shapes, plat):
+    """-> {call: value}: every kernel call the weight shapes can make through one reader (mod, an ops/bundle.py module)
+    and one package manifest on the chip platform plat, resolved by that reader's own Bundle routes and Classes. Per
+    (type, n, k): the route of a lone weight and of a layer stack (Bundle.kq_route, Bundle._route); for a class route
+    its planes (tk, tn, Kp, Np), its cpu repack and its dequant, and each row class of its ladder in plain form and,
+    with a layer form (Classes.layer_ok), in layer form, on the N tile that row class runs on (Classes.tn_for where the
+    reader has it, else the pick's tn); for an exact route its cpu repack, its dequant and one matmul per row class.
+    A payload is (manifest key, entry id); one the manifest does not list is None."""
+    cls = mod.Classes(man.get("kq_classes") if int(man.get("format", 1)) == 2 else ())
+    kq = {}     # the exact payloads, keyed as Bundle builds them
+    for name, e in (man.get("payloads") or {}).items():
+        key = (e["op"], int(e["type"]), int(e["rows"]), int(e["cols"]), e["platform"])
+        kq[key + ((int(e["row_class"]),) if e["op"] == "matmul" else ())] = name
+    b = types.SimpleNamespace(_cls=cls, _kq=kq, ROW_CLASSES=tuple(sorted(int(r) for r in man.get("row_classes", ()))))
+    for f in ("_exact", "_pick", "kq_route", "_route"):
+        setattr(b, f, types.MethodType(getattr(mod.Bundle, f), b))
+    mod._platform = lambda: plat
+    tile = getattr(cls, "tn_for", None)
+    got = lambda d, key, role: (role, d[key]) if key in d else None      # noqa: E731
+    out = {}
+    for t, n, k in shapes:
+        routes = {"lone": b.kq_route(t, (n, k)), "stack": b._route(t, n, k, True)}
+        for ctx, r in routes.items():
+            out[("route", t, n, k, ctx)] = r
+        if "class" in routes.values():
+            tk, tn, Kp, Np = b._pick(t, n, k)
+            out[("planes", t, n, k)] = (tk, tn, Kp, Np)
+            out[("repack", t, n, k, "class")] = got(cls.rep, (t, tk, "cpu"), "kq_classes")
+            out[("dequant", t, n, k, "class")] = got(cls.deq, (t, tk, plat), "kq_classes")
+            layer = cls.layer_ok(t, n, k, plat)
+            for rc in cls.rows(t, tk, tn, plat):
+                tr = tile(t, n, k, rc, plat) if tile else tn
+                out[("matmul", t, n, k, "class", rc, "plain")] = got(cls.mm, (t, tk, tr, rc, plat), "kq_classes")
+                if layer:
+                    out[("matmul", t, n, k, "class", rc, "layer")] = got(cls.mml, (t, tk, tr, rc, plat), "kq_classes")
+        if "exact" in routes.values():
+            out[("repack", t, n, k, "exact")] = got(kq, ("repack", t, n, k, "cpu"), "payloads")
+            out[("dequant", t, n, k, "exact")] = got(kq, ("dequant", t, n, k, plat), "payloads")
+            for rc in b.ROW_CLASSES:
+                out[("matmul", t, n, k, "exact", rc, "plain")] = got(kq, ("matmul", t, n, k, plat, rc), "payloads")
+    return out
+
+
+def _carry_hasher(wheel, man):
+    """-> f(payload): the sha256 of the bytes in the wheel of a payload (manifest key, entry id), hashed here, None
+    when the manifest or the wheel has none"""
+    import zipfile
+    z, memo = zipfile.ZipFile(wheel), {}
+    names = set(z.namelist())
+    ents = {("kq_classes", str(c.get("id"))): c for c in man.get("kq_classes") or ()}
+    ents.update({("payloads", str(k)): e for k, e in (man.get("payloads") or {}).items()})
+
+    def sha(ref):
+        if ref is None or (ref[0], str(ref[1])) not in ents:
+            return None
+        member = KBITS_MANIFEST.rsplit("/", 1)[0] + "/" + str(ents[(ref[0], str(ref[1]))].get("file"))
+        if member not in memo:
+            memo[member] = hashlib.sha256(z.read(member)).hexdigest() if member in names else None
+        return memo[member]
+    return sha
+
+
+def steady_carry_problems(g, se, ran, read, repo, git_dir, krow, chip, header, what):
+    """-> (problems, row_a). A steady record (se) on another kernel package than the row's carries, its number as is,
+    only when: the evidence's steady.carry names the two package wheels under the records root (wheel_a, the one the
+    steady run loaded, which its code commit's own engine_kernels row names: row_a; wheel_c, the row's), the two rows
+    equal in KBITS_ROW_KEYS and the packages equal outside the matmul path (kbits_package_problems, bytes hashed); the
+    code the run executed is this tree's in every file of gguf_code_files but KERNEL_DISPATCH (_code_only; ARCHS maps
+    the arch to the same module; no ops/ file it ran is gone); and every kernel call of every weight shape of the
+    record's sealed header (carry_shapes), resolved by the record's ops/bundle.py with package A and by this tree's
+    with package C (carry_calls), names the same route, the same planes and a payload of the same bytes (hashed from
+    each wheel). A file with one call on a payload of other bytes is refused a carry: it gets its one run on this
+    tree's package."""
+    import zipfile
+    cy, out = se.get("carry"), []
+    if not isinstance(cy, dict) or not {"wheel_a", "wheel_c"} <= set(cy):
+        return [f"{what}: the steady carry names no wheel_a and wheel_c"], None
+    wa, wc = read(cy["wheel_a"], f"{what} steady carry wheel_a"), read(cy["wheel_c"], f"{what} steady carry wheel_c")
+    commit = (se.get("code") or {}).get("commit")
+    if wa is None or wc is None:
+        return [f"{what}: a steady carry wheel does not read"], None
+    if not isinstance(commit, str) or _git(git_dir, "cat-file", "-e", f"{commit}^{{commit}}") is None:
+        return [f"{what}: the steady run's code {commit!r} is not in {git_dir}"], None
+    try:
+        then_k = json.loads(_git(git_dir, "show", f"{commit}:models.json") or b"{}").get("engine_kernels") or []
+        man = {s: json.loads(zipfile.ZipFile(w).read(KBITS_MANIFEST)) for s, w in (("a", wa), ("c", wc))}
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile) as x:
+        return [f"{what}: a steady carry package or row does not read ({type(x).__name__}: {x})"], None
+    row_a = next((k for k in then_k if chip in (k.get("chips") or [])), None)
+    sa, sc = _sha(wa), _sha(wc)
+    if not (sa == ran == (row_a or {}).get("sha256")):
+        out.append(f"{what}: the steady carry's package A is {sa[:16]}..., the steady run loaded {str(ran)[:16]}..., "
+                   f"its code commit's engine_kernels row names {str((row_a or {}).get('sha256'))[:16]}...")
+    if sc != (krow or {}).get("sha256"):
+        out.append(f"{what}: the steady carry's package C is {sc[:16]}..., the engine_kernels row is "
+                   f"{str((krow or {}).get('sha256'))[:16]}...")
+    if sa == sc:
+        out.append(f"{what}: a steady carry is for another package, and both wheels are {sa[:16]}...")
+    diff = [k for k in KBITS_ROW_KEYS if (row_a or {}).get(k) != (krow or {}).get(k)]
+    if diff:
+        out.append(f"{what}: the steady run's engine_kernels row and this tree's differ in {', '.join(diff)}")
+    out += kbits_package_problems(man["a"], man["c"], f"{what} steady carry", (wa, wc))
+    then = _archs_map((_git(git_dir, "show", f"{commit}:{ARCHS_SRC}") or b"").decode()).get(g["arch"])
+    if then != _archs_map((repo / ARCHS_SRC).read_text()).get(g["arch"]):
+        out.append(f"{what}: ARCHS runs {g['arch']} with another module than the steady run's code ran")
+    for f in gguf_code_files(repo, g["arch"]):
+        old = None if f in KERNEL_DISPATCH else _code_at(git_dir, commit, f)
+        if f not in KERNEL_DISPATCH and (old is None or _code_only(f, old) != _code_only(f, (repo / f).read_bytes())):
+            out.append(f"{what}: the steady run's code ({commit[:12]}) has another {f} than this tree: no carry")
+    then_ops = (_git(git_dir, "ls-tree", "-r", "--name-only", commit, "--", "src/mashbox/ops") or b"").decode().split()
+    out += [f"{what}: {f} ran in the steady run and is not in this tree" for f in then_ops
+            if f.endswith(".py") and not (repo / f).is_file()]
+    plats = {c.get("platform") for m in man.values() for c in [*(m.get("kq_classes") or ()),
+                                                              *(m.get("payloads") or {}).values()]
+             if c.get("op") == "matmul" and c.get("platform") != "cpu"}
+    src_a = _git(git_dir, "show", f"{commit}:{KERNEL_DISPATCH[0]}")
+    if len(plats) != 1 or src_a is None:
+        return out + [f"{what}: a steady carry needs one chip platform ({sorted(map(str, plats))}) and the steady "
+                      f"run's {KERNEL_DISPATCH[0]}"], None
+    plat = next(iter(plats))
+    try:
+        shapes = carry_shapes(header, kbits_types(man["a"]) | kbits_types(man["c"]))
+        calls = {"a": carry_calls(_carry_reader(src_a, "a"), man["a"], shapes, plat),
+                 "c": carry_calls(_carry_reader((repo / KERNEL_DISPATCH[0]).read_bytes(), "c"), man["c"], shapes, plat)}
+    except Exception as x:      # a reader that does not resolve the file's calls carries nothing
+        return out + [f"{what}: the steady carry's calls do not resolve ({type(x).__name__}: {x})"], None
+    name = lambda c: " ".join(map(str, c[1:]))      # noqa: E731
+    sha, other = {"a": _carry_hasher(wa, man["a"]), "c": _carry_hasher(wc, man["c"])}, []
+    for c in sorted(set(calls["a"]) | set(calls["c"]), key=repr):
+        va, vc = calls["a"].get(c), calls["c"].get(c)
+        if c[0] in ("route", "planes"):
+            if va != vc:
+                out.append(f"{what}: steady carry {c[0]} of {name(c)}: {va} with the steady run's code and package, "
+                           f"{vc} with this tree's")
+            continue
+        ha, hc = sha["a"](va), sha["c"](vc)
+        if ha is None or ha != hc:
+            other.append(f"{c[0]} {name(c)} ({str(ha)[:12]} on A, {str(hc)[:12]} on C)")
+    if other:
+        out.append(f"{what}: the steady carry's file calls {len(other)} payloads of other bytes on this tree's package "
+                   "(no carry; one run on it; None: no such payload): " + "; ".join(other[:4]) + (" ..." if len(other) > 4 else ""))
+    return out, row_a
 
 
 def quick_ngram_problems(g, e_row, read, root, kernels):
@@ -4345,7 +4842,11 @@ STEADY_TOK = 100.0
 STEADY_HOST = "observed-from 2026-10-30T15:00:00Z\nwindow 2026-10-30T15:30:00Z 2026-10-30T15:31:00Z\n"
 
 
-def _fake_quick_check(base, edit=None, kind="quick-check", path="exact", ngram=False, forced=None, steady=None):
+KBITS_LADDER = (1, 8, 64)     # the made-up package's row classes (every type, plain and layer form)
+
+
+def _fake_quick_check(base, edit=None, kind="quick-check", path="exact", ngram=False, forced=None, steady=None,
+                      kbits=False, code_edit=None):
     """A records root under base with one quick-check chip run of the qwen3-kquant fixture: the four runs (json, exit
     code, stdout, stderr events), the compare, llama.cpp's ids, the prompts, the chip's setup log, pip freeze,
     accelerator type and code commit, the file/plan/card/header of the row, one SHA256SUMS seal, and the git repo of the
@@ -4359,7 +4860,18 @@ def _fake_quick_check(base, edit=None, kind="quick-check", path="exact", ngram=F
     `ids` its output; edit "tfrun<i>") and their compare tf-cmp.json (gap: llama.cpp's gap at a first difference).
     steady="alone"|"shared" (path bundle): the row's number is its steady-decode speed with that condition, from its own
     sealed record in steady-row/ (edit "steady_json", "steady_stderr", "steady_rc", "steady_prompt", "steady_wheel",
-    "steady_code", "host", "steady_seal"); "shared" adds an other-job line over the run's window to host.txt."""
+    "steady_code", "host", "steady_seal"); "shared" adds an other-job line over the run's window to host.txt.
+    kbits=True (path bundle): the record ran a code commit whose ops/bundle.py differs from this tree's (one added line)
+    on a real package wheel (kwheel/a/: its manifest has one plain and one layer matmul class per type over
+    KBITS_LADDER) and the evidence cites a sealed kernel-bits check (kbits-row/kbits.json: run A on the record's commit
+    and package, run C on a second commit with this tree's bundle.py; one entry per weight shape of the fixture file,
+    listed from its own tensors, every call's outputs equal; edit "kbits", "kbits_seal"). Each entry names a payload
+    file in the wheel with its sha256. kbits="swap": this tree's engine_kernels row is another package (kwheel/c/:
+    version 0.1.99, built by a newer kq module, so every kq_classes entry and the kernels list carry its impl and
+    version, and the first matmul class has other bytes; edit "kbits_man_c", "kbits_files_c" {wheel path: bytes},
+    "kbits_row_c"). kbits=<path of a code set file>: that file differs too; kbits=("swap", <path>): both. The packages'
+    entries are whole enough for this tree's reader (Classes) to resolve every weight shape's calls. code_edit(code):
+    changes the record's code ({path: bytes}) in place before its commit is made."""
     edit = edit or (lambda part, v: v)
     top, tool = QUICK_KINDS[kind]
     timing, decode = (QUICK_TIMING, QUICK_DECODE) if kind == "quick-check" else (QUICK_TIMING_Q, QUICK_DECODE_Q)
@@ -4370,13 +4882,70 @@ def _fake_quick_check(base, edit=None, kind="quick-check", path="exact", ngram=F
     from mashbox.gguf import File
     fx = File(str(FIXTURE))
     code = {f: (ROOT / f).read_bytes() for f in gguf_code_files(ROOT, fx.arch) + [ARCHS_SRC]}
+    if code_edit:
+        code_edit(code)
     krow = dict(QUICK_KROW, types=sorted(t for t in fx.census()[0] if t not in ("F32", "F16", "BF16")))
+    krow_tree = krow
+    if kbits:
+        import zipfile
+        from mashbox.ops import reference as R
+        tid = {n: c["type"] for n, c in fx.census()[0].items()}
+        pre = KBITS_MANIFEST.rsplit("/", 1)[0] + "/"
+        build = {"impl": "1" * 64, "kernel_version": "0.1.0"}
+        man = {"format": 2, "version": "0.1.5", "row_classes": [], "payloads": {}, "moe_payloads": {}, "kernels": [
+            {"name": "kq", "serves": "kq_classes", "version": "0.1.0", "impl": "1" * 64},
+            {"name": "moe_expert_ffn", "serves": "moe_payloads", "version": "0.2.0", "impl": "2" * 64}], "kq_classes": [
+            {"id": f"mm{lay}-{tid[t]}", "op": "matmul", "types": [tid[t]], "rows": list(KBITS_LADDER), "platform": "tpu",
+             "atoms": {"tk": 256, "tn": 256, "n_pad": 256, "n_max": 1 << 20, "k_max": 1 << 20}, **build,
+             **({"layer": True} if lay else {})} for t in krow["types"] for lay in ("", "l")] + [
+            {"id": f"{op}-{plat}-{tid[t]}", "op": op, "type": tid[t], "platform": plat, **build, "atoms": {
+                "tk": 256, "bs": R.TYPES[tid[t]][1], "n_pad": 256, "n_max": 1 << 20, "k_max": 1 << 20}}
+            for t in krow["types"] for op, plat in (("dequant", "tpu"), ("repack", "tpu"), ("repack", "cpu"))]}
+        files = {}
+        for c in man["kq_classes"]:
+            c["file"] = c["id"] + ".jaxexport"
+            files[pre + c["file"]] = f"payload {c['id']}".encode()
+            c["sha256"] = hashlib.sha256(files[pre + c["file"]]).hexdigest()
+        files[pre + "VERSION"] = b"kq\n"
+        swap = kbits == "swap" or (isinstance(kbits, tuple) and kbits[0] == "swap")
+        files_c, man_c = dict(files), copy.deepcopy(man)
+        if swap:
+            new = {"impl": "3" * 64, "kernel_version": "0.1.1"}
+            man_c.update(version="0.1.99", kq_classes=[dict(c, **new) for c in man["kq_classes"]])
+            man_c["kernels"][0].update(impl=new["impl"], version=new["kernel_version"])
+            first = man_c["kq_classes"][0]
+            files_c[pre + first["file"]] = b"payload, a wider tile"
+            first["sha256"] = hashlib.sha256(files_c[pre + first["file"]]).hexdigest()
+            man_c = edit("kbits_man_c", man_c)
+            files_c = edit("kbits_files_c", files_c)
+
+        def wheel_of(side, m, fs):
+            (root / "kwheel" / side).mkdir(parents=True)
+            w = root / "kwheel" / side / krow["file"]
+            with zipfile.ZipFile(w, "w") as z:
+                z.writestr(KBITS_MANIFEST, json.dumps(m))
+                for n, data in fs.items():
+                    z.writestr(n, data)
+            return w
+        wheel_a = wheel_of("a", man, files)
+        wheel_c = wheel_of("c", man_c, files_c) if swap else wheel_a
+        krow["sha256"] = _sha(wheel_a)
+        krow_tree = edit("kbits_row_c", dict(krow, sha256=_sha(wheel_c))) if swap else krow
+        disp = KERNEL_DISPATCH[0]
+        extra = kbits[1] if isinstance(kbits, tuple) else (None if kbits in (True, "swap") else kbits)
+        changed = [disp] + ([extra] if extra else [])
+        for f in changed:
+            code[f] = (ROOT / f).read_bytes() + b"\n_KBITS_RECORD_ONLY = 1\n"
     code["models.json"] = json.dumps({"engine_kernels": [krow] if bundle else []}).encode()
     code["pyproject.toml"] = (ROOT / "pyproject.toml").read_bytes()
     for f, data in code.items():
         (root / "code" / f).parent.mkdir(parents=True, exist_ok=True)
         (root / "code" / f).write_bytes(data)
     commit = _commit(root / "code")
+    if kbits:       # run C's commit: this tree's code (the record's with the changed files back)
+        for f in changed:
+            (root / "code" / f).write_bytes((ROOT / f).read_bytes())
+        commit_c = _commit(root / "code")
     on = ({"accelerator": "v6e-4", "chip_count": 1, "kernel_path": "bundle"} if bundle else
           {"accelerator": "v6e-1", "kernel_path": "exact"})
     measured = ({"steady_decode_tok_s_1_user": STEADY_TOK, "steady_condition": catalog.STEADY_CONDITIONS[steady]}
@@ -4519,8 +5088,32 @@ def _fake_quick_check(base, edit=None, kind="quick-check", path="exact", ngram=F
         ev["gguf"][row["id"]]["v6e"]["steady"] = {"sha256sums": {"path": str(sd / "SHA256SUMS"),
                                                                  "sha256": _sha(sd / "SHA256SUMS")},
                                                   "code": {"commit": commit}}
+    if kbits:
+        kd = root / "kbits-row"
+        kd.mkdir()
+        tnames = {t.name for t in fx.tensors.values()}
+        shapes = sorted({(t.type, t.shape[0], t.shape[1]) for t in fx.tensors.values()
+                         if len(t.shape) == 2 and t.type_name in krow["types"]
+                         and not (t.name == "token_embd.weight" and "output.weight" in tnames)})
+        lad = list(KBITS_LADDER)
+
+        def side(sh):
+            return {"route": "class", "ladder": lad, "layer": True, "plane_bytes": sh[1] * sh[2],
+                    "outs": {f"{rc}:{f}": hashlib.sha256(repr((sh, rc, f)).encode()).hexdigest()
+                             for rc in (*lad, 2 * lad[-1] + 3) for f in ("plain", "layer")}}
+        kb = edit("kbits", {
+            "a": {"commit": commit, "files": {disp: hashlib.sha256(code[disp]).hexdigest()}, "wheel_sha256": _sha(wheel_a)},
+            "c": {"commit": commit_c, "files": {disp: _sha(ROOT / disp)}, "wheel_sha256": _sha(wheel_c)},
+            "shapes": [{"type": sh[0], "n": sh[1], "k": sh[2], "a": side(sh), "c": side(sh)} for sh in shapes]})
+        (kd / "kbits.json").write_text(json.dumps(kb))
+        kseal = edit("kbits_seal", [f"{_sha(kd / 'kbits.json')}  kbits.json"])
+        (kd / "SHA256SUMS").write_text("\n".join(kseal) + "\n")
+        ev["gguf"][row["id"]]["v6e"]["kbits"] = {
+            "sha256sums": {"path": str(kd / "SHA256SUMS"), "sha256": _sha(kd / "SHA256SUMS")},
+            "wheel_a": {"path": str(wheel_a), "sha256": _sha(wheel_a)},
+            "wheel_c": {"path": str(wheel_c), "sha256": _sha(wheel_c)}}
     reg = copy.deepcopy(REG)
-    reg["gguf"], reg["engine_kernels"], reg["models"] = [row], [krow] if bundle else [], []
+    reg["gguf"], reg["engine_kernels"], reg["models"] = [row], [krow_tree] if bundle else [], []
     return edit("reg", reg), edit("ev", ev)
 
 
@@ -4898,6 +5491,200 @@ def test_record_guard_reads_the_plain_runs_of_an_ngram_gate_entry_from_the_seal(
     assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
 
 
+def test_record_guard_holds_a_kernel_path_quick_row_over_a_dispatch_change_with_a_kernel_bits_check(tmp_path):
+    """the record ran another ops/bundle.py; a sealed kernel-bits check over every call of its file holds it"""
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", kbits=True)
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+def test_record_guard_holds_a_kernel_path_quick_row_over_a_package_swap_with_a_kernel_bits_check(tmp_path):
+    """this tree's engine_kernels row is another package, built by a newer kq module (every entry and the kernels list
+    restamped with its impl and version) with other bytes in one matmul class only: held"""
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", kbits="swap")
+    seal = Path(next(iter(ev["gguf"].values()))["v6e"]["sha256sums"]["path"])
+    assert reg["engine_kernels"][0]["sha256"] != (seal.parent / "kernel-wheel.sha256").read_text().split()[0]
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+def test_record_guard_voids_a_dispatch_change_or_package_swap_without_a_kernel_bits_check(tmp_path):
+    drop = _in_place("ev", lambda e: next(iter(e["gguf"].values()))["v6e"].pop("kbits"))
+    reg, ev = _fake_quick_check(tmp_path, drop, kind="quick", path="bundle", kbits=True)
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert len(got) == 1 and f"{KERNEL_DISPATCH[0]} differs from the code the record ran" in got[0], got
+    reg, ev = _fake_quick_check(tmp_path / "b", drop, kind="quick", path="bundle", kbits="swap")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit2")
+    assert any("the kernel package the runs loaded is" in x for x in got), got
+    assert any("engine_kernels rows for v6e differ from the code the record ran" in x for x in got), got
+
+
+def _kbits(fn):
+    return _in_place("kbits", fn)
+
+
+KBITS_FIRST = (8, 512, 256)     # the fixture's first weight shape: Q8_0 attn_q (the four layers' attn_q are one shape)
+
+
+def _kbits_shape(fn, side=None):
+    """an edit of the first shape's entry (side "a" / "c": that side only)"""
+    def go(v):
+        x = next(x for x in v["shapes"] if (x["type"], x["n"], x["k"]) == KBITS_FIRST)
+        fn(x[side] if side else x)
+    return _kbits(go)
+
+
+# the mutation table of the kernel-bits route: each planted fault is caught, by name
+KBITS_BAD = {
+    "m1 one call's outputs differ": (_kbits_shape(lambda c: c["outs"].update({"8:plain": "0" * 64}), "c"),
+                                     "outputs of A and C differ (or are no sha256) for 1 calls: type 8 n 512 k 256 rows "
+                                     "8 plain"),
+    "m2 one weight shape missing": (_kbits(lambda v: v.update(shapes=[x for x in v["shapes"]
+                                                                      if (x["type"], x["n"], x["k"]) != KBITS_FIRST])),
+                                    "has no one entry for 1 of the file's"),
+    "m3 run A is not the record's code": (_kbits(lambda v: v["a"].update(commit=v["c"]["commit"], files=v["c"]["files"])),
+                                          f"has another {KERNEL_DISPATCH[0]} than the code the record ran"),
+    "m3 run C is not this tree's code": (_kbits(lambda v: v["c"].update(commit=v["a"]["commit"], files=v["a"]["files"])),
+                                         f"has another {KERNEL_DISPATCH[0]} than this tree's code"),
+    "m3 a hashed file that is not its commit's": (_kbits(lambda v: v["c"]["files"].update({KERNEL_DISPATCH[0]: "0" * 64})),
+                                                  "the kbits run C hashed another"),
+    "m3 a run commit not in the code repo": (_kbits(lambda v: v["c"].update(commit="0" * 40)),
+                                             "the kbits run C's commit '" + "0" * 40 + "' is not in"),
+    "m4 run C on another package": (_kbits(lambda v: v["c"].update(wheel_sha256="d" * 64)),
+                                    "the kbits run C ran package dddddddddddddddd"),
+    "m4 run A on another package": (_kbits(lambda v: v["a"].update(wheel_sha256="d" * 64)), "the kbits run A ran package"),
+    "m6 one row class missing for one shape": (_kbits_shape(lambda c: [c[s]["outs"].pop("64:layer") for s in "ac"]),
+                                               "not each row class, the split count and the forms"),
+    "the split call missing for one shape": (_kbits_shape(lambda c: [c[s]["outs"].pop(f"{2 * KBITS_LADDER[-1] + 3}:plain")
+                                                                     for s in "ac"]),
+                                             "not each row class, the split count and the forms"),
+    "a ladder shorter than the package's": (_kbits_shape(lambda c: [c[s].update(ladder=[1, 8]) for s in "ac"]),
+                                            "the package's ladder for that route is [1, 8, 64]"),
+    "another route on C": (_kbits_shape(lambda c: c.update(route="exact"), "c"), "route 'exact'"),
+    "other plane bytes on C": (_kbits_shape(lambda c: c.update(plane_bytes=c["plane_bytes"] + 1), "c"),
+                               "plane_bytes 131072 on A, 131073 on C"),
+    "no layer form on C": (_kbits_shape(lambda c: c.update(layer=False), "c"), "layer True on A, False on C"),
+    "two entries for one shape": (_kbits(lambda v: v["shapes"].append(copy.deepcopy(v["shapes"][0]))),
+                                  "has no one entry for 1 of the file's"),
+    "a seal without kbits.json": (_set("kbits_seal", lambda v: []), "kbits.json is not in the kbits SHA256SUMS"),
+}
+# a package swap holds only when the packages differ in the matmul path the check ran and the rows only in their file
+def _kbits_entry_c(op, plat, fn):
+    """an edit of package C's first kq_classes entry with that op and platform"""
+    return _in_place("kbits_man_c", lambda m: fn(next(c for c in m["kq_classes"]
+                                                       if (c["op"], c["platform"]) == (op, plat))))
+
+
+def _kbits_file_c(name, data):
+    return _in_place("kbits_files_c", lambda f: f.update({KBITS_MANIFEST.rsplit("/", 1)[0] + "/" + name: data}))
+
+
+KBITS_SWAP_BAD = {
+    "a dequant entry names another payload": (_kbits_entry_c("dequant", "tpu", lambda c: c.update(sha256="0" * 64)),
+                                              "the packages differ outside the matmul path in kq_classes dequant-"),
+    "a field the engine reads differs on a dequant entry": (
+        _kbits_entry_c("dequant", "tpu", lambda c: c.update(atoms={"tk": 512})),
+        "the packages differ outside the matmul path in kq_classes dequant-"),
+    "a device repack payload has other bytes": (
+        _in_place("kbits_files_c", lambda f: f.update({next(n for n in f if "/repack-tpu-" in n): b"other bytes"})),
+        "payloads outside the matmul path are not the bytes their sha256 names: C kq_classes repack-tpu-"),
+    "another file of the package differs": (_kbits_file_c("VERSION", b"kq2\n"),
+                                            "the package wheels differ in 1 files outside the matmul path: "
+                                            "mashbox_engine_kernels/VERSION"),
+    "a file is only in one package": (_kbits_file_c("extra.py", b"x = 1\n"),
+                                      "the package wheels differ in 1 files outside the matmul path: "
+                                      "mashbox_engine_kernels/extra.py"),
+    "the routed-expert kernel differs": (_in_place("kbits_man_c", lambda m: m["kernels"][1].update(version="0.2.1")),
+                                         "the packages differ in manifest kernels outside the matmul modules'"),
+    "a manifest key differs": (_in_place("kbits_man_c", lambda m: m.update(row_classes=[1])),
+                               "the packages differ in manifest row_classes"),
+    "the rows' pins differ": (_in_place("kbits_row_c", lambda r: r.update(libtpu="0.0.49.*")),
+                              "the record's engine_kernels row and this tree's differ in libtpu"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(KBITS_BAD))
+def test_record_guard_refuses_a_bad_kernel_bits_check(tmp_path, case):
+    edit, want = KBITS_BAD[case]
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", kbits=True)
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(want in x for x in got), got
+    assert any(f"{KERNEL_DISPATCH[0]} differs from the code the record ran" in x for x in got), got
+
+
+@pytest.mark.parametrize("case", sorted(KBITS_SWAP_BAD))
+def test_record_guard_refuses_a_package_swap_outside_the_matmul_path(tmp_path, case):
+    edit, want = KBITS_SWAP_BAD[case]
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", kbits="swap")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(want in x for x in got), got
+    assert any("the kernel package the runs loaded is" in x for x in got), got
+
+
+def test_record_guard_kernel_bits_voids_only_files_that_make_the_unequal_call(tmp_path):
+    """m1, the other side: an unequal entry for a shape this file has no weight of leaves it held"""
+    def extra(v):
+        x = copy.deepcopy(v["shapes"][0])
+        x.update(n=999)
+        x["c"]["outs"]["8:plain"] = "0" * 64
+        v["shapes"].append(x)
+    reg, ev = _fake_quick_check(tmp_path, _kbits(extra), kind="quick", path="bundle", kbits="swap")
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+def test_record_guard_kernel_bits_never_holds_a_change_outside_the_dispatch_files(tmp_path):
+    """m5: the check is whole and holds bundle.py, and the record's code also differs in a loader file: voided by that"""
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", kbits="src/mashbox/gguf/reader.py")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert len(got) == 1 and "src/mashbox/gguf/reader.py differs from the code the record ran" in got[0], got
+
+
+def _moved_back(extra=b""):
+    """the record's code holds each moved file (CODE_RENAMED as it is now) under its earlier path, extra appended"""
+    moves = {new: olds[0] for new, olds in CODE_RENAMED.items()}
+
+    def go(code):
+        for new, old in moves.items():
+            code[old] = code.pop(new) + extra
+    return go
+
+
+def test_record_guard_follows_a_reviewed_move_of_a_code_file(tmp_path):
+    """the record ran before gguf/resolve.py became gguf/pick.py, the same code: held"""
+    assert set(CODE_RENAMED) <= set(GGUF_CODE)
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", code_edit=_moved_back())
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+def test_record_guard_voids_a_moved_file_whose_code_changed(tmp_path):
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", code_edit=_moved_back(b"\n_MOVED_AND_CHANGED = 1\n"))
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert len(got) == 1 and "src/mashbox/gguf/pick.py differs from the code the record ran" in got[0], got
+
+
+def test_record_guard_voids_a_move_the_table_does_not_list(tmp_path, monkeypatch):
+    back = _moved_back()
+    monkeypatch.setattr(sys.modules[__name__], "CODE_RENAMED", {})
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", code_edit=back)
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert len(got) == 1 and "src/mashbox/gguf/pick.py is not in the code the record ran" in got[0], got
+
+
+def test_kernel_bits_shapes_and_ladders_come_from_the_header_and_the_package():
+    """every 2-D weight of a package type, token_embd only as the head; a class's ladder is its type's, an override's
+    the manifest's row_classes when every row class has a payload"""
+    man = {"row_classes": [1, 4], "kq_classes": [
+        {"op": "matmul", "types": [12], "rows": [8, 16], "platform": "tpu"},
+        {"op": "matmul", "types": [12], "rows": [8, 16], "platform": "tpu", "layer": True},
+        {"op": "matmul", "types": [14], "rows": [4], "platform": "cpu"}, {"op": "repack", "type": 8, "platform": "cpu"}],
+        "payloads": {f"m{rc}": {"op": "matmul", "type": 20, "rows": 256, "cols": 256, "platform": "tpu", "row_class": rc}
+                     for rc in (1, 4)} | {"r": {"op": "repack", "type": 20, "rows": 256, "cols": 256, "platform": "cpu"}}}
+    assert kbits_types(man) == {12, 20}
+    shapes, other = kbits_shapes(FIXTURE, kbits_types(man))
+    assert shapes == {(12, 256, 256), (12, 512, 256), (20, 256, 256)} and other == []   # no token_embd (264 x 256)
+    assert kbits_ladder(man, 12, 256, 256, "class") == [8, 16] and kbits_ladder(man, 20, 256, 256, "exact") == [1, 4]
+    assert kbits_ladder(man, 20, 512, 256, "exact") is None and kbits_ladder(man, 12, 1, 1, None) == []
+    assert kbits_split([8, 16]) == 35
+
+
 def test_record_guard_holds_a_quick_rows_steady_speed(tmp_path):
     reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", steady="alone")
     assert reg["gguf"][0]["chips"]["v6e"]["measured"] == {"steady_decode_tok_s_1_user": STEADY_TOK,
@@ -4953,6 +5740,86 @@ def test_record_guard_names_each_bad_steady_form(tmp_path, form):
     reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", steady="alone")
     got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
     assert any(want in x for x in got), got
+
+
+def _steady_carry(e):
+    v = next(iter(e["gguf"].values()))["v6e"]
+    v["steady"]["carry"] = {k: dict(v["kbits"][k]) for k in ("wheel_a", "wheel_c")}
+
+
+STEADY_CARRY = _in_place("ev", _steady_carry)    # the steady record carries: its evidence names the swap's two wheels
+
+
+def _c_class(fn):
+    """an edit of package C's kq_classes list"""
+    return _in_place("kbits_man_c", lambda m: fn(m["kq_classes"]))
+
+
+def _first_bytes_back(m):
+    m["kq_classes"][0]["sha256"] = hashlib.sha256(f"payload {m['kq_classes'][0]['id']}".encode()).hexdigest()
+
+
+def _first_file_back(f):
+    n = next(n for n, v in f.items() if v == b"payload, a wider tile")
+    f[n] = f"payload {n.rsplit('/', 1)[1].removesuffix('.jaxexport')}".encode()
+
+
+# package C differs from A in build stamps and version only: the swap's one matmul class of other bytes has A's again
+SAME_BYTES = _both(_in_place("kbits_man_c", _first_bytes_back), _in_place("kbits_files_c", _first_file_back))
+
+
+def test_record_guard_carries_a_steady_number_over_a_package_swap_with_the_same_payload_bytes(tmp_path):
+    reg, ev = _fake_quick_check(tmp_path, _both(SAME_BYTES, STEADY_CARRY), kind="quick", path="bundle", kbits="swap",
+                                steady="alone")
+    sd = Path(next(iter(ev["gguf"].values()))["v6e"]["steady"]["sha256sums"]["path"]).parent
+    assert reg["engine_kernels"][0]["sha256"] != (sd / "kernel-wheel.sha256").read_text().split()[0]
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+    reg, ev = _fake_quick_check(tmp_path / "b", SAME_BYTES, kind="quick", path="bundle", kbits="swap", steady="alone")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit2")
+    assert len(got) == 1 and "the steady run loaded the kernel package" in got[0], got     # no carry: no number
+
+
+def test_record_guard_carries_a_steady_number_over_other_bytes_of_a_payload_the_file_never_calls(tmp_path):
+    """package C adds a matmul class of a type the file has no weight of (Q2_K), its own bytes: the carry holds"""
+    def extra(cs):
+        cs.append(dict(cs[0], id="mm-10", types=[10], file="mm-10.jaxexport",
+                       sha256=hashlib.sha256(b"a Q2_K class").hexdigest()))
+    edit = _both(SAME_BYTES, STEADY_CARRY, _c_class(extra), _kbits_file_c("mm-10.jaxexport", b"a Q2_K class"))
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", kbits="swap", steady="alone")
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+def _c_drop_layer_of_first(cs):
+    t = cs[0]["types"]
+    cs[:] = [c for c in cs if not (c.get("layer") and c.get("types") == t)]
+
+
+# a steady carry is refused, by name, for each of these; the steady number then needs its one run on this tree's package
+STEADY_CARRY_BAD = {
+    "one called payload has other bytes": (STEADY_CARRY, (), "calls 3 payloads of other bytes on this tree's package (no "
+                                                             "carry; one run on it; None: no such payload): matmul 20 "
+                                                             "256 256 class 1 plain (639f1a2d3a3f on A, 6c5aa56c6eca on C)"),
+    "a layer form gone on C": (_both(SAME_BYTES, STEADY_CARRY, _c_class(_c_drop_layer_of_first)), (),
+                               "matmul 20 256 256 class 1 layer"),
+    "the steady code differs outside the dispatch file": (_both(SAME_BYTES, STEADY_CARRY), "src/mashbox/runtime/sampler.py",
+                                                         "has another src/mashbox/runtime/sampler.py than this tree: no "
+                                                         "carry"),
+    "wheel A is not the steady run's": (_both(SAME_BYTES, STEADY_CARRY, _in_place("ev", lambda e: next(iter(
+        e["gguf"].values()))["v6e"]["steady"]["carry"].update(wheel_a=next(iter(e["gguf"].values()))["v6e"]["kbits"][
+            "wheel_c"]))), (), "the steady carry's package A is"),
+    "a carry without its wheels": (_both(SAME_BYTES, _in_place("ev", lambda e: next(iter(e["gguf"].values()))["v6e"][
+        "steady"].update(carry={}))), (), "the steady carry names no wheel_a and wheel_c"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(STEADY_CARRY_BAD))
+def test_record_guard_refuses_a_steady_carry(tmp_path, case):
+    edit, code, want = STEADY_CARRY_BAD[case]
+    kb = ("swap", code) if code else "swap"
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", kbits=kb, steady="alone")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(want in x for x in got), got
+    assert any("the steady run loaded the kernel package" in x for x in got), got
 
 
 def test_record_guard_holds_a_kernel_path_quick_row_with_its_ngram_gate_entry(tmp_path):
