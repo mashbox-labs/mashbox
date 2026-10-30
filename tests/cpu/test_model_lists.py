@@ -153,7 +153,7 @@ def test_readme_on_disk_has_the_rendered_block():
 # import lines and docstrings, as the record guard compares it; empty fields left out, so the hash is the same on every
 # Python version the package supports). Model lists live in tools/model_lists.py, so a page
 # layout never voids a measured record; a change to catalog.py's code fails here first.
-CATALOG_CODE_SHA256 = "6ee27370890170807d253e524911e098cbde59a633fe6e98da1dfd172774a301"
+CATALOG_CODE_SHA256 = "1e2894dbe624921cf156b7a151cba83719c0a2162ee9ae03f009b55d73e7c68b"
 
 
 def code_only(data):

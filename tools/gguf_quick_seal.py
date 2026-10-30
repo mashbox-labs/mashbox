@@ -10,6 +10,14 @@ print its evidence entry and the row's chip block. Every value is copied from th
   python3 tools/gguf_quick_seal.py --runs DIR --compare DIR --chip DIR --kit DIR --tool cmp_p1.py --cpu-record DIR \
       --tag NAME --out NEW_DIR
 
+A QUICK run (--kind quick, record_kind "quick") is the same four runs with --max-tokens 32, its compare tool sealed as
+cmp_q.py, and no CPU record: --pin DIR holds the pick's pin.json (repo, revision, file, tag, lfs_sha256, bytes), the
+file's header.bin and the card.json read at that revision, under their own SHA256SUMS. It also prints the row, built
+from the header and the card the way tools/gguf_rows.py builds one (no cpu_check):
+
+  python3 tools/gguf_quick_seal.py --kind quick --runs DIR --compare DIR --chip DIR --kit DIR --tool cmp_q.py \
+      --pin DIR --tag NAME --out NEW_DIR
+
 Every input is checked against its own SHA256SUMS first; the output folder must not exist (a seal is never edited).
 The row's number is decode tok/s at 1 user = sum(new tokens) / sum(decode seconds) over runs 1-3 (run 0 holds the
 first compile), 2 decimals: the record guard recomputes it.
@@ -22,6 +30,7 @@ import shutil
 import sys
 
 RUNS, TOKENS = 4, 64
+KINDS = {"quick-check": (64, "cmp_p1.py"), "quick": (32, "cmp_q.py")}       # record kind -> (tokens, sealed tool name)
 
 
 def sha(p):
@@ -55,17 +64,31 @@ def decode(runs):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    for a in ("--runs", "--compare", "--chip", "--kit", "--tool", "--cpu-record", "--tag", "--out"):
+    for a in ("--runs", "--compare", "--chip", "--kit", "--tool", "--tag", "--out"):
         ap.add_argument(a, required=True)
+    ap.add_argument("--kind", default="quick-check", choices=sorted(KINDS))
+    ap.add_argument("--cpu-record", help="quick-check: the file's CPU check record")
+    ap.add_argument("--pin", help="quick: the pick's pin.json + header.bin + card.json with their SHA256SUMS")
     a = ap.parse_args(argv)
     if os.path.exists(a.out):
         sys.exit(f"{a.out} exists: a seal is never edited")
+    if (a.kind == "quick") != bool(a.pin) or (a.kind == "quick-check") != bool(a.cpu_record):
+        sys.exit("--kind quick takes --pin; --kind quick-check takes --cpu-record")
+    tokens, tool = KINDS[a.kind]
     runs = checked(a.runs, need=[f"run{i}{x}" for i in range(RUNS) for x in (".json", ".rc", ".stdout", ".stderr")])
     cmp = checked(a.compare, need=["cmp.json", *(f"ref{i}.ids" for i in range(RUNS))])
     chip = checked(a.chip, "SHA256SUMS-chipkit", need=["setup.log", "freeze.txt", "accelerator-type.txt"])
     kit = checked(a.kit, "SHA256SUMS-kit", need=["CODE_SHA", *(f"in/prompt{i}.txt" for i in range(RUNS))])
-    cpu = checked(a.cpu_record, need=["header.bin", "card.json", "record.json"])
-    pin = json.load(open(cpu["record.json"]))["pin"]
+    if a.kind == "quick":
+        cpu = checked(a.pin, need=["header.bin", "card.json", "pin.json"])
+        pin = json.load(open(cpu["pin.json"]))
+    else:
+        cpu = checked(a.cpu_record, need=["header.bin", "card.json", "record.json"])
+        pin = json.load(open(cpu["record.json"]))["pin"]
+    for i in range(RUNS):
+        argv_i = [str(x) for x in json.load(open(runs[f"run{i}.json"])).get("argv") or []]
+        if argv_i[-4:] != ["--max-tokens", str(tokens), "--temperature", "0"]:
+            sys.exit(f"run{i} ran {argv_i}: a {a.kind} run is --max-tokens {tokens} --temperature 0")
     ids = set()
     for i in range(RUNS):
         for line in open(runs[f"run{i}.stderr"], errors="replace"):
@@ -77,8 +100,8 @@ def main(argv=None):
               **{f"ref{i}.ids": cmp[f"ref{i}.ids"] for i in range(RUNS)},
               **{n: chip[n] for n in ("setup.log", "freeze.txt", "accelerator-type.txt")},
               "CODE_SHA": kit["CODE_SHA"], **{f"prompt{i}.txt": kit[f"in/prompt{i}.txt"] for i in range(RUNS)},
-              "cmp_p1.py": a.tool, f"header-{a.tag}.gguf": cpu["header.bin"], "card-api.json": cpu["card.json"],
-              "cpu-record.json": cpu["record.json"]}
+              tool: a.tool, f"header-{a.tag}.gguf": cpu["header.bin"], "card-api.json": cpu["card.json"],
+              **({"pin.json": cpu["pin.json"]} if a.kind == "quick" else {"cpu-record.json": cpu["record.json"]})}
     os.makedirs(a.out)
     for n, p in copies.items():
         shutil.copyfile(p, os.path.join(a.out, n))
@@ -99,17 +122,65 @@ def main(argv=None):
     commit = open(kit["CODE_SHA"]).read().split()[0]
     acc = open(chip["accelerator-type.txt"]).read().strip()
     chip_key = acc.split("-")[0]
-    evidence = {chip_key: {"kind": "quick-check", "sha256sums": src("SHA256SUMS"), "compare": src("cmp.json"),
+    evidence = {chip_key: {"kind": a.kind, "sha256sums": src("SHA256SUMS"), "compare": src("cmp.json"),
                            "file": src(f"file-{a.tag}.sha256"), "plan": src(f"plan-{a.tag}.txt"),
                            "card": src("card-api.json"), "header": src(f"header-{a.tag}.gguf"),
                            "code": {"commit": commit}}}
     s = json.load(open(cmp["cmp.json"]))["summary"]
     status = "passing" if s.get("runs_ok") == RUNS and s.get("other") == 0 else "failing"
+    if a.kind == "quick" and any(x.get("first_diff") == 0 for x in json.load(open(cmp["cmp.json"]))["rows"]):
+        status = "failing"          # the QUICK rule: llama.cpp's first token on every prompt, a near tie there fails
     run_json = [json.load(open(runs[f"run{i}.json"])) for i in range(RUNS)]
-    row_chip = {chip_key: {"status": status, "accelerator": acc, "kernel_path": "exact", "record_kind": "quick-check",
+    row_chip = {chip_key: {"status": status, "accelerator": acc, "kernel_path": "exact", "record_kind": a.kind,
                            "measured": {"decode_tok_s_1_user": decode(run_json)}}}
-    print(json.dumps({"evidence": evidence, "chips": row_chip, "pin": {k: pin[k] for k in (
-        "repo", "revision", "file", "tag", "lfs_sha256", "bytes")}}, indent=1))
+    out = {"evidence": evidence, "chips": row_chip, "pin": {k: pin[k] for k in (
+        "repo", "revision", "file", "tag", "lfs_sha256", "bytes")}}
+    if a.kind == "quick":
+        try:            # the seal stands either way; a row needs its maker and base from the card (gguf_rows rules)
+            out["row"] = quick_row(pin, os.path.join(a.out, f"header-{a.tag}.gguf"),
+                                   os.path.join(a.out, "card-api.json"), row_chip)
+        except (ValueError, SystemExit) as e:
+            out["row_error"] = str(e)
+    print(json.dumps(out, indent=1))
+
+
+def quick_row(pin, header, card, chips):
+    """the gguf[] row of a QUICK seal, from its own header and card only (tools/gguf_rows.py's fields and rules, no
+    cpu_check): arch, block types and expert count read by the engine's reader on the header made sparse to the file's
+    size; maker and base from the card (gguf_rows.upstream); a mixture of experts gets no row"""
+    import re
+    import tempfile
+    sys.path[:0] = [os.path.dirname(os.path.abspath(__file__)), os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                             "..", "src")]
+    import gguf_rows as R
+    import gguf_scan as S
+    from mashbox import gguf as G
+    with tempfile.TemporaryDirectory() as t:
+        p = os.path.join(t, os.path.basename(pin["file"]))
+        with open(p, "wb") as f:
+            f.write(open(header, "rb").read())
+            f.truncate(pin["bytes"])
+        g = G.File(p)
+        types, experts = sorted(g.census()[0]), int(g.get(f"{g.arch}.expert_count") or 0)
+        arch = g.arch
+    if experts:
+        sys.exit(f"{pin['repo']}: {experts} experts: no MoE row from a QUICK run (routed-expert kernel record first)")
+    meta = S.parse(open(header, "rb").read())[0]
+    cd = json.load(open(card)).get("cardData") or {}
+    base = cd.get("base_model")
+    base = base[0] if isinstance(base, list) else base
+    name = (base or meta.get("general.basename") or pin["repo"].split("/")[1]).split("/")[-1]
+    size = meta.get("general.size_label")
+    tot = float(size[:-1]) if isinstance(size, str) and re.fullmatch(r"\d+(\.\d+)?B", size) else None
+    up, maker = R.upstream(pin["repo"], base)
+    return dict(id=R.slug(f"{pin['repo'].split('/')[0]}-{name}-{pin['tag']}"), model=R.slug(name),
+                publisher=pin["repo"].split("/")[0], family=meta.get("general.basename") or name, maker=maker,
+                repo=pin["repo"], revision=pin["revision"], file=pin["file"], tag=pin["tag"], sha256=pin["lfs_sha256"],
+                bytes=pin["bytes"], arch=arch, moe=False, params_b=dict(total=tot, active=None), types=types,
+                license=cd.get("license"),
+                license_link=cd.get("license_link") or f"https://huggingface.co/{pin['repo']}/blob/{pin['revision']}/README.md",
+                base=up, **{"in": "text", "out": "text"}, run=f"mashbox run {pin['repo']}:{pin['tag']}",
+                experimental=False, chips=chips)
 
 
 if __name__ == "__main__":
