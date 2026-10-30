@@ -115,6 +115,33 @@ def test_views_match_models_json():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def _sync_check():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    return sc
+
+
+def test_docs_sidebar_lists_every_live_model():
+    """The docs sidebar's models list (docs/SUMMARY.md between the models markers; the site reads its sidebar from it)
+    is rendered from models.json: every live model links its page, in the README table's order, a new row joins it with
+    render --write and a "coming soon" row does not. The file on disk is that render (test_views_match_models_json
+    fails on a hand edit)."""
+    sc = _sync_check()
+    reg = json.loads((ROOT / "models.json").read_text())
+    summary = (ROOT / "docs" / "SUMMARY.md").read_text()
+    problems = sc.Problems()
+    assert sc.splice(summary, sc.sidebar_block(reg), "docs/SUMMARY.md", problems) == summary and not problems
+    block = summary[summary.index(sc.MARK_START):summary.index(sc.MARK_END)]
+    assert [ln for ln in block.splitlines() if ln.startswith("* ")] == \
+        [f"* [{m['name']}](models/{m['id']}.md)" for m in sc.live(reg)]
+    new = dict(reg["models"][0], id="new-model", name="New Model")
+    soon = dict(reg["models"][0], id="soon-model", name="Soon Model", launch="coming soon")
+    lines = sc.sidebar_block(dict(reg, models=reg["models"] + [new, soon])).splitlines()
+    assert lines[-1] == "* [New Model](models/new-model.md)" and not any("soon-model" in ln for ln in lines)
+
+
 def test_sync_check_catches_typed_drift(tmp_path):
     """The number guard, the prose checks, the link check and the measured-number guard fail on planted drift. A second NUM_RE once shadowed the guard's regex and
     turned it off without a failure; this keeps it on."""
@@ -614,6 +641,63 @@ def test_licence_check_catches_drift(tmp_path):
     sc.check_licences(reg, tmp_path, problems)
     text = " ".join(problems)
     assert "pyproject.toml" in text and f"licenses/{mid}/LICENSE" in text and "docs/x.md:1" in text, text
+
+
+def test_an_upstream_notice_is_pinned_like_its_licence(tmp_path):
+    """An upstream NOTICE (Apache-2.0 section 4d) is checked like its LICENSE: upstream.notice_sha256 is optional; when
+    it is set, licenses/<id>/NOTICE must be that file unchanged and the Hugging Face repo root carries it at the pinned
+    revision; a NOTICE file with no sha256 on its row fails too. The check reads files and never writes one."""
+    import hashlib
+    import shutil
+    sc = _sync_check()
+    reg = json.loads((ROOT / "models.json").read_text())
+    m = next(x for x in reg["models"] if x["upstream"].get("license_sha256") and x["hf_repo"])
+    shutil.copy(ROOT / "LICENSE", tmp_path / "LICENSE")
+    shutil.copy(ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
+    (tmp_path / "licenses" / m["id"]).mkdir(parents=True)
+    shutil.copy(ROOT / "licenses" / m["id"] / "LICENSE", tmp_path / "licenses" / m["id"] / "LICENSE")
+    notice = tmp_path / "licenses" / m["id"] / "NOTICE"
+
+    def problems_of(reg):
+        p = sc.Problems()
+        sc.check_licences(reg, tmp_path, p)
+        return [x for x in p if "NOTICE" in x or "notice_sha256" in x]
+    assert problems_of(reg) == []                                         # no NOTICE, no field: nothing to check
+    notice.write_text("Upstream notice text\n")
+    assert any("notice_sha256 missing" in x for x in problems_of(reg))    # a NOTICE nobody pinned
+    sha = hashlib.sha256(notice.read_bytes()).hexdigest()
+    pinned = json.loads(json.dumps(reg))
+    next(x for x in pinned["models"] if x["id"] == m["id"])["upstream"]["notice_sha256"] = sha
+    assert problems_of(pinned) == []
+    notice.write_text("Upstream notice text, edited\n")
+    assert any(f"licenses/{m['id']}/NOTICE" in x and "never edit it" in x for x in problems_of(pinned))
+    notice.unlink()
+    assert any(f"licenses/{m['id']}/NOTICE missing" in x for x in problems_of(pinned))
+    # online: the HF repo root carries the NOTICE at the pinned revision
+    rev = m["hf_revision"]
+    url = f"https://huggingface.co/{m['hf_repo']}/raw/{rev}/NOTICE"
+
+    class Fetch:   # the repo is public at the pinned head, so the online check reaches its licence files
+        def __init__(self, body):
+            self.pages = {f"https://huggingface.co/api/models/{m['hf_repo']}": json.dumps({"sha": rev, "private": False}),
+                          f"https://huggingface.co/api/models/{m['hf_repo']}/revision/{rev}":
+                              json.dumps({"sha": rev, "siblings": []})}
+            if body is not None:
+                self.pages[url] = body
+
+        def get(self, u):
+            return (200, self.pages[u]) if u in self.pages else (404, "")
+
+    def online(body):
+        p = sc.Problems()
+        sc.check_online(pinned, {}, Fetch(body), p)
+        return [x for x in p if "NOTICE" in x]
+    reach = sc.Problems()
+    sc.check_online(pinned, {}, Fetch(None), reach)
+    assert any("no LICENSE at" in x for x in reach), "the online check never reached the licence files"
+    assert online("Upstream notice text\n") == []
+    assert any("differs from the pinned upstream file" in x for x in online("other\n"))
+    assert any("no NOTICE at" in x for x in online(None))
 
 
 def test_cli_dispatches_only_parsed_commands():

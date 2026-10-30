@@ -4,6 +4,35 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 
 ## 0.1.11
 
+### An upstream NOTICE is pinned and checked like its LICENSE
+
+1. **`tools/hf_github_sync_check.py`:** a row can pin its upstream NOTICE with `upstream.notice_sha256` (optional). When it is set, `licenses/<id>/NOTICE` must be that file unchanged and `check --online` finds it at the Hugging Face repo root at the pinned revision; a NOTICE file with no sha256 on its row fails. The check reads files and never writes one.
+2. **`tests/cpu/test_core.py`:** the NOTICE test, offline and online.
+
+Why: Apache-2.0 section 4(d) carries an upstream NOTICE with the work, and only the LICENSE file was checked.
+
+How existing models keep working: no row sets `notice_sha256` and no `licenses/<id>/NOTICE` exists, so nothing new is checked for them; no licence or notice file changes.
+
+### Each kind names its Hugging Face collection; a row can name its family collection
+
+1. **`tools/hf_github_sync_check.py`:** each `KINDS` entry names the collection its live repos sit in (every `-TPU` kind: "TPU models"; GGUF and rigging: none). A row can name its family collection (`catalog.family_collection`). `check --online` loops over every title: each collection exists once and holds exactly its live repos of our org. The org listing shows at most 4 items of a collection, so each one is read whole before it is compared.
+2. **`models.json` (both copies):** Qwen3.8-27B names its family collection, "Qwen on TPU", which already holds it.
+3. **`tests/cpu/test_org_card.py`:** a new kind's collection is checked with no other rule, the family collection check, and the whole-collection read.
+
+Why: the collection rule knew one title, so a port of any other kind, and every family collection, went unchecked; and a collection with more than 4 items would have read as missing a repo.
+
+How existing models keep working: the TPU ports are checked against "TPU models" as before; a row that names no family collection is in none.
+
+### The docs sidebar lists every model from models.json
+
+1. **`tools/hf_github_sync_check.py`:** `docs/SUMMARY.md` is a rendered view. Its models list, between `<!-- models:start -->` and `<!-- models:end -->`, has one line per live model linking `models/<id>.md`, in the README table's order. `render --write` writes it and `check --offline` (T0) fails on a hand edit.
+2. **`docs/SUMMARY.md`:** the models list is that block. It now includes TRELLIS.2.
+3. **`tests/cpu/test_core.py`:** the sidebar test.
+
+Why: the site reads its docs sidebar from `docs/SUMMARY.md`, and a model row reached it only by hand.
+
+How existing models keep working: the same four pages are linked, in models.json order; nothing else in the sidebar changes.
+
 ### The kernel bundle's matmul takes a layer index; the 0.1.11 bundle adds layer forms and six more types
 
 1. **`ops/bundle.py` (`Bundle.matmul(x, p, layer=None)`, `Bundle.picks_layer`, `Classes.layer_ok`), `ops/__init__.py` (`kernel_picks_layer`, `_kq_planes`):** a `kq_classes` matmul entry with `"layer": true` takes a layer index and the whole stack of a weight's planes (up to 256 layers), and reads that layer's planes inside the call. A stacked weight whose class has a layer form for every row class it uses is held whole and called with `layer=`, and a layer scan keeps such stacks as they are, so XLA no longer copies each layer's planes before every call. A weight whose class has no layer form, or a bundle with none, runs as before: the layer's planes are sliced out first.

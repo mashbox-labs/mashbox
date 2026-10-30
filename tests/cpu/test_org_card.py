@@ -73,7 +73,68 @@ def test_a_new_tpu_port_reaches_the_collection_and_leaves_the_card_as_it_is():
     reg = json.loads(json.dumps(REG))
     m = json.loads(json.dumps(next(x for x in reg["models"] if x["id"] == "qwen3-8-27b")))
     m.update(id="newmodel-9b", name="NewModel-9B", hf_repo=f"{ORG}/NewModel-9B-TPU")
+    m["catalog"].pop("family_collection", None)   # another family: only the TPU collection is under test
     reg["models"].append(m)
     got = SC.collection_problems(reg, collections(sorted(SC.tpu_ports(REG))), "c")
     assert got == [("c", f"'TPU models' lacks {ORG}/NewModel-9B-TPU")], got
     assert SC.overview_problems(reg, new_card(REG), "card") == []   # the overview names no model: nothing to update
+
+
+def test_each_kind_names_its_collection_and_a_new_kind_is_checked(monkeypatch):
+    """KINDS names each kind's standing collection (every "-TPU" kind: "TPU models"); collection_problems loops over the
+    titles, so a port of a new kind that names its own collection is checked there without another rule."""
+    assert {k["collection"] for k in SC.KINDS.values() if k["suffix"] == "-TPU"} == {"TPU models"}
+    assert all("collection" in k for k in SC.KINDS.values())
+    monkeypatch.setitem(SC.KINDS, "new-kind", {"suffix": "-NEW", "label": "New", "collection": "New models"})
+    reg = json.loads(json.dumps(REG))
+    m = json.loads(json.dumps(next(x for x in reg["models"] if x["id"] == "qwen3-8-27b")))
+    m.update(id="newkind-1b", name="NewKind-1B", kind="new-kind", hf_repo=f"{ORG}/NewKind-1B-NEW")
+    m["catalog"].pop("family_collection", None)   # another family
+    reg["models"].append(m)
+    tpu = collections(sorted(SC.tpu_ports(REG)))
+    assert SC.collection_problems(reg, tpu, "c") == [("c", "0 collections titled 'New models' (want 1)")]
+    both = json.dumps(json.loads(tpu) + [{"title": "New models", "items": [{"type": "model", "id": m["hf_repo"]}]}])
+    assert SC.collection_problems(reg, both, "c") == []
+
+
+def test_a_family_collection_named_on_the_row_holds_it():
+    """A row that names its family collection (catalog.family_collection) must be in that collection, and our repos in it
+    must be rows that name it; a row naming none is in no family collection."""
+    named = [m for m in SC.live(REG) if (m.get("catalog") or {}).get("family_collection")]
+    assert named, "no live row names its family collection"
+    ok = collections(sorted(SC.tpu_ports(REG)))
+    assert SC.collection_problems(REG, ok, "c") == []
+    gone = json.dumps([c for c in json.loads(ok) if c["title"] != "Qwen on TPU"]
+                      + [{"title": "Qwen on TPU", "items": [{"type": "model", "id": "Qwen/Qwen3.8-27B"}]}])
+    assert ("c", f"'Qwen on TPU' lacks {ORG}/Qwen3.8-27B-TPU") in SC.collection_problems(REG, gone, "c")
+    extra = json.dumps([c for c in json.loads(ok) if c["title"] != "Qwen on TPU"]
+                       + [{"title": "Qwen on TPU", "items": [{"type": "model", "id": f"{ORG}/Qwen3.8-27B-TPU"},
+                                                             {"type": "model", "id": f"{ORG}/Hy-Nomas-TPU"}]}])
+    assert any("holds" in p and "Hy-Nomas-TPU" in p for _, p in SC.collection_problems(REG, extra, "c"))
+
+
+def test_a_collection_listing_shows_four_items_so_each_is_read_whole():
+    """The org's collection listing (api/collections?owner=) shows at most 4 items of each collection: each matched
+    collection is read whole (api/collections/<slug>) before it is compared, so a fifth port is never reported missing."""
+    reg = json.loads(json.dumps(REG))
+    base = next(x for x in reg["models"] if x["id"] == "qwen3-8-27b")
+    for n in range(4):
+        m = json.loads(json.dumps(base))
+        m.update(id=f"port-{n}", name=f"Port-{n}", hf_repo=f"{ORG}/Port-{n}-TPU")
+        m["catalog"].pop("family_collection", None)
+        reg["models"].append(m)
+    want = sorted(SC.tpu_ports(reg))
+    listing = json.dumps([{"title": "TPU models", "slug": f"{ORG}/tpu-models-1",
+                           "items": [{"type": "model", "id": i} for i in want[:4]]},
+                          {"title": "Qwen on TPU", "slug": f"{ORG}/qwen-on-tpu-1",
+                           "items": [{"type": "model", "id": f"{ORG}/Qwen3.8-27B-TPU"}]}])
+
+    class Whole:
+        def get(self, url):
+            if url == f"https://huggingface.co/api/collections/{ORG}/tpu-models-1":
+                return 200, json.dumps({"items": [{"type": "model", "id": i} for i in want]})
+            if url == f"https://huggingface.co/api/collections/{ORG}/qwen-on-tpu-1":
+                return 200, json.dumps({"items": [{"type": "model", "id": f"{ORG}/Qwen3.8-27B-TPU"}]})
+            return 404, ""
+    assert len(want) > 4 and SC.collection_problems(reg, listing, "c", Whole()) == []
+    assert any("lacks" in p for _, p in SC.collection_problems(reg, listing, "c"))   # the listing alone looks short
