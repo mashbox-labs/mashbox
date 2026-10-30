@@ -300,7 +300,7 @@ def load(a, log=None):
     W, info = A.load(f, c, use_kernels=not a.no_kernels)
     import jax
     # the path each multiplied weight runs on, from the handles load made: Dense16 = native bf16, Raw = the exact
-    # (dequantized) path. Dense32 (an F32 weight held as its values) and the router are resident_f32, counted by load
+    # (dequantized) path. Dense32 (an F32 or F16 weight held as its values) and the router are resident_f32, counted by load
     # itself. W["embed"] is left out: its rows are gathered, not multiplied (a tied head is its own handle, W["head"])
     kinds = (ops.Raw, ops.dense16.Dense16)
     mult = {k: v for k, v in W.items() if k != "embed"}

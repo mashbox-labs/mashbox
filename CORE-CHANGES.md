@@ -2,6 +2,15 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.10
+
+### F16 weights are held as their float16 values
+
+1. **`ops/__init__.py` (`Dense32`, `qmatmul`, `dequant`, `take_rows`), `hf/__init__.py`:** an F16 weight of one (rows, cols) shape (a GGUF F16 tensor or a Hugging Face float16 weight, unstacked or a stack of layers) is held on the device as its float16 values, the same bytes as the file. It is multiplied the way the exact path multiplies it: the same barrier, the same row chunks and the same float32 dot on the same float32 values. The float32 values are no longer rebuilt from pairs of bytes at every call. The weights events count these weights as `resident_f32`, as they count F32 weights held as values, so they leave `reference` bytes.
+2. **Stacks of experts** in F16 keep the handle they had, and F32 and every other type keep theirs.
+
+Why: the exact path rebuilt every F16 weight's float32 values from its bytes at every call, on GGUF files with F16 tensors and on every Hugging Face float16 model. Compatible: outputs are bit for bit the ones before (products with float32 and bfloat16 activations, with and without row chunks, inside a layer scan, dequant and row lookups; `tests/cpu/test_f16_resident.py`), and the device holds the same number of bytes.
+
 ## 0.1.9
 
 ### The kernel bundle reads shape-class keys (format 2); the 0.1.9 bundle adds Q4_0, Q4_1 and Q5_0
