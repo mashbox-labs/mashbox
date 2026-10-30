@@ -3,8 +3,9 @@
 
   cpu_check   "passing" only for a record with verdict cpu-checked (its numbers copied from the record);
   TPU         a row's v6e status is "passing" only from its own chip record (GGUF-REC); a file with no chip run reads
-              "Not tested yet" (status "pending" + not_run_reason), and names the arch x block-type smoke that covers it
-              (same architecture, every quantized type of the file inside the smoke's) with that smoke's own number.
+              "TPU: Not tested yet" (status "pending" + not_run_reason only). A row shows a speed only when measured on
+              that exact file: the arch x block-type smoke that covers it (same architecture, every quantized type of
+              the file inside the smoke's) is kept beside the row in the rows JSON ("smoke"), never on the row or page.
   MoE         never listed until its routed-expert kernel record exists: counted, not written.
 
   python tools/gguf_rows.py RECORDS_DIR [RECORDS_DIR...] --models src/mashbox/models.json --out rows.json
@@ -81,13 +82,14 @@ def row(d, rec, smk):
     up, maker = upstream(pin["repo"], base)
     quants = frozenset(t for t in rec["types"] if t not in UNQ)
     same = c["identical_weights"]
+    # in and out are "text": a row is written only from a gguf_conform record, whose checks are text (tokenizer, greedy)
     g = dict(id=slug(f"{pin['repo'].split('/')[0]}-{name}-{pin['tag'] or rec['tpu_key'].split(' x ')[1]}"),
              model=slug(name), publisher=pin["repo"].split("/")[0], family=meta.get("general.basename") or name,
              maker=maker, repo=pin["repo"], revision=pin["revision"], file=pin["file"],
              tag=pin["tag"], sha256=rec["sha256"], bytes=rec["bytes"], arch=rec["arch"], moe=rec["moe"],
              params_b=dict(total=tot, active=None), types=rec["types"], license=cd.get("license"),
              license_link=cd.get("license_link") or f"https://huggingface.co/{pin['repo']}/blob/{pin['revision']}/README.md",
-             base=up, run=f"mashbox run {pin['repo']}:{pin['tag']}", experimental=False)
+             base=up, **{"in": "text", "out": "text"}, run=f"mashbox run {pin['repo']}:{pin['tag']}", experimental=False)
     g["cpu_check"] = dict(status="passing" if rec["verdict"] == "cpu-checked" else "failing",
                           reference=f"llama.cpp {rec['versions']['llama_cpp'][:7]} CPU",
                           identical_weights=dict(nmse=float(f"{same['nmse']:.2g}"), top1=f"{same['top1_agree']}/{same['positions']}"),
@@ -100,21 +102,16 @@ def row(d, rec, smk):
     if own:
         g["chips"] = {"v6e": dict(status="passing", accelerator=own[0][3], from_row=own[0][2])}
     else:
-        g["chips"] = {"v6e": dict(status="pending", not_run_reason="no chip run of this file",
-                                  **({"smoke": dict(row=cover[0][2], accelerator=cover[0][3], decode_tok_s_1_user=cover[0][4])}
-                                     if cover else {}))}
+        # a pending chip holds its status and not_run_reason only: a smoke measured on another row never goes on this one
+        g["chips"] = {"v6e": dict(status="pending", not_run_reason="no chip run of this file")}
+    smoke = dict(row=cover[0][2], accelerator=cover[0][3], decode_tok_s_1_user=cover[0][4]) if cover and not own else None
     ok = g["cpu_check"]
     line = (f"Runs, checked against llama.cpp on CPU: same weights NMSE {ok['identical_weights']['nmse']}, top-1 "
             f"{ok['identical_weights']['top1']}; llama.cpp's own path top-1 {ok['block_path']['top1']}; greedy "
             f"{ok['greedy']['prompts']} x {ok['greedy']['tokens']} tokens: {ok['greedy']['full']} identical, "
             f"{ok['greedy']['near_tie']} near tie")
-    if own:
-        tpu = f"TPU {own[0][3]}: passing (its own chip record)"
-    elif cover:
-        tpu = f"TPU {cover[0][3]}: {cover[0][4]} tok/s, 1 user, measured on {cover[0][2]} (same architecture and block types)"
-    else:
-        tpu = "TPU: Not tested yet"
-    return g, line, tpu
+    tpu = f"TPU {own[0][3]}: passing (its own chip record)" if own else "TPU: Not tested yet"
+    return g, line, tpu, smoke
 
 
 def main(argv=None):
@@ -140,12 +137,13 @@ def main(argv=None):
                                    why=rec.get("blocked_by") or (rec.get("c_cpu") or {}).get("error")))
             else:
                 try:
-                    g, line, tpu = row(d, rec, smk)
+                    g, line, tpu, smoke = row(d, rec, smk)
                 except ValueError as e:
                     failed.append(dict(record=os.path.basename(d), verdict=rec["verdict"], why=str(e)))
                     continue
-                rows.append(dict(row=g, text=[line, tpu], record=os.path.basename(d), code=rec["code"]["sha256"],
-                                 seconds_total=rec["seconds_total"]))
+                # the covering smoke stays here, off the row and the page (a row shows a speed only from its own file)
+                rows.append(dict(row=g, text=[line, tpu], smoke=smoke, record=os.path.basename(d),
+                                 code=rec["code"]["sha256"], seconds_total=rec["seconds_total"]))
     json.dump(dict(rows=rows, moe_held=held, not_listed=failed, seal_problems=bad), open(a.out, "w"), indent=1,
               ensure_ascii=False)
     print(json.dumps(dict(rows=len(rows), moe_held=len(held), not_listed=len(failed), seal_problems=len(bad))))

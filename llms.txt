@@ -26,7 +26,7 @@ GGUF files that run in our engine:
 - Qwen3-0.6B Q8_0 by Qwen (qwen3, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3-0.6B-GGUF:Q8_0`
 - Qwen3.5-0.8B Q8_0 by Qwen (qwen35, GGUF from ggml-org): Tested, runs on TPU v6e-1. `mashbox run ggml-org/Qwen3.5-0.8B-GGUF:Q8_0`
 - Qwen3.5-4B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-4B-GGUF:Q4_K_M`
-- [Full catalog](https://mashbox.gg/docs/supported-models): 17 entries: 2 MASHBOX ports, 1 MASHBOX model and 14 GGUF files of 12 models.
+- [Full catalog](https://mashbox.gg/docs/supported-models): 26 entries: 2 MASHBOX ports, 1 MASHBOX model and 23 GGUF files of 18 models.
 <!-- models:end -->
 
 ## Optional
