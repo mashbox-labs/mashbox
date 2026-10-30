@@ -24,10 +24,8 @@ MASHBOX builds:
 GGUF files that run in our engine:
 - Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from 0bserverx): Quick check, runs on one chip of a TPU v6e-4. `mashbox run 0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF:Q4_K_M`
 - Falcon3-1B-Instruct Q8_0 by Technology Innovation Institute (llama, GGUF from bartowski): Quick check, runs on one chip of a TPU v6e-4. `mashbox run bartowski/Falcon3-1B-Instruct-GGUF:Q8_0`
-- granite-3.3-2b-instruct Q4_K_M by IBM (granite, GGUF from bartowski): Checked on CPU. `mashbox run bartowski/ibm-granite_granite-3.3-2b-instruct-GGUF:Q4_K_M`
 - Llama-3.2-1B-Instruct Q4_K_M by Meta (llama, GGUF from bartowski): Quick check, runs on one chip of a TPU v6e-4. `mashbox run bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M`
 - Llama-3.2-3B-Instruct IQ4_XS by Meta (llama, GGUF from bartowski): Quick check, runs on one chip of a TPU v6e-4. `mashbox run bartowski/Llama-3.2-3B-Instruct-GGUF:IQ4_XS`
-- Mistral-7B-Instruct-v0.3 Q3_K_M by Mistral AI (llama, GGUF from bartowski): Checked on CPU. `mashbox run bartowski/Mistral-7B-Instruct-v0.3-GGUF:Q3_K_M`
 - Qwen2.5-0.5B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Quick check, runs on one chip of a TPU v6e-4. `mashbox run bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M`
 - Qwen2.5-1.5B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Quick check, runs on one chip of a TPU v6e-4. `mashbox run bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M`
 - Qwen2.5-1.5B-Instruct Q5_K_M by Qwen (qwen2, GGUF from bartowski): Quick check, runs on one chip of a TPU v6e-4. `mashbox run bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q5_K_M`
@@ -57,7 +55,7 @@ GGUF files that run in our engine:
 - Qwen3.5-4B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on one chip of a TPU v6e-4. `mashbox run unsloth/Qwen3.5-4B-GGUF:Q4_K_M`
 - Qwen3.5-9B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on one chip of a TPU v6e-4. `mashbox run unsloth/Qwen3.5-9B-GGUF:Q4_K_M`
 - Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on one chip of a TPU v6e-4. `mashbox run unsloth/Qwen3.8-27B-GGUF:Q4_K_M`
-- [Full catalog](https://mashbox.gg/docs/supported-models): 39 entries: 3 MASHBOX ports, 1 MASHBOX model and 35 GGUF files of 21 models.
+- [Full catalog](https://mashbox.gg/docs/supported-models): 37 entries: 3 MASHBOX ports, 1 MASHBOX model and 33 GGUF files of 20 models.
 
 Listed, not in mashbox run:
 - Audio2Face-3D v3.0 by NVIDIA: Speech audio to face motion for skin, tongue, jaw and eyes. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/Audio2Face-3D-v3.0-TPU. How to use: https://huggingface.co/mashbox-labs/Audio2Face-3D-v3.0-TPU#load

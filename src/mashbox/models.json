@@ -7,7 +7,7 @@
   "hf": {
     "org": "mashbox-labs"
   },
-  "version": "0.1.11",
+  "version": "0.1.12",
   "license": "Apache-2.0",
   "company_line": "MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.",
   "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]\"",
@@ -1107,7 +1107,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 322.01,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1147,7 +1151,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 205.07,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
         }
       }
     },
@@ -1186,7 +1194,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 419.38,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1230,7 +1242,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 143.49,
+            "steady_decode_tok_s_1_user": 147.9,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -1265,30 +1277,6 @@
       "out": "text",
       "run": "mashbox run bartowski/Falcon3-1B-Instruct-GGUF:Q8_0",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 1.3e-12,
-          "top1": "144/144"
-        },
-        "block_path": {
-          "top1": "143/144",
-          "kl": 0.00098
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 4,
-          "near_tie": 0,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
@@ -1297,7 +1285,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 578.3,
+            "steady_decode_tok_s_1_user": 579.24,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -1333,100 +1321,17 @@
       "out": "text",
       "run": "mashbox run bartowski/Llama-3.2-3B-Instruct-GGUF:IQ4_XS",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 3e-12,
-          "top1": "133/133"
-        },
-        "block_path": {
-          "top1": "128/133",
-          "kl": 0.0015
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 4,
-          "near_tie": 0,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
-        }
-      }
-    },
-    {
-      "id": "bartowski-mistral-7b-instruct-v0-3-gguf-q3-k-m",
-      "model": "mistral-7b-instruct-v0-3-gguf",
-      "publisher": "bartowski",
-      "family": "Mistral-7B-Instruct-v0.3-GGUF",
-      "maker": "Mistral AI",
-      "repo": "bartowski/Mistral-7B-Instruct-v0.3-GGUF",
-      "revision": "61fd4167fff3ab01ee1cfe0da183fa27a944db48",
-      "file": "Mistral-7B-Instruct-v0.3-Q3_K_M.gguf",
-      "tag": "Q3_K_M",
-      "sha256": "145b11df092f04bbecb9fd99e83d1f3d8a6d1e53805682bfba1fe314f306e1d5",
-      "bytes": 3522941152,
-      "arch": "llama",
-      "moe": false,
-      "params_b": {
-        "total": null,
-        "active": null
-      },
-      "types": [
-        "F32",
-        "Q3_K",
-        "Q4_K",
-        "Q5_K",
-        "Q6_K"
-      ],
-      "license": "apache-2.0",
-      "license_link": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/blob/61fd4167fff3ab01ee1cfe0da183fa27a944db48/README.md",
-      "base": "mistralai/Mistral-7B-Instruct-v0.3",
-      "in": "text",
-      "out": "text",
-      "run": "mashbox run bartowski/Mistral-7B-Instruct-v0.3-GGUF:Q3_K_M",
-      "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 4.4e-12,
-          "top1": "150/150"
-        },
-        "block_path": {
-          "top1": "143/150",
-          "kl": 0.0021
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
-      "chips": {
-        "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 250.5,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1460,102 +1365,17 @@
       "out": "text",
       "run": "mashbox run bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q5_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 1.2e-11,
-          "top1": "131/131"
-        },
-        "block_path": {
-          "top1": "129/131",
-          "kl": 0.02
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 4,
-          "near_tie": 0,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 7,
-          "explained": 1
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
-        }
-      }
-    },
-    {
-      "id": "bartowski-granite-3-3-2b-instruct-q4-k-m",
-      "model": "granite-3-3-2b-instruct",
-      "publisher": "bartowski",
-      "family": "granite-3.3",
-      "maker": "IBM",
-      "repo": "bartowski/ibm-granite_granite-3.3-2b-instruct-GGUF",
-      "revision": "4e06dce39d4c5fcf65ca1cc69b92962e411d38e1",
-      "file": "ibm-granite_granite-3.3-2b-instruct-Q4_K_M.gguf",
-      "tag": "Q4_K_M",
-      "sha256": "555b91485955bc96eb445b57dd4bbf8809aa7d8cce7c313f4f8bc5b2340896b4",
-      "bytes": 1545303616,
-      "arch": "granite",
-      "moe": false,
-      "params_b": {
-        "total": 2.0,
-        "active": null
-      },
-      "types": [
-        "F32",
-        "Q4_K",
-        "Q6_K"
-      ],
-      "license": "apache-2.0",
-      "license_link": "https://huggingface.co/bartowski/ibm-granite_granite-3.3-2b-instruct-GGUF/blob/4e06dce39d4c5fcf65ca1cc69b92962e411d38e1/README.md",
-      "base": "ibm-granite/granite-3.3-2b-instruct",
-      "in": "text",
-      "out": "text",
-      "run": "mashbox run bartowski/ibm-granite_granite-3.3-2b-instruct-GGUF:Q4_K_M",
-      "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 3.3e-12,
-          "top1": "145/145"
-        },
-        "block_path": {
-          "top1": "144/145",
-          "kl": 0.0033
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 4,
-          "near_tie": 0,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
-      "chips": {
-        "v6e": {
-          "status": "failing",
-          "accelerator": "v6e-4",
-          "chip_count": 1,
-          "kernel_path": "bundle",
           "record_kind": "quick",
-          "reason": "divergence"
+          "measured": {
+            "steady_decode_tok_s_1_user": 196.63,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1589,37 +1409,17 @@
       "out": "text",
       "run": "mashbox run ibm-granite/granite-3.3-2b-instruct-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 3.1e-12,
-          "top1": "145/145"
-        },
-        "block_path": {
-          "top1": "144/145",
-          "kl": 0.0036
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 197.56,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1654,37 +1454,17 @@
       "out": "text",
       "run": "mashbox run unsloth/Qwen3-1.7B-GGUF:Q4_0",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 6.6e-12,
-          "top1": "131/131"
-        },
-        "block_path": {
-          "top1": "124/131",
-          "kl": 0.0019
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 2,
-          "near_tie": 2,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 7,
-          "explained": 1
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 216.5,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1720,37 +1500,17 @@
       "out": "text",
       "run": "mashbox run unsloth/gemma-3-1b-it-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 2.4e-07,
-          "top1": "142/142"
-        },
-        "block_path": {
-          "top1": "138/142",
-          "kl": 0.014
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 389.7,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1784,37 +1544,17 @@
       "out": "text",
       "run": "mashbox run LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 8e-12,
-          "top1": "141/141"
-        },
-        "block_path": {
-          "top1": "138/141",
-          "kl": 0.0048
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 4,
-          "near_tie": 0,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 256.27,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
         }
       }
     },
@@ -1850,37 +1590,17 @@
       "out": "text",
       "run": "mashbox run Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 2.6e-11,
-          "top1": "131/131"
-        },
-        "block_path": {
-          "top1": "126/131",
-          "kl": 0.0044
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 7,
-          "explained": 1
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 323.92,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1914,37 +1634,17 @@
       "out": "text",
       "run": "mashbox run bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 4.2e-12,
-          "top1": "133/133"
-        },
-        "block_path": {
-          "top1": "130/133",
-          "kl": 0.002
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 403.0,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1978,37 +1678,17 @@
       "out": "text",
       "run": "mashbox run Qwen/Qwen2.5-1.5B-Instruct-GGUF:q4_k_m",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 1.2e-11,
-          "top1": "131/131"
-        },
-        "block_path": {
-          "top1": "125/131",
-          "kl": 0.18
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 7,
-          "explained": 1
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 205.7,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
         }
       }
     },
@@ -2042,30 +1722,6 @@
       "out": "text",
       "run": "mashbox run Qwen/Qwen3-4B-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 1.7e-11,
-          "top1": "131/131"
-        },
-        "block_path": {
-          "top1": "129/131",
-          "kl": 0.013
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 4,
-          "near_tie": 0,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 7,
-          "explained": 1
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
@@ -2074,7 +1730,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 89.68,
+            "steady_decode_tok_s_1_user": 142.36,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -2110,37 +1766,17 @@
       "out": "text",
       "run": "mashbox run bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 1.1e-11,
-          "top1": "131/131"
-        },
-        "block_path": {
-          "top1": "124/131",
-          "kl": 0.0048
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 7,
-          "explained": 1
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 101.55,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
         }
       }
     },
@@ -2176,37 +1812,17 @@
       "out": "text",
       "run": "mashbox run unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 2e-12,
-          "top1": "135/135"
-        },
-        "block_path": {
-          "top1": "134/135",
-          "kl": 0.0029
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 87.84,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2240,37 +1856,17 @@
       "out": "text",
       "run": "mashbox run Qwen/Qwen3-14B-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 3.3e-12,
-          "top1": "131/131"
-        },
-        "block_path": {
-          "top1": "130/131",
-          "kl": 0.0016
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 4,
-          "near_tie": 0,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 7,
-          "explained": 1
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 45.67,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2304,37 +1900,17 @@
       "out": "text",
       "run": "mashbox run Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF:q4_k_m",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 2.1e-12,
-          "top1": "131/131"
-        },
-        "block_path": {
-          "top1": "124/131",
-          "kl": 0.13
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 3,
-          "near_tie": 1,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 7,
-          "explained": 1
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 205.38,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2369,37 +1945,17 @@
       "out": "text",
       "run": "mashbox run lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M",
       "experimental": false,
-      "cpu_check": {
-        "status": "passing",
-        "reference": "llama.cpp a37cc46 CPU",
-        "identical_weights": {
-          "nmse": 1.5e-12,
-          "top1": "135/135"
-        },
-        "block_path": {
-          "top1": "134/135",
-          "kl": 0.0044
-        },
-        "greedy": {
-          "prompts": 4,
-          "tokens": 16,
-          "full": 4,
-          "near_tie": 0,
-          "other": 0
-        },
-        "tokenizer": {
-          "texts": 8,
-          "equal": 8,
-          "explained": 0
-        }
-      },
       "chips": {
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 87.31,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2445,7 +2001,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 27.45,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2485,7 +2045,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 27.21,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
         }
       }
     },
@@ -2525,7 +2089,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 142.2,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
         }
       }
     },
@@ -2571,7 +2139,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 27.51,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2617,7 +2189,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 27.33,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2660,8 +2236,8 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 30.36,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 30.65,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -2706,8 +2282,8 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 28.17,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+            "steady_decode_tok_s_1_user": 28.25,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
       }
@@ -2748,7 +2324,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 27.2,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2788,7 +2368,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 27.2,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2829,7 +2413,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 87.37,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2873,7 +2461,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 27.13,
+            "steady_decode_tok_s_1_user": 27.25,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
@@ -2917,7 +2505,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 12.43,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -2961,7 +2553,11 @@
           "accelerator": "v6e-4",
           "chip_count": 1,
           "kernel_path": "bundle",
-          "record_kind": "quick"
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 11.42,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
         }
       }
     }
@@ -3097,9 +2693,9 @@
   "engine_kernels": [
     {
       "for": "gguf",
-      "file": "mashbox_engine_kernels-0.1.11-py3-none-any.whl",
-      "url": "https://github.com/mashbox-labs/mashbox/releases/download/v0.1.11/mashbox_engine_kernels-0.1.11-py3-none-any.whl",
-      "sha256": "70de57d262e2e04e2a41d258eaddc30c511b852b4070c4413048d1baab2f53ec",
+      "file": "mashbox_engine_kernels-0.1.12-py3-none-any.whl",
+      "url": "https://github.com/mashbox-labs/mashbox/releases/download/v0.1.12/mashbox_engine_kernels-0.1.12-py3-none-any.whl",
+      "sha256": "cd46db5e3e46d8f6ee2c546477f07541a045d0bfab926b5c6c8be11dca210d62",
       "jax": "0.11.2",
       "libtpu": "0.0.48.*",
       "chips": [
