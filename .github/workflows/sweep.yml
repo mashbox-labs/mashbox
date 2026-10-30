@@ -1,0 +1,65 @@
+name: Sweep
+# The slow checks that never block a pull request (CI.md "The sweep"): every T1 leg of every area, with the tests marked
+# timing (wall-clock bars such as E33) that PR CI deselects. Nightly, by hand, and on every release tag. A red sweep is
+# fixed forward on main; it holds the release it was started for.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: sweep-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  pick:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Every T1 area
+        id: select
+        run: python3 tools/ci_select.py --all --github-output
+
+  t1:
+    needs: pick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.pick.outputs.matrix) }}
+    name: sweep (${{ matrix.area }} ${{ matrix.shard }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install (CPU torch, no CUDA wheels)
+        env:
+          EXTRA: ${{ matrix.extra }}
+        run: |
+          python3 -m pip install -q uv==0.13.6
+          uv pip install --system -q torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install --system -q -e ".[dev]" $EXTRA
+      - name: CPU tests of ${{ matrix.area }} ${{ matrix.shard }}, timing tests included
+        env:
+          AREA: ${{ matrix.area }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          args=$(python3 tools/ci_select.py --args-of "$AREA" --shard "$SHARD")
+          python3 -m pytest $args -p no:cacheprovider -m "$AREA and not t0 and not quarantine" --durations=15 -rs \
+            -o faulthandler_timeout=900 -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/t1.xml"
+      - name: Seconds per test file (for tools/ci_select.py SECONDS)
+        if: always()
+        run: python3 tools/ci_select.py --file-seconds "$RUNNER_TEMP/t1.xml" | tee -a "$GITHUB_STEP_SUMMARY"

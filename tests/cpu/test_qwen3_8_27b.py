@@ -52,19 +52,40 @@ OPEN = {("continuous_batching_checks.py", "C6"): "batch-invariant decode not bui
                                                   "near tie)"}
 
 
+# Gates that pass or fail on wall-clock time, so on box speed: the sweep runs them, PR CI deselects them (CI.md).
+# The "merge": false latency gate: B's first token comes before A ends and B's p95 first-token time stays under double.
+# Its other condition (no compile in the measured runs) is the serve-time compile gates' class; those stay in PR CI.
+TIMING = {("engine_batch_checks.py", "E33")}
+
+
+class _Gates(dict):
+    """script -> its gates, the script run once on first use (the scripts read only the tiny model, not each other's
+    output), so a CI part that holds one script's tests runs that script alone (ci_part below)"""
+    def __init__(self, wd):
+        super().__init__()
+        self.wd = wd
+
+    def __missing__(self, s):
+        p = subprocess.run([sys.executable, str(CPU / s), str(self.wd)], capture_output=True, text=True, timeout=3600)
+        lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
+        R = json.loads(lines[-1]) if lines else {}
+        g = R.get("gates") or {k[:-5]: v for k, v in R.items() if k.endswith("_pass")}
+        self[s] = dict(gates=g, result=R, tail=p.stdout[-2000:] + p.stderr[-2000:])
+        return self[s]
+
+
 @pytest.fixture(scope="module")
 def gates(tiny_wd):
     wd, r = tiny_wd
     if not (wd / "tiny-bf16.bshj").exists():
         pytest.fail("qwen3_8_27b_checks.py did not write the tiny model: " + r.stdout[-1000:] + r.stderr[-1000:])
-    out = {}
-    for s in SCRIPTS:
-        p = subprocess.run([sys.executable, str(CPU / s), str(wd)], capture_output=True, text=True, timeout=3600)
-        lines = [x for x in p.stdout.splitlines() if x.startswith("{")]
-        R = json.loads(lines[-1]) if lines else {}
-        g = R.get("gates") or {k[:-5]: v for k, v in R.items() if k.endswith("_pass")}
-        out[s] = dict(gates=g, result=R, tail=p.stdout[-2000:] + p.stderr[-2000:])
-    return out
+    return _Gates(wd)
+
+
+def ci_part(item):
+    """the CI part group of a test (tests/conftest.py --ci-part): its script, so one part runs each script once"""
+    cs = getattr(item, "callspec", None)
+    return cs.params.get("script", "") if cs else ""
 
 
 @pytest.mark.parametrize("script", SCRIPTS)
@@ -74,7 +95,8 @@ def test_gate_list_is_complete(gates, script):
 
 
 @pytest.mark.parametrize("script,gate", [
-    pytest.param(s, g, marks=[pytest.mark.xfail(strict=True, reason=OPEN[(s, g)])] if (s, g) in OPEN else [])
+    pytest.param(s, g, marks=([pytest.mark.xfail(strict=True, reason=OPEN[(s, g)])] if (s, g) in OPEN else [])
+                 + ([pytest.mark.timing] if (s, g) in TIMING else []))
     for s in SCRIPTS for g in GATES[s]])
 def test_gate(gates, script, gate):
     r = gates[script]

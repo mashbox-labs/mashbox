@@ -35,3 +35,18 @@ def test_status_and_fingerprint_rules(tmp_path):
         def test_a(contract): contract("k/pass").record([1, 2, 4])
     """)
     assert r3["k/pass"]["fingerprint"] != r["k/pass"]["fingerprint"]
+
+
+def test_each_case_has_its_own_digest(tmp_path):
+    """case_sha256 = {node id: sha256 of the values that case recorded}; a case added to an id leaves the digests of
+    the cases already there unchanged and moves the id fingerprint"""
+    one = _run(tmp_path, """
+        def test_a(contract): contract("k/x").record([1, 2])
+    """)["k/x"]
+    two = _run(tmp_path, """
+        def test_a(contract): contract("k/x").record([1, 2])
+        def test_b(contract): contract("k/x").record([3])
+    """)["k/x"]
+    assert set(one["case_sha256"]) == {"test_x.py::test_a"} and two["cases"] == 2
+    assert two["case_sha256"]["test_x.py::test_a"] == one["case_sha256"]["test_x.py::test_a"]
+    assert two["fingerprint"] != one["fingerprint"]

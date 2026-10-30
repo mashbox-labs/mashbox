@@ -6,7 +6,8 @@ before its first run). At the end of the session the results are written to MASH
 build/contracts.json):
 
   {"schema": 1, "code_commit": <git HEAD or null>, "dirty": <bool or null>,
-   "contracts": {id: {"status": "PASS" | "FAIL" | "SKIP", "fingerprint": sha256 hex, "cases": n}}}
+   "contracts": {id: {"status": "PASS" | "FAIL" | "SKIP", "fingerprint": sha256 hex, "cases": n,
+                      "case_sha256": {node id: sha256 hex of the values that case recorded}}}}
 
 status: FAIL when any case of the id failed (setup, call or teardown), else SKIP when any case skipped, else PASS.
 A known failure (pytest.mark.xfail(strict=True) naming the gap) is FAIL here too: pytest stays green for unrelated
@@ -16,6 +17,8 @@ recorded, in call order. It must be the same on every machine, so only exact out
 ids, greedy ids), bytes, str, bool, and float arrays only with exact=True where the bar is bit for bit (dequantized
 values). A float output under a tolerance is never recorded: its bar decides PASS or FAIL, and float summation order
 differs between CPU types. The same code gives the same fingerprint; an exact output that moves changes it.
+case_sha256: each case's own digest, so a row's record can tell a case whose outputs moved (or that is gone) from a
+case added since the record (tools/contracts.py row_state).
 """
 import hashlib
 import json
@@ -100,7 +103,8 @@ def results():
         h = hashlib.sha256()
         for n in sorted(cases):
             h.update(n.encode() + b"\0" + cases[n].digest())
-        out[cid] = {"status": status, "fingerprint": h.hexdigest(), "cases": len(cases)}
+        out[cid] = {"status": status, "fingerprint": h.hexdigest(), "cases": len(cases),
+                    "case_sha256": {n: cases[n].hexdigest() for n in sorted(cases)}}
     return out
 
 
