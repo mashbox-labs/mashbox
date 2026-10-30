@@ -49,6 +49,7 @@ def test_probe_is_the_engines_answer(tmp_path):
     assert ok["supported"] is True and ok["stage"] == "ok"
     w = gguf.GGUFWriter(str(tmp_path / "x.gguf"), arch="nosucharch")
     w.add_block_count(1)
+    w.add_embedding_length(8)
     import numpy as np
     w.add_tensor("token_embd.weight", np.zeros((4, 8), np.float32))
     w.write_header_to_file()

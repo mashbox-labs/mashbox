@@ -19,9 +19,32 @@ CHIPS = (("TPU v5e (v5litepod-1)", 16.909e9), ("TPU v6e (v6e-1)", 33.546e9), ("T
 HEADROOM = 0.92        # share of the limit the estimate may use: XLA's own scratch (activations, logits) comes on top
 
 
+def model_keys_missing(get):
+    """get: a file's metadata lookup (File.get, or a parsed header's dict.get) -> the keys llama.cpp needs to load a
+    model that the file lacks: general.architecture, then <arch>.block_count and <arch>.embedding_length ([] for a
+    model file). llama.cpp a37cc46 loads no model without them ("unknown model
+    architecture: ''", "key not found in model"). GGUF files written for other tools (stable-diffusion.cpp video files,
+    ComfyUI-GGUF files) hold weights under the original model's tensor names and carry none of them."""
+    arch = get("general.architecture")
+    if not arch:
+        return ["general.architecture"]
+    return [k for k in (f"{arch}.block_count", f"{arch}.embedding_length") if get(k) is None]
+
+
+def _not_a_model(f, path):
+    missing = model_keys_missing(f.get)
+    if missing:
+        comfy = any(k.startswith("comfy.") for k in f.keys())
+        raise GGUFError(f"mashbox: {path.rsplit('/', 1)[-1]} is not a llama.cpp model file: it has no "
+                        f"{' or '.join(missing)} key" + (" (its comfy.* keys are ComfyUI-GGUF's)" if comfy else "")
+                        + ". llama.cpp does not run it either. GGUF files made for other tools (stable-diffusion.cpp, "
+                        "ComfyUI-GGUF) run in those tools; for this engine pick a llama.cpp GGUF of the model")
+
+
 def open_model(path, act=None, repo=None, quant=None):
     """-> (File, arch module, Config). Raises GGUFError with the person-facing message for anything that cannot run."""
     f = File(path)
+    _not_a_model(f, path)
     arch = f.arch
     A = archs.module(arch, path, repo, quant)
     bad = f.unreadable()
