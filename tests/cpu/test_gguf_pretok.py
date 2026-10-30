@@ -1,7 +1,7 @@
 """GGUF pre-tokenizer names and vocabulary layouts (gguf/pretok.py): our token ids vs llama.cpp's llama-tokenize on tiny
 vocabulary-only files (tests/fixtures/gguf/pretok.json says how they were made). No chip, no network, no secrets.
 
-Cases: deepseek-r1-qwen, falcon3, dbrx, tekken, smollm, refact, exaone (the names pretok.py adds) and qwen2, llama-bpe (the names
+Cases: deepseek-r1-qwen, falcon3, dbrx, tekken, smollm, refact, exaone, minicpm5, granite-docling (the names pretok.py adds) and qwen2, llama-bpe (the names
 tokenizer.py had), with the control tokens after the normal tokens, before them, or among them. Bar: every text gives
 the same ids as llama.cpp.
 """

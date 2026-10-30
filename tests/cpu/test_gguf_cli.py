@@ -75,6 +75,39 @@ def test_unsupported_arch_is_one_line_with_the_llama_cpp_command(arch, words, tm
     assert "Traceback" not in "\n".join(err)
 
 
+def _draft(path, d2t=True):
+    """a draft head for speculative decoding laid out as HauhauCS's ...-FastMTP-32K.gguf (header read 2026-10-30): qwen35,
+    block_count 3 with 1 MTP block, its embedding_length (the real file has 5120), tensors only in that block, a reduced
+    output vocabulary and, with d2t, the int32 draft-to-target vocabulary map"""
+    w = gguf.GGUFWriter(str(path), "qwen35")
+    w.add_block_count(3)
+    w.add_embedding_length(8)
+    w.add_uint32("qwen35.nextn_predict_layers", 1)
+    w.add_tensor("token_embd.weight", np.zeros((16, 8), np.float32))
+    w.add_tensor("output.weight", np.zeros((4, 8), np.float32))
+    w.add_tensor("blk.2.attn_norm.weight", np.zeros(8, np.float32))
+    w.add_tensor("blk.2.nextn.eh_proj.weight", np.zeros((8, 16), np.float32))
+    if d2t:
+        w.add_tensor("d2t", np.arange(4, dtype=np.int32))
+    w.write_header_to_file()
+    w.write_kv_data_to_file()
+    w.write_tensors_to_file()
+    w.close()
+    return str(path)
+
+
+@pytest.mark.parametrize("d2t", [True, False])
+def test_a_draft_head_is_one_line_that_says_so(d2t, tmp_path, capsys):
+    """A draft file (MTP block only, d2t map or not) is not a whole model: one line naming it, exit 2, and no claim that
+    llama.cpp runs it (llama.cpp a37cc46 refuses HauhauCS's FastMTP-32K file too: 'output.weight' has wrong shape)"""
+    p = _draft(tmp_path / "m-FastMTP-32K.gguf", d2t)
+    assert cli.main(["run", p]) == 2
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and "draft for speculative decoding, not a whole model" in err[0], err
+    assert "block 2 of 3" in err[0] and ("4-token draft vocabulary (d2t)" in err[0]) == d2t, err
+    assert "llama-server" not in err[0] and "Traceback" not in "\n".join(err), err
+
+
 @pytest.mark.parametrize("flags", [["--mtp", "2"], ["--mtp-file", "draft.gguf"]])
 def test_speculation_flags_on_a_gguf_file_are_one_line(flags, tmp_path, capsys):
     p = FXT.build("qwen35-f32", str(tmp_path))

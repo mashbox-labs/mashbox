@@ -47,6 +47,15 @@ def open_model(path, act=None, repo=None, quant=None):
     _not_a_model(f, path)
     arch = f.arch
     A = archs.module(arch, path, repo, quant)
+    draft = draft_only(f)
+    if draft:
+        blocks, n, vocab = draft
+        name = path.rsplit("/", 1)[-1]
+        raise GGUFError(f"mashbox: {name} is a draft for speculative decoding, not a whole model: it holds "
+                        f"block{'s' if len(blocks) > 1 else ''} {', '.join(map(str, blocks))} of {n}"
+                        + (f" and a {vocab:,}-token draft vocabulary (d2t)" if vocab else "")
+                        + ". llama.cpp does not run it as a model either. Run one of the repo's model files"
+                        + (f": mashbox run {repo}:<quant>" if repo else ""))
     bad = f.unreadable()
     if bad:
         names = sorted({t.type_name for t in bad})
@@ -55,6 +64,21 @@ def open_model(path, act=None, repo=None, quant=None):
     kw = {} if act is None else dict(act=act)
     c = A.Config(f, **kw)
     return f, A, c
+
+
+def draft_only(f):
+    """-> (blocks it holds, block count, draft vocabulary or None) when the file is a draft head for speculative decoding
+    and not a whole model, else None. A draft carries llama.cpp's d2t draft-to-target vocabulary map, or holds tensors
+    only in its MTP (nextn) blocks. llama.cpp a37cc46 does not load such a file as a model either (HauhauCS's
+    Qwen3.8-27B FastMTP-32K file: 'output.weight' has wrong shape)."""
+    n = f.get(f"{f.arch}.block_count")
+    nextn = f.get(f"{f.arch}.nextn_predict_layers") or 0
+    blocks = sorted({int(k.split(".")[1]) for k in f.tensors if k.startswith("blk.") and k.split(".")[1].isdigit()})
+    d2t = f.tensors.get("d2t")
+    whole = [b for b in blocks if n is None or b < int(n) - int(nextn)]
+    if d2t is None and (whole or not nextn or not blocks):
+        return None
+    return blocks, n, int(d2t.shape[0]) if d2t is not None else None
 
 
 def plan(f, c, kernel_types=None, chip=None, mem=None):
