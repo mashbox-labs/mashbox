@@ -50,6 +50,9 @@ import urllib.error
 import urllib.request
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
+# E33 passes or fails on wall-clock time: with MASHBOX_SKIP_TIMING=1 (PR CI) its runs are skipped and it reports no gate;
+# the sweep runs it (tests/cpu/test_qwen3_8_27b.py TIMING, CI.md "The sweep")
+SKIP_TIMING = os.environ.get("MASHBOX_SKIP_TIMING") == "1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
 
@@ -313,48 +316,51 @@ class WarmChat(IdChat):
         return P[1][:5]
 
 
-e33 = E(S=2, CTX=1024)
-CLI.warm(e33, WarmChat())       # what `mashbox run` does before it reports ready: B joins A at whatever window A has
-srv, port = server(e33)         # reached (box speed decides it), and every such window was warmed, as in a real start
+if SKIP_TIMING:
+    R["E33_skipped"] = "MASHBOX_SKIP_TIMING=1: the wall-clock gate runs in the sweep"
+else:
+    e33 = E(S=2, CTX=1024)
+    CLI.warm(e33, WarmChat())       # what `mashbox run` does before it reports ready: B joins A at whatever window A has
+    srv, port = server(e33)         # reached (box speed decides it), and every such window was warmed, as in a real start
 
 
-def run33(flag):
-    """A (max_tokens = room, merge false when flag) then B 0.3 s later. -> (A, B) post results, compiles during the run."""
-    out, c0 = [None, None], compiles()
-    body_a = dict(prompt=prompt(P[0]), max_tokens=1024 - len(P[0]))
-    if flag:
-        body_a["merge"] = False
-    ta = threading.Thread(target=lambda: out.__setitem__(0, post(port, body_a, stream=True)))
-    ta.start()
-    time.sleep(0.3)
-    out[1] = post(port, dict(prompt=prompt(P[1]), max_tokens=8), stream=True)
-    ta.join()
-    return out, compiles() - c0
+    def run33(flag):
+        """A (max_tokens = room, merge false when flag) then B 0.3 s later. -> (A, B) post results, compiles during the run."""
+        out, c0 = [None, None], compiles()
+        body_a = dict(prompt=prompt(P[0]), max_tokens=1024 - len(P[0]))
+        if flag:
+            body_a["merge"] = False
+        ta = threading.Thread(target=lambda: out.__setitem__(0, post(port, body_a, stream=True)))
+        ta.start()
+        time.sleep(0.3)
+        out[1] = post(port, dict(prompt=prompt(P[1]), max_tokens=8), stream=True)
+        ta.join()
+        return out, compiles() - c0
 
 
-ttft = lambda o: o[1][2][1] - o[1][2][0]
-first_before_end = lambda o: o[1][2][1] < o[0][2][2]
-# the earlier form of the check, kept as information: one warm-up run, then one run with the field and one without
-w0, c_w0 = run33(False)
-(f1, c_f1), (n1, c_n1) = run33(True), run33(False)
-R["E33_first_pair_info"] = dict(b_ttft_with=round(ttft(f1), 3), b_ttft_without=round(ttft(n1), 3),
-                                compiles_warmup=c_w0, compiles_with=c_f1, compiles_without=c_n1)
-# warm until a whole with/without pair compiles nothing (at most 4 more pairs), then 4 runs per arm in ABBA order
-warm_pairs, quiet = 0, c_f1 + c_n1 == 0
-while not quiet and warm_pairs < 4:
-    (_, c_a), (_, c_b) = run33(True), run33(False)
-    warm_pairs, quiet = warm_pairs + 1, c_a + c_b == 0
-runs = {True: [], False: []}
-for flag in (True, False, False, True, True, False, False, True):
-    o, c_ = run33(flag)
-    runs[flag].append((ttft(o), first_before_end(o), c_))
-p95 = lambda xs: float(np.percentile([x[0] for x in xs], 95))
-R["E33"] = dict(b_ttft_with=[round(x[0], 3) for x in runs[True]], b_ttft_without=[round(x[0], 3) for x in runs[False]],
-                p95_with=round(p95(runs[True]), 3), p95_without=round(p95(runs[False]), 3),
-                b_first_before_a_end=all(x[1] for x in runs[True]), warm_pairs=warm_pairs, quiet_before_measure=quiet,
-                compiles_measured=sum(x[2] for x in runs[True] + runs[False]))
-G["E33"] = (R["E33"]["b_first_before_a_end"] and R["E33"]["compiles_measured"] == 0
-            and p95(runs[True]) <= 2 * max(p95(runs[False]), 0.05))
+    ttft = lambda o: o[1][2][1] - o[1][2][0]
+    first_before_end = lambda o: o[1][2][1] < o[0][2][2]
+    # the earlier form of the check, kept as information: one warm-up run, then one run with the field and one without
+    w0, c_w0 = run33(False)
+    (f1, c_f1), (n1, c_n1) = run33(True), run33(False)
+    R["E33_first_pair_info"] = dict(b_ttft_with=round(ttft(f1), 3), b_ttft_without=round(ttft(n1), 3),
+                                    compiles_warmup=c_w0, compiles_with=c_f1, compiles_without=c_n1)
+    # warm until a whole with/without pair compiles nothing (at most 4 more pairs), then 4 runs per arm in ABBA order
+    warm_pairs, quiet = 0, c_f1 + c_n1 == 0
+    while not quiet and warm_pairs < 4:
+        (_, c_a), (_, c_b) = run33(True), run33(False)
+        warm_pairs, quiet = warm_pairs + 1, c_a + c_b == 0
+    runs = {True: [], False: []}
+    for flag in (True, False, False, True, True, False, False, True):
+        o, c_ = run33(flag)
+        runs[flag].append((ttft(o), first_before_end(o), c_))
+    p95 = lambda xs: float(np.percentile([x[0] for x in xs], 95))
+    R["E33"] = dict(b_ttft_with=[round(x[0], 3) for x in runs[True]], b_ttft_without=[round(x[0], 3) for x in runs[False]],
+                    p95_with=round(p95(runs[True]), 3), p95_without=round(p95(runs[False]), 3),
+                    b_first_before_a_end=all(x[1] for x in runs[True]), warm_pairs=warm_pairs, quiet_before_measure=quiet,
+                    compiles_measured=sum(x[2] for x in runs[True] + runs[False]))
+    G["E33"] = (R["E33"]["b_first_before_a_end"] and R["E33"]["compiles_measured"] == 0
+                and p95(runs[True]) <= 2 * max(p95(runs[False]), 0.05))
 
 # E7 waiting limits: A submits 300, B 5 while every slot is busy: B gets 0 rejections, A is refused after
 # 32 with 429; the legacy streaming route answers 429 itself (before any 200); hung-up waiters free their count within 0.5 s

@@ -52,12 +52,17 @@ jobs:
           python3 -m pip install -q uv==0.13.6
           uv pip install --system -q torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install --system -q -e ".[dev]" $EXTRA
+      - name: The pinned Qwen3.8-27B tokenizer files (the official client tests read them)
+        if: matrix.area == 'api_clients'
+        run: |
+          python3 tools/ci_select.py --upstream-files "$RUNNER_TEMP/qwen-upstream"
+          echo "MASHBOX_QWEN_UPSTREAM=$RUNNER_TEMP/qwen-upstream" >> "$GITHUB_ENV"
       - name: CPU tests of ${{ matrix.area }} ${{ matrix.shard }}, timing tests included
         env:
           AREA: ${{ matrix.area }}
           SHARD: ${{ matrix.shard }}
         run: |
-          args=$(python3 tools/ci_select.py --args-of "$AREA" --shard "$SHARD")
+          args=$(python3 tools/ci_select.py --args-of "$AREA" --shard "$SHARD" --whole-files)
           python3 -m pytest $args -p no:cacheprovider -m "$AREA and not t0 and not quarantine" --durations=15 -rs \
             -o faulthandler_timeout=900 -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/t1.xml"
       - name: Seconds per test file (for tools/ci_select.py SECONDS)

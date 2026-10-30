@@ -52,10 +52,19 @@ OPEN = {("continuous_batching_checks.py", "C6"): "batch-invariant decode not bui
                                                   "near tie)"}
 
 
-# Gates that pass or fail on wall-clock time, so on box speed: the sweep runs them, PR CI deselects them (CI.md).
+# Gates that pass or fail on wall-clock time, so on box speed: the sweep runs them, PR CI deselects them and skips their
+# runs (MASHBOX_SKIP_TIMING, below; CI.md).
 # The "merge": false latency gate: B's first token comes before A ends and B's p95 first-token time stays under double.
 # Its other condition (no compile in the measured runs) is the serve-time compile gates' class; those stay in PR CI.
 TIMING = {("engine_batch_checks.py", "E33")}
+# PR CI sets MASHBOX_SKIP_TIMING=1: the scripts then skip the runs of their TIMING gates too (deselecting the test alone
+# left the wall-clock gate's warm pairs and 8 runs inside the script's time); the sweep runs without it and checks every gate.
+SKIP_TIMING = os.environ.get("MASHBOX_SKIP_TIMING") == "1"
+
+
+def expected_gates(script):
+    """the gates a script reports in this run: GATES[script], less its TIMING gates under MASHBOX_SKIP_TIMING=1"""
+    return [g for g in GATES[script] if not (SKIP_TIMING and (script, g) in TIMING)]
 
 
 class _Gates(dict):
@@ -90,8 +99,9 @@ def ci_part(item):
 
 @pytest.mark.parametrize("script", SCRIPTS)
 def test_gate_list_is_complete(gates, script):
-    """Every gate a script reports has a test below, and every listed gate is reported (none silently dropped)."""
-    assert sorted(gates[script]["gates"]) == sorted(GATES[script]), gates[script]["tail"]
+    """Every gate a script reports has a test below, and every gate it should report in this run is reported: all of
+    GATES, or all but the TIMING gates under MASHBOX_SKIP_TIMING=1 (PR CI), so none is silently dropped."""
+    assert sorted(gates[script]["gates"]) == sorted(expected_gates(script)), gates[script]["tail"]
 
 
 @pytest.mark.parametrize("script,gate", [
