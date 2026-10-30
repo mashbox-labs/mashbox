@@ -93,7 +93,7 @@ def test_draft_stops_before_the_gguf_file_is_fetched_or_loaded(monkeypatch, tmp_
     """a GGUF run with --speculation draft and no --draft-model stops (exit 2, one line) before the file is resolved or
     downloaded, and load_gguf itself stops before the file is opened"""
     from mashbox import gguf as G
-    from mashbox.gguf import resolve as GR
+    from mashbox.gguf import pick as GR
     seen = []
     logs = []
     monkeypatch.setattr(cli, "log", lambda s: logs.append(s))

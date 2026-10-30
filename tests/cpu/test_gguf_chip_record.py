@@ -14,7 +14,7 @@ pytest.importorskip("jax")
 
 from mashbox import cli  # noqa: E402
 from mashbox.gguf import archs  # noqa: E402
-from mashbox.gguf import resolve as GR  # noqa: E402
+from mashbox.gguf import pick as GR  # noqa: E402
 from mashbox.gguf.reader import GGUFError  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

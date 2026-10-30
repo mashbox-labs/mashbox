@@ -12,7 +12,7 @@ import gguf  # noqa: E402  hard dependency (pyproject gguf==0.19.0): a missing i
 pytest.importorskip("jax")
 
 from mashbox import cli  # noqa: E402
-from mashbox.gguf import resolve as GR, tokenizer as GT, File  # noqa: E402
+from mashbox.gguf import pick as GR, tokenizer as GT, File  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location("gguf_fixtures", os.path.join(ROOT, "tools", "gguf_fixtures", "fixtures.py"))

@@ -18,8 +18,8 @@ def test_gguf_is_an_area_with_its_files_and_tests():
               "tools/gguf_check.py", "tools/gguf_fixtures/fixtures.py", "tests/fixtures/gguf/qwen3-f32.json"):
         assert CS.select([p], areas) == ["gguf"], p
     assert "gguf" in CS.select(["src/mashbox/cli.py"], areas)            # core changes run the GGUF tests too
-    # cli.main imports gguf/__init__.py and gguf/resolve.py on every run, for every model: a change to them runs every area
-    for p in ("src/mashbox/gguf/__init__.py", "src/mashbox/gguf/resolve.py"):
+    # cli.main imports gguf/__init__.py and gguf/pick.py on every run, for every model: a change to them runs every area
+    for p in ("src/mashbox/gguf/__init__.py", "src/mashbox/gguf/pick.py"):
         assert set(CS.select([p], areas)) >= {"gguf", "hy_nomas", "qwen3_8_27b"}, p
     assert "gguf" in CS.select(["src/mashbox/runtime/engine.py"], areas)
 

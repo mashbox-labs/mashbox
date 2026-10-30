@@ -851,7 +851,7 @@ def _load_gguf_for_record(a, f, A, c, t0):
 
 
 def file_identity(path):
-    """-> (sha256 of a weights file, how it was found): gguf.file_identity (the file pick's, gguf/resolve.py)"""
+    """-> (sha256 of a weights file, how it was found): gguf.file_identity (the file pick's, gguf/pick.py)"""
     from . import gguf as G
     return G.file_identity(path)
 

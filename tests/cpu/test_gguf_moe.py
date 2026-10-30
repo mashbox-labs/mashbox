@@ -42,11 +42,11 @@ def fixture(name, tmp):
 
 def listed(monkeypatch, arch, path):
     """The catalog releases the MoE file at `path` the one way it does (gguf.archs.held): this tree's registry plus a
-    passing chip row of `arch` whose sha256 is that file's identity (gguf.resolve.identity), so the row proves this file
+    passing chip row of `arch` whose sha256 is that file's identity (gguf.pick.identity), so the row proves this file
     and no other file of the architecture. A test that inspects a tiny MoE fixture as runnable calls this first; without
     it inspect, run and serve refuse the file in the unsupported-architecture line (tests/cpu/test_gguf_moe_hold.py)."""
     from mashbox import catalog
-    from mashbox.gguf.resolve import identity
+    from mashbox.gguf.pick import identity
     reg = json.loads(json.dumps(catalog.registry()))
     reg["gguf"] = list(reg.get("gguf") or []) + [dict(id=f"test-{arch}-moe", arch=arch, moe=True, sha256=identity(path)[0],
                                                       chips={"v6e": {"status": "passing", "accelerator": "v6e-1"}})]

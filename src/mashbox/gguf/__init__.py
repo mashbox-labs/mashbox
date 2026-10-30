@@ -12,11 +12,11 @@ sampling defaults and every tensor's block type, and hands the blocks to mashbox
 """
 from .reader import File, GGUFError, llama_cpp_command, reader_version  # noqa: F401
 from . import archs
-# the file pick (llama.cpp's -hf rule, gguf/resolve.py): only the one resolver (mashbox/resolve.py) and this package
-# import it; other code uses these names. fetch_file(model, log, download) = the pick, downloaded (resolve.resolve)
-from .resolve import (NoGGUF, file_identity, identity, is_gguf_request, pick, shards, split_info,  # noqa: F401
-                      split_repo_tag)
-from .resolve import resolve as fetch_file  # noqa: F401
+# the file pick (llama.cpp's -hf rule, gguf/pick.py; `pick` here is that module): only the one resolver and this
+# package import it; other code uses these names. fetch_file(model, log, download) = the pick, downloaded
+from .pick import (NoGGUF, file_identity, identity, is_gguf_request, shards, split_info,  # noqa: F401
+                   split_repo_tag)
+from .pick import resolve as fetch_file  # noqa: F401
 
 # device memory per chip: v5e and v6e = JAX memory_stats()["bytes_limit"] MEASURED on our chips (16,909,334,528 and
 # 33,546,041,344); v5p = the 95 GB HBM of Google's spec (not measured here)
