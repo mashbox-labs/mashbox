@@ -1,6 +1,7 @@
 """Test markers for CI (CI.md), added from file names so no test file has to move.
 
 - `<area>`: the model id with underscores when the file name carries it (test_hy_nomas_port.py -> hy_nomas), else `core`.
+- `gguf_rows`: also on the tests of the rows leg (tools/ci_select.py rows_files), which a gguf-rows change runs.
 - `t0`: tests/cpu/test_core.py, the static and registry checks that need nothing installed but pytest.
 Markers a test can set itself:
 - `slow`: over 10 s on the CI runner; the docstring says why.
@@ -28,7 +29,45 @@ _spec = importlib.util.spec_from_file_location("ci_select", pathlib.Path(__file_
 CS = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(CS)
 AREAS = CS.model_areas()
+ROWS_FILES = {str(pathlib.Path(__file__).resolve().parents[1] / f) for f in CS.area_files(CS.ROWS, AREAS)}
 STANDARDS = pathlib.Path(__file__).resolve().parent / "standards"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def pytest_addoption(parser):
+    parser.addoption("--ci-part", action="append", default=[], metavar="FILE@K/M",
+                     help="run only part K of M of FILE's tests (tools/ci_select.py SPLIT, --args-of); repeatable")
+
+
+def _ci_parts(config, items):
+    """--ci-part FILE@K/M keeps part K of FILE's tests: its groups (module ci_part(item), else each test alone), in
+    collection order, dealt round robin to parts 1..M. Other files are untouched. A part with no test is an error."""
+    want = {}
+    for spec in config.getoption("ci_part") or []:
+        f, _, km = spec.rpartition("@")
+        k, m = (int(x) for x in km.split("/"))
+        path = (ROOT / f).resolve()
+        if not 1 <= k <= m or want.get(path, (m, set()))[0] != m:
+            raise pytest.UsageError(f"--ci-part {spec}: want FILE@K/M with 1 <= K <= M, one M per file")
+        want.setdefault(path, (m, set()))[1].add(k)
+    if not want:
+        return
+    groups, keep, drop = {}, set(), []
+    for it in items:
+        if it.path.resolve() in want:
+            fn = getattr(it.module, "ci_part", None)
+            key = fn(it) if fn else it.nodeid
+            g = groups.setdefault(it.path.resolve(), {})
+            g.setdefault(key, len(g))
+            m, ks = want[it.path.resolve()]
+            (keep.add(it) if g[key] % m + 1 in ks else drop.append(it))
+    for path, (m, ks) in want.items():
+        got = {g % m + 1 for g in groups.get(path, {}).values()}
+        if not ks <= got:
+            raise pytest.UsageError(f"--ci-part: {path.name} has no test in part(s) {sorted(ks - got)} of {m}")
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = [it for it in items if it not in drop]
 
 
 def pytest_configure(config):
@@ -36,7 +75,9 @@ def pytest_configure(config):
               "slow: over 10 s on the CI runner, reason in the docstring", "cpu_only: skipped on the chip tier",
               "quarantine(reason, until): flaky; deselected in CI until fixed or deleted",
               "standards: the CPU standards tier (tools/standards_cpu.sh); a skip inside it is a FAIL",
-              "standards_slow: standards rows run only when speculation code changes"] + [f"{a}: tests of model {a}" for a in AREAS]:
+              "standards_slow: standards rows run only when speculation code changes",
+              "timing: passes or fails on wall-clock time (box speed); the sweep runs it, PR CI deselects it (CI.md)"] + [f"{a}: tests of model {a}" for a in AREAS] \
+            + [f"{CS.ROWS}: tests outside gguf that read the gguf rows of models.json (tools/ci_select.py rows_files)"]:
         config.addinivalue_line("markers", m)
 
 
@@ -46,6 +87,8 @@ def pytest_collection_modifyitems(config, items):
     on_chip = os.environ.get("JAX_PLATFORMS", "").split(",")[0] == "tpu"
     for it in items:
         it.add_marker(CS.test_area(it.path.name, AREAS))
+        if str(it.path) in ROWS_FILES:
+            it.add_marker(CS.ROWS)
         if it.path.name in CS.T0_TESTS:
             it.add_marker("t0")
         q = it.get_closest_marker("quarantine")
@@ -53,6 +96,7 @@ def pytest_collection_modifyitems(config, items):
             raise pytest.UsageError(f"{it.nodeid}: quarantine ended ({q.kwargs.get('until')!r}); fix or delete the test (CI.md)")
         if on_chip and it.get_closest_marker("cpu_only") is not None:
             it.add_marker(pytest.mark.skip(reason="cpu_only"))
+    _ci_parts(config, items)
     only = os.environ.get("STD_FAMILY") or None
     if only is not None:            # one standards process per family, and one (-) for the tests that take no family
         drop = [it for it in items if it.get_closest_marker("standards") is not None

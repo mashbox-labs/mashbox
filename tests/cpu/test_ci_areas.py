@@ -29,11 +29,18 @@ def test_t1_shards_run_every_file_of_an_area_exactly_once():
     wastes runner time, so the shards of every area partition its test files, and the matrix has one row per shard."""
     areas = CS.model_areas()
     for area in list(areas) + ["core"]:
-        files = CS.area_files(area, areas)
+        files, units = CS.area_files(area, areas), CS.units(CS.area_files(area, areas))
         n = CS.SHARDS.get(area, 1)
-        dealt = [f for i in range(1, n + 1) for f in CS.shard_files(files, f"{i}/{n}")]
-        assert sorted(dealt) == sorted(files) and len(dealt) == len(set(dealt)), area
-        assert all(CS.shard_files(files, f"{i}/{n}") for i in range(1, n + 1)), f"{area}: an empty shard"
+        sec = {u: CS.unit_seconds(u, CS.SECONDS) for u in units}
+        dealt = [u for i in range(1, n + 1) for u in CS.shard_files(units, f"{i}/{n}", sec)]
+        assert sorted(dealt) == sorted(units) and len(dealt) == len(set(dealt)), area
+        assert all(CS.shard_files(units, f"{i}/{n}", sec) for i in range(1, n + 1)), f"{area}: an empty shard"
+        args = [a for i in range(1, n + 1) for a in CS.shard_args(files, f"{i}/{n}")]
+        assert sorted({a for a in args if not a.startswith("--")}) == sorted(files), area       # every file in a job
+        for f, m in CS.SPLIT.items():                    # every part of a split file in exactly one job
+            if f in files:
+                got = sorted(a.split("=", 1)[1] for a in args if a.startswith(f"--ci-part={f}@"))
+                assert got == [f"{f}@{k}/{m}" for k in range(1, m + 1)] or (got == [] and args.count(f) == 1), (f, got)
         rows = [r for r in CS.jobs([area]) if r["area"] == area]
         assert [r["shard"] for r in rows] == [f"{i}/{n}" for i in range(1, n + 1)], area
     every = {p.relative_to(ROOT).as_posix() for p in (ROOT / "tests" / "cpu").rglob("test_*.py") if p.name not in CS.T0_TESTS}
@@ -41,16 +48,17 @@ def test_t1_shards_run_every_file_of_an_area_exactly_once():
 
 
 def test_t1_shards_split_an_area_by_time():
-    """The shards of an area share its time (SECONDS, per test file): the slowest shard is at most its longest file or
-    a quarter over an even split, whichever is more, and stays under 60% of the T1 timeout, so no job runs close to it."""
+    """The shards of an area share its time (SECONDS, per test file, a SPLIT file's parts each a share): the slowest
+    shard is at most its longest unit or a quarter over an even split, whichever is more, and stays under 60% of the
+    T1 timeout, so no job runs close to it."""
     import re
     t1 = (ROOT / ".github" / "workflows" / "ci.yml").read_text().split("\n  t1:\n", 1)[1]
     limit = 60 * int(re.search(r"^    timeout-minutes: (\d+)$", t1, re.M).group(1))
     areas = CS.model_areas()
     for area, n in CS.SHARDS.items():
-        files = CS.area_files(area, areas)
-        sec = {f: CS.SECONDS.get(f, CS.SECONDS_DEFAULT) for f in files}
-        loads = [sum(sec[f] for f in CS.shard_files(files, f"{i}/{n}")) for i in range(1, n + 1)]
+        files = CS.units(CS.area_files(area, areas))
+        sec = {u: CS.unit_seconds(u, CS.SECONDS) for u in files}
+        loads = [sum(sec[f] for f in CS.shard_files(files, f"{i}/{n}", sec)) for i in range(1, n + 1)]
         bound = max(max(sec.values()), 1.25 * sum(loads) / n)
         assert max(loads) <= bound, f"{area}: shard seconds {loads}, bound {bound:.0f}"
         assert max(loads) <= 0.6 * limit, f"{area}: slowest shard {max(loads)} s of a {limit} s T1 timeout"
@@ -128,3 +136,190 @@ def test_t1_gate_is_green_only_when_every_picked_leg_passed(tmp_path):
     assert gate("failure", "", "skipped") != 0               # red T0 (no pick)
     assert gate("success", "", "skipped") != 0               # T0 passed but gave no pick
     assert gate("cancelled", "true", "cancelled") != 0
+
+
+def _registry_commits(tmp_path):
+    """A git repo holding models.json at five commits: the real registry, then a change to one gguf[] row, to one
+    models[] row, to both, and to a top-level field only."""
+    import copy
+    import json
+    import subprocess
+    reg = json.loads((ROOT / "models.json").read_text())
+    assert reg["gguf"] and reg["models"]
+
+    def edit(rows=False, model=False, top=False):
+        r = copy.deepcopy(reg)
+        if rows:
+            r["gguf"][0]["bytes"] = r["gguf"][0]["bytes"] + 1
+            r["gguf"].append(dict(r["gguf"][0], id=r["gguf"][0]["id"] + "-x"))
+        if model:
+            r["models"][0]["summary"] = r["models"][0]["summary"] + " x"
+        if top:
+            r["version"] = r["version"] + ".1"
+        return r
+
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    subprocess.run(git[:3] + ["init", "-q"], check=True)
+    shas = {}
+    for name, r in (("base", reg), ("rows", edit(rows=True)), ("model", edit(model=True)),
+                    ("both", edit(rows=True, model=True)), ("top", edit(top=True))):
+        (tmp_path / "models.json").write_text(json.dumps(r, indent=1) + "\n")
+        subprocess.run(git + ["add", "models.json"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", name], check=True)
+        shas[name] = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    return shas
+
+
+def test_a_change_to_gguf_rows_only_runs_the_gguf_tests_and_the_tests_that_read_the_rows(tmp_path, monkeypatch):
+    """A diff that changes only gguf[] rows (models.json and its package copy, plus the views rendered from them and the
+    docs-lint allow counts) runs T0, the gguf area and one leg of the tests that read the rows (the catalog, model lists,
+    docs and card sync, the speculation records); it does not wait on every model's tests. Any other change keeps the
+    pick it has: a models[] row runs that model and core, a code file runs every area. Before this rule a gguf-row change
+    ran T0 alone (the rows were read as top-level fields) and the allow counts under tools/ ran every area."""
+    areas = CS.model_areas()
+    shas = _registry_commits(tmp_path)
+    (tmp_path / "tests").symlink_to(ROOT / "tests")                # the rules read the real tests; models.json is the repo's
+    monkeypatch.setattr(CS, "ROOT", tmp_path)
+    every = sorted(set(areas) | {"core"})
+    reg = ["models.json", "src/mashbox/models.json"]
+    views = ["README.md", "docs/supported-models.md", "docs/gguf.md", "llms.txt", "tools/docs_lint_allow.txt"]
+    pick = lambda files, head: CS.select(files, areas, shas["base"], shas[head])
+    assert pick(reg, "rows") == ["gguf", "gguf_rows"]
+    assert pick(reg + views, "rows") == ["gguf", "gguf_rows"]
+    model = CS.model_areas()[0]                                    # models[0] is the row the "model" commit changed
+    assert pick(reg, "model") == sorted({model, "core"})           # a models[] row: that model plus core, as before
+    assert pick(reg + views, "model") == sorted({model, "core"})
+    both = pick(reg, "both")                                       # core runs every rows reader, so no extra leg
+    assert set(both) == {model, "core", "gguf"}, both
+    assert pick(reg, "top") == []                                  # top-level fields feed the views only (T0)
+    for code in ("src/mashbox/cli.py", "src/mashbox/catalog.py", "tools/gguf_rows.py", "tools/hf_github_sync_check.py",
+                 "tests/cpu/test_catalog.py", "some/new/kind/of/file.cfg"):
+        assert pick(reg + views + [code], "rows") == every, code   # rows plus any other file: the full pick
+    assert CS.select(["tools/docs_lint_allow.txt"], areas) == []    # only T0's docs lint reads the allow counts
+
+
+def test_the_rows_leg_holds_every_test_that_reads_the_gguf_rows():
+    """The gguf_rows leg runs the T1 tests outside the gguf area that read gguf[] rows: directly, through the catalog,
+    model lists, card and docs sync, the GGUF row tool, the speculation records, the `models` command or a helper that
+    does; each file once, none from the gguf area (its own leg runs those), and fast enough to finish before the gguf
+    leg does on a CI runner."""
+    import re
+    areas = CS.model_areas()
+    files = CS.area_files("gguf_rows", areas)
+    assert files == sorted(set(files), key=lambda f: (f.rsplit("/", 1)[-1], f))
+    t1 = {p.relative_to(ROOT).as_posix() for p in (ROOT / "tests" / "cpu").rglob("test_*.py") if p.name not in CS.T0_TESTS}
+    assert set(files) <= t1
+    assert not [f for f in files if CS.test_area(f.rsplit("/", 1)[-1], areas) == "gguf"]
+    for f in ("test_catalog.py", "test_model_lists.py", "test_docs_supported_models.py", "test_org_card.py",
+              "test_ci_areas.py", "test_port_plan.py", "test_spec_page.py", "test_drafter_gate.py", "test_drafters.py"):
+        if (ROOT / "tests" / "cpu" / f).exists():                  # a held file is not in the public tree
+            assert f"tests/cpu/{f}" in files, f
+    for f in t1 - set(files):                                      # a file that reads the rows directly is in the leg
+        if CS.test_area(f.rsplit("/", 1)[-1], areas) != "gguf":
+            assert not re.search(r"""\[["']gguf["']\]|get\(["']gguf["']""", (ROOT / f).read_text()), f
+    assert sum(CS.SECONDS.get(f, CS.SECONDS_DEFAULT) for f in files) <= 300
+    assert CS.jobs(["gguf", "gguf_rows"]) == [{"area": "gguf", "extra": "", "shard": "1/1"},
+                                              {"area": "gguf_rows", "extra": "", "shard": "1/1"}]
+
+
+def test_conftest_marks_the_rows_leg_tests():
+    """The leg runs `pytest <its files> -m "gguf_rows and not t0 ..."`, so conftest gives each of its tests the
+    gguf_rows mark (beside the area mark) and no other test; a file outside the leg collects nothing under that mark."""
+    import subprocess
+    import sys
+    run = lambda f: subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+                                    "-m", "gguf_rows and not t0", f], cwd=ROOT, capture_output=True, text=True)
+    r = run("tests/cpu/test_ci_areas.py")
+    assert r.returncode == 0 and "test_the_rows_leg_holds_every_test_that_reads_the_gguf_rows" in r.stdout, r.stdout[-800:]
+    r = run("tests/cpu/test_sampler.py")
+    assert "test_" not in r.stdout.split("deselected")[0].split("no tests ran")[0] or r.returncode == 5, r.stdout[-800:]
+
+
+def _collect(*args):
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *args],
+                       cwd=ROOT, capture_output=True, text=True, timeout=300)
+    return r.returncode, sorted(x for x in r.stdout.splitlines() if "::" in x)
+
+
+def test_a_split_file_runs_each_test_in_exactly_one_part_and_each_script_in_one_part():
+    """tests/conftest.py --ci-part: the parts of a SPLIT file partition its tests (none dropped, none twice), the
+    qwen3_8_27b tests of one gate script stay in one part (the script runs once per part that needs it), and a part
+    that holds no test, or a bad K/M, is a usage error (exit 4), never a green job that ran nothing."""
+    f = "tests/cpu/test_qwen3_8_27b.py"
+    m = CS.SPLIT[f]
+    rc, every = _collect(f)
+    assert rc == 0 and every
+    parts = []
+    for k in range(1, m + 1):
+        rc, got = _collect(f, f"--ci-part={f}@{k}/{m}")
+        assert rc == 0 and got, k
+        parts.append(got)
+    dealt = [t for p in parts for t in p]
+    assert sorted(dealt) == every and len(dealt) == len(set(dealt))
+    for s in ("prefix_cache_checks.py", "continuous_batching_checks.py", "engine_batch_checks.py", "determinism_checks.py"):
+        assert sum(any(s in t for t in p) for p in parts) == 1, s
+    assert _collect(f, f"--ci-part={f}@{m + 1}/{m}")[0] == 4
+    assert _collect(f, f"--ci-part={f}@{m + 3}/{m + 3}")[0] == 4      # more parts than the file has groups
+
+
+def test_timing_tests_run_in_the_sweep_and_never_gate_a_pull_request():
+    """A test that passes or fails on wall-clock time (marker timing) flakes with box speed, so PR CI's T1 deselects it
+    and the sweep (nightly, by hand, every v* tag) runs it with every other T1 test; both run the same shards
+    (--args-of). The one timing test is the "merge": false latency gate; a new one is added here on purpose."""
+    import re
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    sw = (ROOT / ".github" / "workflows" / "sweep.yml").read_text()
+    pr_m = re.findall(r'-m "([^"]+)"', ci.split("\n  t1:\n", 1)[1].split("\n  t1-gate:", 1)[0])
+    sw_m = re.findall(r'-m "([^"]+)"', sw)
+    assert pr_m == ["$AREA and not t0 and not quarantine and not timing"], pr_m
+    assert sw_m == ["$AREA and not t0 and not quarantine"], sw_m
+    assert "--args-of" in ci and "--args-of" in sw and "--all --github-output" in sw
+    assert "schedule:" in sw and "workflow_dispatch:" in sw and 'tags: ["v*"]' in sw and "pull_request" not in sw
+    marked = sorted(q.relative_to(ROOT).as_posix() for q in (ROOT / "tests").rglob("*.py")
+                    if "mark.timing" in q.read_text() and q.name != "test_ci_areas.py")
+    assert marked == ["tests/cpu/test_qwen3_8_27b.py"], marked
+    rc, timing = _collect(marked[0], "-m", "timing")
+    assert rc == 0 and timing == ["tests/cpu/test_qwen3_8_27b.py::test_gate[engine_batch_checks.py-E33]"], timing
+
+
+def test_file_seconds_sums_a_junit_file_per_test_file(tmp_path):
+    """--file-seconds turns a leg's junit file into SECONDS lines (longest first) so the shard table is refreshed from
+    real CI times; a missing file says so instead of failing the step."""
+    x = tmp_path / "t1.xml"
+    x.write_text('<testsuites><testsuite><testcase file="tests/cpu/test_a.py" time="1.5"/>'
+                 '<testcase file="tests/cpu/test_a.py" time="2"/><testcase file="tests/cpu/test_b.py" time="9"/>'
+                 '</testsuite></testsuites>')
+    assert CS.file_seconds(str(x)).splitlines() == ['    "tests/cpu/test_b.py": 9,', '    "tests/cpu/test_a.py": 4,']
+    assert "did not run" in CS.file_seconds(str(tmp_path / "none.xml"))
+
+
+def test_contracts_job_runs_every_contract_on_every_pull_request():
+    """The contracts job runs tests/contracts on every pull request with no area pick (no `if:`, no `needs:`), CPU
+    only, no torch and no model download, inside 10 minutes, and writes contracts.json to the summary; a change to
+    tests/contracts alone runs T0 and that job, not every T1 area."""
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    job = ci.split("\n  contracts:\n", 1)[1].split("\n\n  ", 1)[0]
+    assert "\n    if:" not in job and "\n    needs:" not in job
+    assert "python3 -m pytest tests/contracts" in job and "MASHBOX_CONTRACTS_OUT" in job and "--contracts-summary" in job
+    install = [x for x in job.splitlines() if "pip install" in x]
+    assert install and not any("torch" in x or "[dev]" in x for x in install), install
+    assert "hf_hub_download" not in job and "HF_TOKEN" not in job and "secrets." not in job
+    assert int(job.split("timeout-minutes: ", 1)[1].split()[0]) <= 10
+    areas = CS.model_areas()
+    assert CS.select(["tests/contracts/test_x.py"], areas) == []
+
+
+def test_contracts_summary_lists_each_contract(tmp_path):
+    """--contracts-summary prints one table row per contract id with its status and fingerprint, failures first."""
+    import json
+    f = tmp_path / "contracts.json"
+    f.write_text(json.dumps({"schema": 1, "code_commit": "abc", "dirty": False, "contracts": {
+        "tok/qwen2": {"status": "PASS", "fingerprint": "f" * 64, "cases": 3},
+        "op/Q4_K": {"status": "FAIL", "fingerprint": "0" * 64, "cases": 2}}}))
+    out = CS.contracts_summary(str(f))
+    rows = [x for x in out.splitlines() if x.startswith("| ") and "/" in x.split("|")[1]]
+    assert [r.split("|")[1].strip() for r in rows] == ["op/Q4_K", "tok/qwen2"], out
+    assert "1 FAIL" in out and "1 PASS" in out
+    assert "no contracts.json" in CS.contracts_summary(str(tmp_path / "none.json"))

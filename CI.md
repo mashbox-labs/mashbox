@@ -14,10 +14,11 @@ Three tiers. Each change runs only what it can break, and every test has to earn
 
 | Change | T0 | T1 |
 |---|---|---|
-| docs, `*.md`, `licenses/`, `hf/`, `templates/`, issue forms | yes | none |
+| docs, `*.md`, `licenses/`, `hf/`, `templates/`, issue forms, the docs-lint allow counts (`tools/docs_lint_allow.txt`) | yes | none |
 | a `tests/tpu/` file | yes | the area of any CPU test that reads it (the kernel check's CPU stand-in test), else none |
 | `models.json` top-level fields (views only) | yes | none |
 | a model's `models.json` row | yes | that model, plus core tests (the CLI and `mashbox tpu` tests read the rows) |
+| `gguf` rows in `models.json` | yes | `gguf`, plus the `gguf_rows` job: the CPU tests outside `gguf` that read the rows (catalog, model lists, card and docs sync, speculation records) |
 | `src/mashbox/models/<id>/`, `apps/<id>/`, `tests/cpu/test_<id>*.py` | yes | that model |
 | core: `src/mashbox/*.py`, `src/mashbox/runtime/`, `pyproject.toml`, `tests/conftest.py`, `.github/workflows/`, `tools/` | yes | every model, plus core tests |
 | any path not listed here | yes | every model (a new kind of file is never silently untested) |
@@ -31,6 +32,18 @@ python3 -m pytest tests/cpu -m "hy_nomas and not t0" --durations=15     # T1 for
 ```
 
 Markers come from file names in `tests/conftest.py` (no test file has to move): `<model id with underscores>` or `core`, and `t0` for `tests/cpu/test_core.py`.
+
+## Shards and parts
+
+Each T1 area runs as `SHARDS[area]` jobs (core 12, qwen3_8_27b 4), split by the seconds per test file in `SECONDS`, so no job runs much past a few minutes. A file whose one shared fixture outlasts a shard is in `SPLIT` and runs as parts: `tools/ci_select.py --args-of AREA --shard i/n` passes `pytest --ci-part=FILE@K/M`, and `tests/conftest.py` keeps part K's tests. A module can group its tests with `ci_part(item)` (the Qwen3.8-27B checks group by gate script, so each script runs once, in one part). The parts of a file hold every test exactly once; a part with no test is an error. Every leg prints its seconds per file at the end of its summary: copy them into `SECONDS` when a shard runs long.
+
+## Contracts
+
+The `contracts` job runs `tests/contracts` on every pull request, the same for every change: each supported kind (`op/<ggml type>`, `tok/<tokenizer>`, `arch/<architecture>`, `path/run`) against its reference on CPU, with no model download and no chip. It writes each contract's status and fingerprint to `contracts.json` and to the job summary. A new contract joins the job when its test lands in `tests/contracts`. A change to `tests/contracts` alone runs T0 and this job.
+
+## The sweep
+
+`.github/workflows/sweep.yml` runs every T1 leg of every area nightly, by hand, and on every `v*` tag, with the tests marked `timing` included. A `timing` test passes or fails on wall-clock time, so it depends on the runner's speed and never gates a pull request. The one such check is the `"merge": false` latency gate in `tests/cpu/engine_batch_checks.py`: B's first token arrives before A ends, and B's p95 first-token time stays under double its time without the field. Its other condition, no compile in the measured runs, is the class of the serve-time compile gates in the same script, and those stay in pull request CI. A red sweep is fixed forward on main and holds the release it ran for. Chip runs and speed records stay outside GitHub (T2 and the release records).
 
 ## Can the CPU tiers stand in for the chip?
 
@@ -56,11 +69,12 @@ The chip gets the commit and the kernel bundles, never a token. The run is poste
 3. A test asserts. A script that only prints is a tool until it has gates.
 4. A T1 test takes at most 10 s on the CI runner. Longer needs `@pytest.mark.slow` and the reason in its docstring. Every run prints the 15 slowest tests.
 5. Expensive setup is shared through a fixture, and loops over a JAX function go through `jax.jit`.
-6. No retries. A flaky test gets `@pytest.mark.quarantine(reason="...", until="YYYY-MM-DD")` at most 14 days out. CI deselects it; after that date collection fails until it is fixed or deleted.
-7. No duplicates: when two tests guard the same failure, keep the cheaper or more precise one.
-8. Removing code removes its tests in the same change. A quiet test is not deleted for being quiet.
-9. A bug fix brings a regression test at the cheapest tier that catches it (T0, then T1, then T2).
-10. Every numeric comparison names its reference and its tolerance. Loosening a tolerance needs the measured cause written next to it.
+6. A check that passes or fails on wall-clock time gets `@pytest.mark.timing`: it runs in the sweep, not in pull request CI.
+7. No retries. A flaky test gets `@pytest.mark.quarantine(reason="...", until="YYYY-MM-DD")` at most 14 days out. CI deselects it; after that date collection fails until it is fixed or deleted.
+8. No duplicates: when two tests guard the same failure, keep the cheaper or more precise one.
+9. Removing code removes its tests in the same change. A quiet test is not deleted for being quiet.
+10. A bug fix brings a regression test at the cheapest tier that catches it (T0, then T1, then T2).
+11. Every numeric comparison names its reference and its tolerance. Loosening a tolerance needs the measured cause written next to it.
 
 ## Adding a test
 

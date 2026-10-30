@@ -1,6 +1,7 @@
 name: CI
-# T0 runs on every change in seconds. T1 runs the CPU tests of the areas a change touches (tools/ci_select.py);
-# a docs-only change runs T0 alone. The chip tier (T2) runs on our own TPUs, outside GitHub. See CI.md.
+# T0 runs on every change in seconds. T1 runs the CPU tests of the areas a change touches (tools/ci_select.py), in
+# shards of a few minutes each; a docs-only change runs T0 alone. Tests marked timing run in the sweep (sweep.yml), not
+# here. The chip tier (T2) runs on our own TPUs, outside GitHub. See CI.md.
 on:
   pull_request:
   push:
@@ -46,11 +47,35 @@ jobs:
             git log -1 --format=%B "$c" | grep -q '^Signed-off-by: ' || { echo "commit $c is not signed off (git commit -s)"; exit 1; }
           done
 
+  contracts:
+    # Every contract (tests/contracts: op/, tok/, arch/, path/run) on CPU against its reference, the same for every pull
+    # request: no area pick, no torch, no model download, no chip. Results (id, status, fingerprint) go to the summary.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install (CPU JAX, no torch)
+        run: |
+          python3 -m pip install -q uv==0.13.6
+          uv pip install --system -q -e ".[cpu]" pytest
+      - name: Contracts
+        env:
+          MASHBOX_CONTRACTS_OUT: ${{ runner.temp }}/contracts.json
+        run: python3 -m pytest tests/contracts -q -p no:cacheprovider -rs --durations=10
+      - name: Contract results
+        if: always()
+        run: python3 tools/ci_select.py --contracts-summary "$RUNNER_TEMP/contracts.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
   t1:
     needs: t0
     if: needs.t0.outputs.any == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.t0.outputs.matrix) }}
@@ -74,8 +99,12 @@ jobs:
           AREA: ${{ matrix.area }}
           SHARD: ${{ matrix.shard }}
         run: |
-          files=$(python3 tools/ci_select.py --files-of "$AREA" --shard "$SHARD")
-          python3 -m pytest $files -p no:cacheprovider -m "$AREA and not t0 and not quarantine" --durations=15 -rs -o faulthandler_timeout=900
+          args=$(python3 tools/ci_select.py --args-of "$AREA" --shard "$SHARD")
+          python3 -m pytest $args -p no:cacheprovider -m "$AREA and not t0 and not quarantine and not timing" --durations=15 -rs \
+            -o faulthandler_timeout=900 -o junit_family=xunit1 --junitxml="$RUNNER_TEMP/t1.xml"
+      - name: Seconds per test file (for tools/ci_select.py SECONDS)
+        if: always()
+        run: python3 tools/ci_select.py --file-seconds "$RUNNER_TEMP/t1.xml" | tee -a "$GITHUB_STEP_SUMMARY"
 
   t1-gate:
     # The one required T1 check: green when every leg tools/ci_select.py picked passed, or when it picked none (a docs,
