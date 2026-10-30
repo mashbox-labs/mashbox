@@ -1,0 +1,40 @@
+{
+ "name": "llama-eps-f32",
+ "arch": "llama",
+ "made_by": "gguf-py",
+ "gguf_sha256": "37c9b0a42b7cd022a423c56af30025627d61000e40175494de17c9b4b1a18d1a",
+ "gguf_bytes": 7908096,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "e1aceee82048372d08b87c72e911cc5d9c7c3458226955f87b5bf5585bcbac80",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "llama",
+  "seed": 44,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": null,
+  "hp": {
+   "eps": 0.25
+  }
+ }
+}

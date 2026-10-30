@@ -1,0 +1,46 @@
+{
+ "name": "qwen35moe-eps-f32",
+ "arch": "qwen35moe",
+ "made_by": "gguf-py",
+ "gguf_sha256": "90a496f18b18463553d0c3118b0fee4eb244078dd841ffed28438a93a1a515d7",
+ "gguf_bytes": 6709632,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "d65ea2a5f7f470126f6d5349ab6c495cb144f128af29ef272c434813e4aba14c",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "qwen35moe",
+  "seed": 49,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": null,
+  "moe": {
+   "E": 8,
+   "K": 2,
+   "FE": 16,
+   "FS": 24
+  },
+  "hp": {
+   "eps": 0.25
+  }
+ }
+}

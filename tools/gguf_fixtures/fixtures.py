@@ -65,14 +65,15 @@ QWEN35 = dict(D=256, F=256, H=4, KV=2, HD=64, RD=16, sections=[3, 3, 2, 0], HK=2
               eps=1e-6, ctx=4096)
 
 
-def write_qwen35(path, seed=0, layers=4, quant=None, nextn=False, override=None, moe=None):
+def write_qwen35(path, seed=0, layers=4, quant=None, nextn=False, override=None, moe=None, hp=None):
     """Write a tiny random qwen35 GGUF in llama.cpp's conventions (norms stored + 1 except ssm_norm, ssm_a = -exp(A_log),
     conv squeezed). quant: None (all F32) or a list of gguf-py-quantizable type names cycled over the big linears.
     override: {tensor name: float32 array} written instead of the random values (same metadata, same order).
     moe: None, or dict(E=experts, K=experts used, FE=expert FFN size, FS=shared expert FFN size) -> architecture qwen35moe
-    (llama.cpp's routed experts + sigmoid-gated shared expert in place of the dense FFN)."""
+    (llama.cpp's routed experts + sigmoid-gated shared expert in place of the dense FFN).
+    hp: {QWEN35 key: value} in place of the defaults (the eps-sensitive contract fixtures set eps)."""
     import gguf
-    c = QWEN35
+    c = dict(QWEN35, **(hp or {}))
     rng = np.random.default_rng(seed)
     D, F, H, KV, HD, HK, HV, DK = c["D"], c["F"], c["H"], c["KV"], c["HD"], c["HK"], c["HV"], c["DK"]
     DV = DK
@@ -193,12 +194,14 @@ DENSE = dict(llama=dict(D=256, F=384, H=8, KV=2, HD=32, theta=5e5, eps=1e-5, ctx
              qwen3=dict(D=256, F=512, H=8, KV=4, HD=64, theta=1e6, eps=1e-6, ctx=4096, pre="qwen2", qknorm=True))
 
 
-def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None, rope=None):
+def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None, rope=None, hp=None):
     """Write a tiny random dense-attention GGUF (llama / qwen2 / qwen3) in llama.cpp's conventions: llama with a
     rope_freqs tensor (Llama 3.1 style frequency factors) and q/k/v/output biases, qwen2 with q/k/v biases, qwen3 with
-    per-head q/k norms and a head size that is not embedding_length / head_count. quant, override: as write_qwen35."""
+    per-head q/k norms and a head size that is not embedding_length / head_count. quant, override: as write_qwen35.
+    hp: {DENSE key: value} in place of the arch's defaults; tie=True leaves output.weight out (a tied head, as llama.cpp's
+    converter writes Llama 3.2 1B/3B, Qwen2.5 0.5B-3B and Qwen3 0.6B-4B)."""
     import gguf
-    c = DENSE[arch]
+    c = dict(DENSE[arch], **(hp or {}))
     rng = np.random.default_rng(seed)
     D, F, H, KV, HD = c["D"], c["F"], c["H"], c["KV"], c["HD"]
     toks, types, merges = vocab()
@@ -250,7 +253,8 @@ def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None,
 
     put("token_embd.weight", (0.5 * rng.standard_normal((V, D))).astype(np.float32))
     put("output_norm.weight", norm(D))
-    put("output.weight", lin(V, D), big=True)
+    if not c.get("tie"):
+        put("output.weight", lin(V, D), big=True)
     if c.get("freqs"):
         put("rope_freqs.weight", rng.uniform(1.0, 8.0, HD // 2).astype(np.float32))
     for l in range(layers):
@@ -281,14 +285,14 @@ GEMMA4 = dict(D=256, F=384, H=4, swa=[True, True, False, True, True, False], kv=
               window=4, theta=1e6, theta_swa=1e4, eps=1e-6, softcap=30.0, ctx=4096)
 
 
-def write_gemma4(path, seed=0, layers=6, quant=None, override=None):
+def write_gemma4(path, seed=0, layers=6, quant=None, override=None, hp=None):
     """Write a tiny random gemma4 GGUF (dense) in llama.cpp's conventions: sliding-window layers (2 K/V heads of 32,
     window 4, so the 16 test tokens cross it) and full layers (1 K/V head of 64, no attn_v: v is the k projection,
     rope_freqs factors), q/k norms, post-attention / post-FFN norms, layer_output_scale, tied output head, logit
     soft-cap. The tokenizer block is the shared tiny gpt2 vocabulary (llama.cpp reads the vocabulary independently of
-    the architecture, and the test feeds token ids). quant, override: as write_qwen35."""
+    the architecture, and the test feeds token ids). quant, override, hp: as write_qwen35 (hp keys of GEMMA4)."""
     import gguf
-    c = GEMMA4
+    c = dict(GEMMA4, **(hp or {}))
     rng = np.random.default_rng(seed)
     D, F, H = c["D"], c["F"], c["H"]
     swa = (c["swa"] * layers)[:layers]
@@ -380,11 +384,12 @@ def write(name, path, override=None, quant=True):
     fx = FIXTURES[name]
     q = fx.get("quant") if quant else None
     if fx["arch"] == "gemma4":
-        return write_gemma4(path, seed=fx["seed"], layers=fx["layers"], quant=q, override=override)
+        return write_gemma4(path, seed=fx["seed"], layers=fx["layers"], quant=q, override=override, hp=fx.get("hp"))
     if fx["arch"] in DENSE:
-        return write_dense(path, fx["arch"], seed=fx["seed"], layers=fx["layers"], quant=q, override=override, rope=fx.get("rope"))
+        return write_dense(path, fx["arch"], seed=fx["seed"], layers=fx["layers"], quant=q, override=override, rope=fx.get("rope"),
+                           hp=fx.get("hp"))
     return write_qwen35(path, seed=fx["seed"], layers=fx["layers"], quant=q, nextn=fx.get("nextn", False),
-                        override=override, moe=fx.get("moe"))
+                        override=override, moe=fx.get("moe"), hp=fx.get("hp"))
 
 
 # name -> how it is made. "gguf-py": rebuilt by the test from the seed. "llama-quantize": committed .gguf.
@@ -414,6 +419,20 @@ FIXTURES = {
     "gemma4-f32": dict(arch="gemma4", seed=20, layers=6, make="gguf-py", quant=None),
     "gemma4-kquant": dict(arch="gemma4", seed=21, layers=6, make="llama-quantize", base="Q4_K_M",
                           tensor_types=["ffn_down=q6_k", "attn_v=q6_k", "attn_output=q5_k", "attn_q=q8_0"]),
+    # architecture contract cases (tests/contracts/test_arch.py): tied heads, linear rope scaling, and one eps-sensitive
+    # file per architecture (rms eps EPS_STRESS, near the mean square of the activations, so a norm that does not use
+    # the file's eps moves the logits; at a real eps of 1e-6..1e-5 random weights hide it)
+    "llama-tied-f32": dict(arch="llama", seed=40, layers=4, make="gguf-py", quant=None, hp=dict(tie=True)),
+    "qwen2-tied-f32": dict(arch="qwen2", seed=41, layers=4, make="gguf-py", quant=None, hp=dict(tie=True)),
+    "qwen3-tied-f32": dict(arch="qwen3", seed=42, layers=4, make="gguf-py", quant=None, hp=dict(tie=True)),
+    "llama-linear-f32": dict(arch="llama", seed=43, layers=4, make="gguf-py", quant=None, rope=dict(type="linear", factor=4.0)),
+    "llama-eps-f32": dict(arch="llama", seed=44, layers=4, make="gguf-py", quant=None, hp=dict(eps=0.25)),
+    "qwen2-eps-f32": dict(arch="qwen2", seed=45, layers=4, make="gguf-py", quant=None, hp=dict(eps=0.25)),
+    "qwen3-eps-f32": dict(arch="qwen3", seed=46, layers=4, make="gguf-py", quant=None, hp=dict(eps=0.25)),
+    "gemma4-eps-f32": dict(arch="gemma4", seed=47, layers=6, make="gguf-py", quant=None, hp=dict(eps=0.25)),
+    "qwen35-eps-f32": dict(arch="qwen35", seed=48, layers=4, make="gguf-py", quant=None, hp=dict(eps=0.25)),
+    "qwen35moe-eps-f32": dict(arch="qwen35moe", seed=49, layers=4, make="gguf-py", quant=None,
+                              moe=dict(E=8, K=2, FE=16, FS=24), hp=dict(eps=0.25)),
 }
 
 

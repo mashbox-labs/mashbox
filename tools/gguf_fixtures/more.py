@@ -92,14 +92,14 @@ def _close(w):
     w.close()
 
 
-def write_gemma3(path, seed=0, layers=6, quant=None, override=None, prefix=False):
+def write_gemma3(path, seed=0, layers=6, quant=None, override=None, prefix=False, hp=None):
     """A tiny random gemma3 GGUF in llama.cpp's conventions: 6 layers = 5 sliding-window layers (window 4, so the 16 test
     tokens cross it) and 1 full layer (the default pattern of 6), linear rope scaling 8 on the full layer, the default
     sliding-window rope base, a head size that is not embedding_length / head_count, q/k norms, post norms, tied head,
     and the small SentencePiece vocabulary of spm_vocab(). prefix: tokenizer.ggml.add_space_prefix (None leaves the key out,
     which llama.cpp reads as true)."""
     import gguf
-    c, A = GEMMA3, "gemma3"
+    c, A = dict(GEMMA3, **(hp or {})), "gemma3"      # hp: {GEMMA3 key: value} in place of the defaults
     rng = np.random.default_rng(seed)
     D, F, H, KV, HD = c["D"], c["F"], c["H"], c["KV"], c["HD"]
     toks, types, scores = spm_vocab()
@@ -154,13 +154,13 @@ def write_gemma3(path, seed=0, layers=6, quant=None, override=None, prefix=False
     return path
 
 
-def write_dense2(path, arch, seed=0, layers=4, quant=None, override=None, pre="llama-bpe"):
+def write_dense2(path, arch, seed=0, layers=4, quant=None, override=None, pre="llama-bpe", hp=None):
     """A tiny random exaone or granite GGUF in llama.cpp's conventions (the llama tensor names): exaone with rope
     frequency factors and its own output head, granite with its four scalars and a tied head. The vocabulary is the
     shared tiny gpt2 one (llama.cpp reads the vocabulary independently of the architecture; the test feeds ids). pre: the
     pre-tokenizer name written (the real granite and EXAONE files carry "refact" and "exaone")."""
     import gguf
-    c = DENSE2[arch]
+    c = dict(DENSE2[arch], **(hp or {}))      # hp: as write_gemma3
     rng = np.random.default_rng(seed)
     D, F, H, KV, HD = c["D"], c["F"], c["H"], c["KV"], c["HD"]
     toks, types, merges = base.vocab()
@@ -188,7 +188,7 @@ def write_dense2(path, arch, seed=0, layers=4, quant=None, override=None, pre="l
     w.add_add_bos_token(False)
     w.add_chat_template(base.CHAT_TEMPLATE)
     put, lin, norm = _put(w, rng, quant, override)
-    put("token_embd.weight", (0.5 * rng.standard_normal((V, D))).astype(np.float32))
+    put("token_embd.weight", (c.get("emb_std", 0.5) * rng.standard_normal((V, D))).astype(np.float32))
     put("output_norm.weight", norm(D))
     if not c["tie"]:
         put("output.weight", lin(V, D), big=True)
@@ -214,8 +214,8 @@ def write(name, path, override=None, quant=True):
     fx = FIXTURES[name]
     q = fx.get("quant") if quant else None
     if fx["arch"] == "gemma3":
-        return write_gemma3(path, seed=fx["seed"], layers=fx["layers"], quant=q, override=override)
-    return write_dense2(path, fx["arch"], seed=fx["seed"], layers=fx["layers"], quant=q, override=override)
+        return write_gemma3(path, seed=fx["seed"], layers=fx["layers"], quant=q, override=override, hp=fx.get("hp"))
+    return write_dense2(path, fx["arch"], seed=fx["seed"], layers=fx["layers"], quant=q, override=override, hp=fx.get("hp"))
 
 
 FIXTURES = {
@@ -225,6 +225,14 @@ FIXTURES = {
     "exaone-pyquant": dict(arch="exaone", seed=35, layers=4, make="gguf-py", quant=["Q8_0", "Q4_0", "Q5_0"]),
     "granite-f32": dict(arch="granite", seed=33, layers=4, make="gguf-py", quant=None),
     "granite-pyquant": dict(arch="granite", seed=34, layers=4, make="gguf-py", quant=["Q8_0", "Q4_0", "Q5_0"]),
+    # eps-sensitive architecture contract cases (fixtures.py: rms eps 0.25)
+    "gemma3-eps-f32": dict(arch="gemma3", seed=50, layers=6, make="gguf-py", quant=None, hp=dict(eps=0.25)),
+    "exaone-eps-f32": dict(arch="exaone", seed=51, layers=4, make="gguf-py", quant=None, hp=dict(eps=0.25)),
+    "granite-eps-f32": dict(arch="granite", seed=52, layers=4, make="gguf-py", quant=None, hp=dict(eps=0.25)),
+    # granite with embedding std 0.04, so embedding x embedding_scale 12 is ~0.5 as in the other fixtures: at std 0.5 the
+    # residual is ~96% embedding and rope, eps and mask errors moved the logits by less than NMSE 1e-4 (arch mutation table)
+    "granite-attn-f32": dict(arch="granite", seed=53, layers=4, make="gguf-py", quant=None, hp=dict(emb_std=0.04)),
+    "granite-attn-eps-f32": dict(arch="granite", seed=54, layers=4, make="gguf-py", quant=None, hp=dict(emb_std=0.04, eps=0.25)),
 }
 # fixtures.make / build / dequant_copy read FIXTURES and write from their own module: point this private copy at ours
 base.FIXTURES, base.write = FIXTURES, write
