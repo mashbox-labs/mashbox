@@ -184,3 +184,72 @@ def test_run_prompt_end_to_end_on_cpu(tmp_path, capsys, monkeypatch):
     assert "gguf_plan" in kinds and "loaded" in kinds and "done" in kinds, cap.err
     assert next(e for e in events if e["event"] == "gguf_plan")["arch"] == "gemma4"
     assert next(e for e in events if e["event"] == "done")["new_tokens"] >= 1
+
+
+# ------------------------------------------------------------------------------- sliding layers: the K/V ring
+# The sliding-window layers keep a ring of min(window, ctx) positions (runtime/kvcache.py ring_write / ring_pos), held by
+# the engine as snapshotted slot state. The checks compare logits, not only the argmax (an argmax-only check let 4 of 5
+# planted ring bugs pass on this random fixture). Against a
+# no-cache forward of the same ids (one call over the whole sequence, nothing read from a cache),
+#   * the engine's teacher-forced chunked logits (Engine.logits: 16-token chunks through the cache, a padded last chunk)
+#     differ by at most 1e-3 at every position;
+#   * every token the engine generates (batched rows of different lengths, chunked prefill, decode steps across the
+#     window, a prefix-cache resume, a host-cache restore) has top-4 logits (the decode program's own, MASHBOX_RECORD_TOPK)
+#     within 1e-3 of the no-cache logits of those ids at that position, and is their argmax unless the no-cache top-two
+#     gap is under 1e-3.
+# The window is crossed in every run. Window 4 is the file's (every prefill chunk is longer than the ring); 24 makes a
+# 16-token chunk wrap around the ring's end.
+TOL = 1e-3
+
+
+@pytest.mark.parametrize("window", [4, 24])
+def test_ring_engine_runs_equal_a_no_cache_forward(window, tmp_path, monkeypatch):
+    from mashbox.runtime.engine import Engine
+    monkeypatch.setenv("MASHBOX_RECORD_TOPK", "4")
+    f, M, c = open_model(FXT.build("gemma4-f32", str(tmp_path)), act=jnp.float32)
+    c.window = window
+    W, _ = A.load(f, c, use_kernels=False)
+    CTX, i32 = 64, jnp.int32
+    fwd = jax.jit(A.make_forward(c), static_argnames=("Tc", "contig", "all_logits"))
+    ck0, cv0 = A.new_state(c, 1, CTX)
+    assert cv0[0].shape[2] == min(window, CTX) and ck0[0].shape[0] == c.swa.count(False)
+
+    def nocache(seq):
+        t = np.zeros((1, CTX), np.int32)
+        t[0, :len(seq)] = seq
+        return np.asarray(fwd(W, ck0, cv0, jnp.asarray(t), jnp.zeros((1,), i32), jnp.asarray([len(seq)], i32),
+                              jnp.zeros((1,), i32), 0, all_logits=True)["lg"][0])[:len(seq)]
+
+    def check(prompt, ids, topk):
+        """-> (largest top-4 logit difference, generated ids that are not the no-cache argmax outside a near tie)"""
+        seq = prompt + ids
+        lg = nocache(seq)
+        worst, bad = 0.0, 0
+        for k, (tid, tv) in enumerate(topk):
+            row = lg[len(prompt) + k - 1]
+            worst = max(worst, float(np.abs(row[np.asarray(tid)] - np.asarray(tv)).max()))
+            top = np.sort(row)[-2:]
+            bad += int(int(row.argmax()) != ids[k] and top[1] - top[0] >= TOL)
+        return worst, bad
+
+    rng = np.random.default_rng(7)
+    V = c.V
+    ps = [rng.integers(1, V, n).tolist() for n in (5, 23, 40)]
+    eng = Engine(c, W, A, CTX=CTX, S=3, K=3, chunk=16, prefix_cache=True, cache_ram=1 << 26, ckpt_step=8, trace=True)
+    seq = ps[2] + rng.integers(1, V, 20).tolist()
+    assert np.abs(eng.logits(seq) - nocache(seq)).max() <= TOL
+    r = eng.generate(ps, max_new=20)
+    got = [check(p, g, k) for p, g, k in zip(ps, r["ids"], r["topk"])]
+    assert all(w <= TOL and b == 0 for w, b in got), got
+    assert all(len(p) + len(g) > window for p, g in zip(ps, r["ids"]))
+    # a second turn of the 23-token conversation: resumed at its prompt end (the ring put back from its snapshot)
+    t2 = ps[1] + r["ids"][1] + rng.integers(1, V, 6).tolist()
+    r2 = eng.generate([t2], max_new=12)
+    w, b = check(t2, r2["ids"][0], r2["topk"][0])
+    assert r2["cached"] == [len(ps[1])] and w <= TOL and b == 0, (r2["cached"], w, b)
+    # three other conversations take every slot (t2's slot goes to host memory), then t2's next turn comes back restored
+    eng.generate([rng.integers(1, V, 9).tolist() for _ in range(3)], max_new=4)
+    t3 = t2 + r2["ids"][0][:5]
+    r3 = eng.generate([t3], max_new=8)
+    w, b = check(t3, r3["ids"][0], r3["topk"][0])
+    assert r3["restored"] == [len(t2)] and w <= TOL and b == 0, (r3["restored"], w, b)

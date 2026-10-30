@@ -17,6 +17,7 @@ import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 
 from ... import bshj
+from ...runtime import kvcache
 from ...runtime import sampler_tp as SPT
 from . import model as QM
 from . import weights as QW
@@ -142,7 +143,7 @@ class TPModel:
     def __init__(self, Q, mesh, candidates=SPT.CANDIDATES):
         self.Q, self.mesh = Q, mesh
         ns = lambda *s: NamedSharding(mesh, P(*s))
-        self.kv_sh = ns(None, None, None, "tp", None)              # (NG, S+1, CTX, KV, HD): KV heads on tp
+        self.kv_sh = ns(None, None, None, "tp")                    # (NG, S+1, CTX, KV x HD): KV heads on tp
         self.r_sh = ns(None, None, None, "tp", None, None)         # (NG, FI-1, S+1, HV, DK, DV): value heads on tp
         self.c_sh = ns(None, None, None, None, None)               # conv tail: small, replicated
         self.row_sh = ns(None, "tp")                               # (S, V) sampler counts / seen sets: vocabulary on tp
@@ -163,21 +164,19 @@ class TPModel:
 
     def make_forward(self, c, decode_kernels=None):
         mesh = self.mesh
-        kvs = P(None, None, None, "tp", None)                       # cache (NG, S+1, CTX, KV, HD) and ys k/v (NG, B, T, KV, HD)
+        # cache (NG, S+1, CTX, KV x HD): each chip holds whole KV heads (a contiguous run of the last axis); ys k/v
+        # (NG, B, T, KV, HD) split on the KV axis the same way
+        kvs, kv5 = P(None, None, None, "tp"), P(None, None, None, "tp", None)
         q5, k4 = P(None, None, "tp", None, None), P(None, None, "tp", None)
 
-        def attend(Kc, Vc, g, q, k, v, mask, slots, Tc, scale):
+        def attend(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=False):
             def core(Kc, Vc, g, q, k, v, mask, slots):
-                if Tc:      # group g's first Tc positions only, before the slot gather: the gather never sees the CTX axis
-                    sz = (1, Kc.shape[1], Tc) + Kc.shape[3:]
-                    Kc, Vc = jax.lax.dynamic_slice(Kc, (g, 0, 0, 0, 0), sz), jax.lax.dynamic_slice(Vc, (g, 0, 0, 0, 0), sz)
-                    g = 0
-                return QM.attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale)
+                return QM.attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=contig)
             f = smap(core, mesh, (kvs, kvs, P(), q5, k4, k4, P(), P()), q5)
             return f(Kc, Vc, g, q, k, v, mask, slots)
 
         def kv_write(Kc, Vc, slots, pos, ks, vs):
-            return smap(QM.kv_write_one, mesh, (kvs, kvs, P(), P(), kvs, kvs), (kvs, kvs))(Kc, Vc, slots, pos, ks, vs)
+            return smap(QM.kv_write_one, mesh, (kvs, kvs, P(), P(), kv5, kv5), (kvs, kvs))(Kc, Vc, slots, pos, ks, vs)
 
         def kv_write_g(Kc, Vc, g, slots, pos, k, v):
             return smap(QM.kv_write_group, mesh, (kvs, kvs, P(), P(), P(), k4, k4), (kvs, kvs))(Kc, Vc, g, slots, pos, k, v)
@@ -211,7 +210,7 @@ class TPModel:
         if extra_groups:
             raise NotImplementedError("speculative decoding runs on one chip (no tensor parallel)")
         f32, bf16 = jnp.float32, jnp.bfloat16
-        kv = (c.NG, S + 1, CTX, c.KV, c.HD)
+        kv = kvcache.shape(c.NG, S + 1, CTX, c.KV, c.HD)
         r, cs = (c.NG, c.FI - 1, S + 1, c.HV, c.DK, c.DV), (c.NG, c.FI - 1, S + 1, c.CK - 1, c.CONV)
         key = (kv, r, cs)
         # one program per state shape, kept: a new jit per call compiled again each time the Engine made a fresh state

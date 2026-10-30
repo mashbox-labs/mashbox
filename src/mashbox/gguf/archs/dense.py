@@ -36,9 +36,10 @@ import jax.numpy as jnp
 from jax import lax
 
 from ... import ops
+from ...runtime import kvcache
 from ..reader import GGUFError
 from ...moe import MoEError, detect_gguf
-from .qwen35 import rms, kv_write, _T, CONTRACTED_SMALL, role, new_stats, book, tied_head, routes
+from .qwen35 import rms, kv_read, kv_write, _T, CONTRACTED_SMALL, role, new_stats, book, tied_head, routes
 from . import rope as yarn_rope
 
 f32, bf16 = jnp.float32, jnp.bfloat16
@@ -271,8 +272,7 @@ def mtp_tensors(f, c):
 def new_state(c, S, CTX, extra_groups=0):
     """Zeroed per-slot state for S slots (+1 scratch slot): K/V per layer, and the engine's (R, C) linear-attention pair as
     one zero value per slot (slot on axis 2, as the engine moves it)."""
-    kv = (c.NG + extra_groups, S + 1, CTX, c.KV, c.HD)
-    return ((jnp.zeros(kv, c.act), jnp.zeros(kv, c.act)),
+    return (kvcache.zeros(c.NG + extra_groups, S + 1, CTX, c.KV, c.HD, c.act),
             (jnp.zeros((1, 1, S + 1, 1, 1, 1), f32), jnp.zeros((1, 1, S + 1, 1, 1), c.act)))
 
 
@@ -328,7 +328,8 @@ def make_forward(c, decode_kernels=None):
 
         def attend(l, q, k, v):
             if Tc:
-                kk, vv = jnp.concatenate([Kc[l][slots, :Tc], k], 1), jnp.concatenate([Vc[l][slots, :Tc], v], 1)
+                kc, vc = kv_read(Kc, Vc, l, slots, Tc, contig, KV, HD)
+                kk, vv = jnp.concatenate([kc, k], 1), jnp.concatenate([vc, v], 1)
             else:
                 kk, vv = k, v
             s = jnp.einsum("btkgd,bskd->bkgts", q, kk, preferred_element_type=f32) * scale

@@ -19,6 +19,7 @@ import jax.numpy as jnp
 from jax import lax
 
 from ...runtime import activation_edits as AE
+from ...runtime import kvcache
 from ...runtime.activation_edits import ActivationEdits  # noqa: F401  (the engine interface; re-exported for model users)
 
 f32, bf16 = jnp.float32, jnp.bfloat16
@@ -267,19 +268,20 @@ def gated_delta(qr, kr, v, g, beta, s0):
 # ---------------------------------------------------------------------------------------------------------------- state
 def new_state(c, S, CTX, extra_groups=0):
     """Zeroed per-slot state for S slots (+1 scratch slot). extra_groups: K/V groups after the model's NG (speculative
-    decoding keeps the MTP layer's K/V in group NG)."""
-    kv = (c.NG + extra_groups, S + 1, CTX, c.KV, c.HD)
-    return ((jnp.zeros(kv, bf16), jnp.zeros(kv, bf16)),
+    decoding keeps the MTP layer's K/V in group NG). K/V: runtime/kvcache.py's layout (NG, S+1, CTX, KV x HD)."""
+    return (kvcache.zeros(c.NG + extra_groups, S + 1, CTX, c.KV, c.HD, bf16),
             (jnp.zeros((c.NG, c.FI - 1, S + 1, c.HV, c.DK, c.DV), f32),
              jnp.zeros((c.NG, c.FI - 1, S + 1, c.CK - 1, c.CONV), bf16)))
 
 
 # ---------------------------------------------------------------------------------------------------------------- forward
-def attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale):
-    """Full-attention core on one chip: read slot rows of group g's K/V cache (positions < Tc), append this call's k, v,
-    masked softmax. q (B,T,KV,G,HD), k / v (B,T,KV,HD), mask (B,T,Tc+T) -> o (B,T,KV,G,HD) bf16."""
+def attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=False):
+    """Full-attention core on one chip: read slot rows of group g's K/V cache (positions < Tc; contig: the rows are slots
+    0..B-1, one slice), append this call's k, v, masked softmax. q (B,T,KV,G,HD), k / v (B,T,KV,HD), mask (B,T,Tc+T) ->
+    o (B,T,KV,G,HD) bf16."""
     if Tc:
-        kk, vv = jnp.concatenate([Kc[g][slots, :Tc], k], 1), jnp.concatenate([Vc[g][slots, :Tc], v], 1)
+        kc, vc = kvcache.read_heads(Kc, Vc, g, slots, Tc, contig, k.shape[2], k.shape[3])
+        kk, vv = jnp.concatenate([kc, k], 1), jnp.concatenate([vc, v], 1)
     else:
         kk, vv = k, v
     s = jnp.einsum("btkgd,bskd->bkgts", q, kk, preferred_element_type=f32) * scale
@@ -288,14 +290,15 @@ def attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale):
 
 
 def kv_write_one(Kc, Vc, slots, pos, ks, vs):
-    """Write this call's K/V (NG,B,T,KV,HD) at (slot, position); positions past the cache are dropped."""
-    n = ks.shape[0]           # the model's groups; an MTP group after them is written by its own layer
-    return (Kc.at[:n, slots[:, None], pos].set(ks, mode="drop"), Vc.at[:n, slots[:, None], pos].set(vs, mode="drop"))
+    """Write this call's K/V (NG,B,T,KV,HD) at (slot, position) in place; positions past the cache are dropped (an MTP
+    group after the model's groups is written by its own layer). runtime/kvcache.write."""
+    return kvcache.write(Kc, Vc, slots, pos, ks, vs)
 
 
 def kv_write_group(Kc, Vc, g, slots, pos, k, v):
-    """Write group g's K/V (B,T,KV,HD) at (slot, position) inside the layer loop; positions past the cache are dropped."""
-    return (Kc.at[g, slots[:, None], pos].set(k, mode="drop"), Vc.at[g, slots[:, None], pos].set(v, mode="drop"))
+    """Write group g's K/V (B,T,KV,HD) at (slot, position) inside the layer loop, in place; positions past the cache are
+    dropped."""
+    return kvcache.write(Kc, Vc, slots, pos, k[None], v[None], g=g)
 
 
 def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_one, kv_in_loop=False, kv_write_g=kv_write_group,
@@ -406,7 +409,7 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
             q, k = rms_norm(q, w["qn"], eps), rms_norm(k, w["kn"], eps)
             q, k = rope_partial(q, cos, sin, RD), rope_partial(k, cos, sin, RD)
             o = attend(Kc if Kl is None else Kl, Vc if Vl is None else Vl, g, q.reshape(B, T, KV, G, HD), k, v, mask, slots, Tc,
-                       scale).reshape(B, T, H * HD)
+                       scale, contig=contig).reshape(B, T, H * HD)
             o = o * jax.nn.sigmoid(gate.astype(f32)).astype(bf16)
             return linear(o, w["wo"], pj), k, v
 

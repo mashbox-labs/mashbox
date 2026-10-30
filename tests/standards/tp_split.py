@@ -59,9 +59,10 @@ def spans(tree):
 
 
 def kv_share(eng):
-    """K/V heads each device holds in the slot state (TP7's read): cfg.KV // tp when the cache is split"""
+    """K/V heads each device holds in the slot state (TP7's read): cfg.KV // tp when the cache is split. The cache row is
+    the K/V heads flat (runtime/kvcache.py), so a device's heads = its share of the last axis / the head size."""
     (Kc, _Vc), _rest = eng.state if eng.state is not None else eng.new_state()
-    return sorted({sh.data.shape[3] for sh in Kc.addressable_shards})
+    return sorted({sh.data.shape[3] // eng.c.HD for sh in Kc.addressable_shards})
 
 
 def main(wd):

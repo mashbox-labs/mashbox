@@ -804,55 +804,15 @@ def test_kq_layer_failure_keeps_the_sliced_path(tmp_path, monkeypatch, capsys):
 
 
 # ------------------------------------------------------------------------------------------- K/V cache read and write
-# On TPU the decode program copied the whole K/V cache to another layout at every step (profile 2026-10-30, Qwen3.6-35B-A3B
-# on v6e: 2 x 377.5 MB per token): once for the one-row write (XLA turns its dropping scatter into a select that reads the
-# old K/V) and once for the read (the attention dot's layout was given to the whole cache, not to the slice it reads).
-# These check the program's form on CPU; the copies themselves are measured on the chip.
-KV_SHAPE = (3, 5, 16, 2, 4)        # (groups, slots incl. scratch, CTX, KV heads, head dim)
-
-
-def _kv(seed=0):
-    r = np.random.default_rng(seed)
-    return (jnp.asarray(r.standard_normal(KV_SHAPE, dtype=np.float32)),
-            jnp.asarray(r.standard_normal(KV_SHAPE, dtype=np.float32)))
-
-
-def _prims(fn, *args):
-    return [e.primitive.name for e in jax.make_jaxpr(fn)(*args).eqns]
-
-
-def test_one_token_row_write_never_reads_the_cache():
-    Kc, Vc = _kv()
+# The K/V cache's layout, read and write live in runtime/kvcache.py (every model the engine runs) and are checked in
+# tests/cpu/test_kvcache.py; this file keeps the qwen35 entry points on it.
+def test_qwen35_cache_is_the_shared_layout():
+    from mashbox.runtime import kvcache
+    assert A.kv_write.__module__ == A.__name__ and "kvcache.write" in __import__("inspect").getsource(A.kv_write)
+    assert "kvcache.read_heads" in __import__("inspect").getsource(A.kv_read)
+    Kc, Vc = kvcache.zeros(3, 5, 16, 2, 4, jnp.float32)
     ks = jnp.ones((3, 1, 1, 2, 4))
-    prims = _prims(lambda K, V, s, p: A.kv_write(K, V, s, p, ks, ks), Kc, Vc, jnp.array([2]), jnp.array([[7]]))
-    assert "scatter" not in prims and "cond" in prims, prims
-    many = _prims(lambda K, V, s, p: A.kv_write(K, V, s, p, jnp.ones((3, 2, 1, 2, 4)), jnp.ones((3, 2, 1, 2, 4))),
-                  Kc, Vc, jnp.array([0, 1]), jnp.array([[3], [4]]))
-    assert "scatter" in many        # rows of a batch keep the one scatter
-
-
-@pytest.mark.parametrize("p", [0, 9, 15, 16, 19], ids=lambda p: f"pos{p}")
-def test_one_token_row_write_matches_the_dropping_scatter(p):
-    Kc, Vc = _kv(1)
-    r = np.random.default_rng(2)
-    ks, vs = (jnp.asarray(r.standard_normal((3, 1, 1, 2, 4), dtype=np.float32)) for _ in range(2))
-    s, pos = jnp.array([2], jnp.int32), jnp.array([[p]], jnp.int32)
-    want = (Kc.at[:3, s[:, None], pos].set(ks, mode="drop"), Vc.at[:3, s[:, None], pos].set(vs, mode="drop"))
-    got = jax.jit(A.kv_write)(Kc, Vc, s, pos, ks, vs)
-    for g, w in zip(got, want):
-        assert np.array_equal(np.asarray(g), np.asarray(w))
-    if p >= KV_SHAPE[2]:            # past the cache: nothing written
-        assert np.array_equal(np.asarray(got[0]), np.asarray(Kc)) and np.array_equal(np.asarray(got[1]), np.asarray(Vc))
-
-
-def test_contig_read_is_one_slice_held_in_the_cache_layout():
-    Kc, Vc = _kv(3)
-    slots = jnp.arange(3, dtype=jnp.int32)
-    prims = _prims(lambda K, V: A.kv_read(K, V, 1, slots, 8, True), Kc, Vc)
-    assert "gather" not in prims and prims.count("layout_constraint") == 2, prims
-    got = jax.jit(lambda K, V: A.kv_read(K, V, 1, slots, 8, True))(Kc, Vc)
-    for g, c in zip(got, (Kc, Vc)):
-        assert np.array_equal(np.asarray(g), np.asarray(c[1][slots, :8]))
-    other = jnp.array([4, 0], jnp.int32)          # rows on other slots (prefill) still gather their slots
-    got = A.kv_read(Kc, Vc, 2, other, 8, False)
-    assert np.array_equal(np.asarray(got[0]), np.asarray(Kc[2][other, :8]))
+    K2, _ = A.kv_write(Kc, Vc, jnp.array([2]), jnp.array([[7]]), ks, ks)
+    assert K2.shape == (3, 5, 16, 8) and float(K2[:, 2, 7].min()) == 1.0 and float(jnp.abs(K2).sum()) == 3 * 8
+    k, v = A.kv_read(K2, K2, 1, jnp.array([2, 0]), 8, False, 2, 4)
+    assert k.shape == (2, 8, 2, 4) and float(k[0, 7].min()) == 1.0

@@ -18,7 +18,8 @@ import numpy as np
 import jax.numpy as jnp
 
 from ..reader import GGUFError
-from .gemma4 import load, tensor_roles, mtp_tensors, new_state, make_forward  # noqa: F401  the shared graph
+from .gemma4 import (load, tensor_roles, mtp_tensors, new_state, state_bytes, make_forward,  # noqa: F401  the shared graph
+                     CV_SLOT_AXIS)
 
 f32, bf16 = jnp.float32, jnp.bfloat16
 # the Models label (docs/gguf.md) of each architecture ARCHS maps to this module; catalog reads it with ast
@@ -84,7 +85,8 @@ class Config:
         self.theta = [th_swa if s else th_full for s in self.swa]
         self.fscale = [1.0 if s else fscale_full for s in self.swa]
         self.freqs = False                          # llama.cpp's gemma3 graph passes no frequency factors
-        # the engine's state layout: one K/V group per layer (NG), stored flat (KV = 1, HD = the widest layer's row)
+        # K/V rows stored flat (KV = 1, HD = the widest layer's row); new_state splits the layers into the full ones
+        # and the sliding-window ring (gemma4.kinds), NG counts them all
         self.NG, self.FI = self.L, 1
         self.KV, self.HD = 1, max(a * b for a, b in zip(self.kv, self.hd))
         self.HV = self.DK = self.DV = self.CONV = 1

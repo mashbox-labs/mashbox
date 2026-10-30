@@ -241,7 +241,7 @@ e44 = Engine(cfg4, W44, tpm4, CTX=512, S=4, K=4)
 l41, l44 = e41.logits(seqs[1]), e44.logits(seqs[1])
 g41, g44 = e41.generate(prompts, max_new=16)["ids"], e44.generate(prompts, max_new=16)["ids"]
 st4 = tpm4.new_state(cfg4, 4, 512)                 # the state the Engine allocates under tp: each chip its own share
-kv_share = {d.id: s.data.shape[3] for s in st4[0][0].addressable_shards for d in [s.device]}
+kv_share = {d.id: s.data.shape[3] // cfg4.HD for s in st4[0][0].addressable_shards for d in [s.device]}   # K/V heads flat in the row
 lin_share = {d.id: s.data.shape[3] for s in st4[1][0].addressable_shards for d in [s.device]}
 R["T11"] = dict(kl_vs_one_device=kl_top1(l41, l44), greedy_equal=[a == b for a, b in zip(g41, g44)],
                 device_bytes=i44["device_bytes"], one_device_bytes=i41["device_bytes"], tp=i44["tp"],

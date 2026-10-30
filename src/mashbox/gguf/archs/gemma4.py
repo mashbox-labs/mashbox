@@ -12,9 +12,11 @@
 RMSNorm weights are multiplied as stored. Big linears stay in the file's own blocks (any ggml type) and run through
 mashbox.ops: the TPU kernel when the kernel package covers the type, else the exact float32 reference.
 
-The forward has the contract of models/qwen3_8_27b/model.make_forward. The engine keeps one K/V array for every layer,
-so each token's K (and V) of a layer is stored flat in a row as wide as the widest layer (Config.KV = 1, Config.HD = that
-width); narrower layers use the front of the row.
+The forward has the contract of models/qwen3_8_27b/model.make_forward. K/V (runtime/kvcache.py): the full layers keep
+one array of the whole context, the sliding-window layers a ring of min(window, context) positions (they never look
+further back), each token's K (and V) of a layer stored flat in a row as wide as the widest layer of its kind; narrower
+layers use the front of the row. The ring cannot be rolled back, so it is the slot state the engine snapshots at prompt
+points and moves with the slot (CV_SLOT_AXIS), as it does the linear-attention state of hybrid files.
 
 Not handled (refused at load with a message): per-layer token embeddings (E2B / E4B), shared K/V layers, routed experts
 (26B-A4B), a fused qkv tensor, rope scaling, per-layer feed-forward lengths.
@@ -25,6 +27,7 @@ import jax.numpy as jnp
 from jax import lax
 
 from ... import ops
+from ...runtime import kvcache
 from ..reader import GGUFError
 from .qwen35 import rms, kv_write, _T, new_stats, book, tied_head, routes
 from .dense import rope
@@ -33,6 +36,7 @@ f32, bf16 = jnp.float32, jnp.bfloat16
 # the Models label (docs/gguf.md) of each architecture ARCHS maps to this module; catalog reads it with ast
 MODELS = {"gemma4": "Gemma 4 (dense)"}
 NEG = -1e30
+CV_SLOT_AXIS = 1        # the engine's per-slot state (the rings, or the zero pair) has the slot on axis 1
 
 
 class Config:
@@ -83,7 +87,8 @@ class Config:
         self.rd = [rd_swa if s else rd_full for s in self.swa]
         self.theta = [th_swa if s else th_full for s in self.swa]
         self.freqs = "rope_freqs.weight" in f.tensors
-        # the engine's state layout: one K/V group per layer (NG), stored flat (KV = 1, HD = the widest layer's row)
+        # K/V rows stored flat (KV = 1, HD = the widest layer's row); new_state splits the layers into the full ones
+        # and the sliding-window ring (gemma4.kinds), NG counts them all
         self.NG, self.FI = self.L, 1
         self.KV, self.HD = 1, max(a * b for a, b in zip(self.kv, self.hd))
         self.HV = self.DK = self.DV = self.CONV = 1
@@ -175,20 +180,43 @@ def mtp_tensors(f, c):
 
 
 # ---------------------------------------------------------------------------------------------------------------- state
+def kinds(c):
+    """-> (full, ring, full width, ring width): the layers whose K/V cover the whole context and the sliding-window
+    layers kept in a ring (none without a window), each with the row width of its widest layer"""
+    ring = [l for l in range(c.L) if c.swa[l]] if c.window else []
+    full = [l for l in range(c.L) if l not in ring]
+    wd = lambda ls: max([c.kv[l] * c.hd[l] for l in ls], default=0)
+    return full, ring, wd(full), wd(ring)
+
+
 def new_state(c, S, CTX, extra_groups=0):
-    """Zeroed per-slot state for S slots (+1 scratch slot): K/V per layer stored flat, and the engine's (R, C)
-    linear-attention pair as one zero value per slot (slot on axis 2, as the engine moves it)."""
-    kv = (c.NG + extra_groups, S + 1, CTX, c.KV, c.HD)
-    return ((jnp.zeros(kv, c.act), jnp.zeros(kv, c.act)),
-            (jnp.zeros((1, 1, S + 1, 1, 1, 1), f32), jnp.zeros((1, 1, S + 1, 1, 1), c.act)))
+    """Zeroed per-slot state for S slots (+1 scratch slot): the full layers' K/V over CTX positions, and as the engine's
+    second (snapshotted) state the sliding layers' K/V rings of min(window, CTX) positions, or a zero pair for a file
+    without them. Slot on axis 1 in both."""
+    full, ring, wf, wr = kinds(c)
+    ck = kvcache.zeros(max(1, len(full)), S + 1, CTX, 1, wf or wr, c.act)
+    if ring:
+        return ck, kvcache.zeros(len(ring), S + 1, min(c.window, CTX), 1, wr, c.act)
+    return ck, (jnp.zeros((1, S + 1, 1, 1), f32), jnp.zeros((1, S + 1, 1, 1), c.act))
+
+
+def state_bytes(c, ctx, slots):
+    """device bytes of new_state(c, slots, ctx) (gguf.need_bytes)"""
+    full, ring, wf, wr = kinds(c)
+    act = np.dtype(c.act).itemsize
+    return 2 * (slots + 1) * act * (max(1, len(full)) * ctx * (wf or wr) + len(ring) * min(c.window, ctx) * wr)
 
 
 def make_forward(c, decode_kernels=None):
     """-> forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, keep=None, verify=False,
     hidden=False) -> dict(ck, cv, nxt, lg), the contract of models/qwen3_8_27b/model.make_forward. verify (speculative
     decoding) is not offered for these files."""
-    D, H, act, eps, WD = c.D, c.H, c.act, c.eps, c.HD
+    D, H, act, eps = c.D, c.H, c.act, c.eps
+    full, ring, WF, WR = kinds(c)
+    WF = WF or WR
+    idx = {l: i for ls in (full, ring) for i, l in enumerate(ls)}
     lin_ = ops.qmatmul
+    ring_set = set(ring)
     inv = [(1.0 / (np.float32(th) ** (np.arange(0, rd, 2, dtype=np.int64).astype(np.float32) / np.float32(rd))))
            .astype(np.float32) for th, rd in zip(c.theta, c.rd)]
 
@@ -198,14 +226,23 @@ def make_forward(c, decode_kernels=None):
             raise NotImplementedError("speculative verify is not offered for GGUF gemma4 files")
         B, T = toks.shape
         Kc, Vc = ck
+        CTX = Kc.shape[2]
         pos = p0[:, None] + jnp.arange(T, dtype=jnp.int32)[None]
         valid = jnp.arange(T)[None] < lens[:, None]
-        # key positions: the cache rows 0..Tc-1 (row = position) then this step's tokens
+        # full layers' key positions: the cache rows 0..Tc-1 (row = position) then this step's tokens
         kpos = jnp.concatenate([jnp.broadcast_to(jnp.arange(Tc, dtype=jnp.int32)[None], (B, Tc)), pos], 1) if Tc else pos
         kok = jnp.concatenate([jnp.arange(Tc)[None] < p0[:, None], valid], 1) if Tc else valid
         dist = pos[:, :, None] - kpos[:, None, :]                        # (B, T, Tc + T)
         m_full = (dist >= 0) & kok[:, None, :]
-        m_swa = m_full & (dist < c.window) if c.window else m_full
+        if ring:    # sliding layers: the ring's first Ts entries (each holds the position ring_pos says), then this step's
+            Ks, Vs = cv
+            Ts = min(Tc, Ks.shape[2])
+            dn = pos[:, :, None] - pos[:, None, :]
+            m_swa = (dn >= 0) & (dn < c.window) & valid[:, None, :]
+            if Ts:
+                rp = kvcache.ring_pos(p0, Ts, Ks.shape[2])
+                dr = pos[:, :, None] - rp[:, None, :]
+                m_swa = jnp.concatenate([(rp >= 0)[:, None, :] & (dr < c.window), m_swa], 2)
         x = (ops.take_rows(W["embed"], toks).astype(f32) * np.float32(np.sqrt(D))).astype(act)
 
         def rot(l):
@@ -232,15 +269,18 @@ def make_forward(c, decode_kernels=None):
             k = rms(kr, w["kn"], eps)
             v = rms(v, 1.0, eps) if c.vnorm else v
             q, k = rope(q, cos, sin, RD, True), rope(k, cos, sin, RD, True)
-            if Tc:
-                kk = jnp.concatenate([Kc[l][sl, :Tc, 0, :n].reshape(B, Tc, KV, HD), k], 1)
-                vv = jnp.concatenate([Vc[l][sl, :Tc, 0, :n].reshape(B, Tc, KV, HD), v], 1)
+            rl = l in ring_set
+            n_c = Ts if rl else Tc
+            if n_c:
+                kc, vc = kvcache.read(*((Ks, Vs) if rl else (Kc, Vc)), idx[l], sl, n_c, contig, n)
+                kk = jnp.concatenate([kc.reshape(B, n_c, KV, HD), k], 1)
+                vv = jnp.concatenate([vc.reshape(B, n_c, KV, HD), v], 1)
             else:
                 kk, vv = k, v
             s = jnp.einsum("btkgd,bskd->bkgts", q.reshape(B, T, KV, G, HD), kk, preferred_element_type=f32)
             if c.qscale != 1.0:                    # gemma3 scales q (llama.cpp: before the product)
                 s = s * np.float32(c.qscale)
-            m = m_swa if c.swa[l] else m_full
+            m = m_swa if rl else m_full
             p = jax.nn.softmax(jnp.where(m[:, None, None], s, NEG), -1).astype(act)
             o = jnp.einsum("bkgts,bskd->btkgd", p, vv, preferred_element_type=f32).astype(act).reshape(B, T, H * HD)
             a = x + rms(lin_(o, w["wo"]).astype(act), w["pa"], eps)
@@ -249,15 +289,18 @@ def make_forward(c, decode_kernels=None):
             y = a + rms(lin_(g, w["wd"]).astype(act), w["pf"], eps)
             if "osc" in w:
                 y = (y.astype(f32) * w["osc"]).astype(act)
-            flat = lambda z: jnp.pad(z.reshape(B, T, 1, n), ((0, 0), (0, 0), (0, 0), (0, WD - n)))
+            wd = WR if rl else WF
+            flat = lambda z: jnp.pad(z.reshape(B, T, n), ((0, 0), (0, 0), (0, wd - n)))
             return y, flat(k), flat(v)
 
-        ks, vs = [], []
+        ks, vs = {}, {}
         for l in range(c.L):
-            x, k, v = layer(x, W["g"][l], l)
-            ks.append(k)
-            vs.append(v)
-        Kc, Vc = kv_write(Kc, Vc, slots, pos, jnp.stack(ks), jnp.stack(vs))
+            x, ks[l], vs[l] = layer(x, W["g"][l], l)
+        if full:
+            Kc, Vc = kv_write(Kc, Vc, slots, pos, jnp.stack([ks[l] for l in full]), jnp.stack([vs[l] for l in full]))
+        if ring:
+            cv = kvcache.ring_write(Ks, Vs, slots, pos, lens, jnp.stack([ks[l] for l in ring]),
+                                    jnp.stack([vs[l] for l in ring]), CTX, keep=keep)
         out = dict(ck=(Kc, Vc), cv=cv)
 
         def head(hn):
