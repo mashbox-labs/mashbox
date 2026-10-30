@@ -4,6 +4,17 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 
 ## 0.1.11
 
+### Models `mashbox run` does not start are listed, with their device and a how-to-run link
+
+1. **`models.json` `elsewhere[]`:** one row per model `mashbox run` does not start (a weights-only repo, a port to another device): id, name, summary, `device` (one of `DEVICES`: TPU, Apple Neural Engine), `how_to_run` (an https link), `hf_repo` pinned at `hf_revision`, and `upstream` with its licence copied as stated there (components too). No run path, chip row or number. It lists the five weights-only repos (Audio2Face-3D v3.0, Granite Speech 4.1 2B, maya1, Real-ESRGAN, Z-Image-Turbo), each from its card at the pinned revision; each `how_to_run` is the card's own Load section.
+2. **`tools/hf_github_sync_check.py`:** `validate_elsewhere` holds those fields, keeps ids unique across `models[]`, `gguf[]` and `elsewhere[]`, and the release rule takes the row's own device (no TPU chip run is asked of it). Online, `elsewhere_online_problems` reads each repo logged out: public, head at the pinned revision, LICENSE, NOTICE and component licence files as pinned, and the `how_to_run` anchor a heading of the card. The org's listed repos now include these rows, so they are no longer reported as missing from models.json.
+3. **`tools/model_lists.py`:** a third tier, "Listed, not in mashbox run", in the README models block, llms.txt and the docs catalog, rendered from the rows. The count and lead lines are unchanged: they count what runs in mashbox.
+4. **`tests/cpu/test_listed_elsewhere.py`:** the row, the release rule, the views and the online check; `tests/cpu/test_model_lists.py` reads the third tier.
+
+Why: a model `mashbox run` cannot run belongs in the catalog and on mashbox.gg/models too, with a how-to-run link instead of a run command.
+
+How existing models keep working: `models[]` and `gguf[]` rows, their views and the GGUF code set are unchanged (no file of `src/mashbox` but `models.json` changed). `mashbox run <id>` for these rows comes in a later change; until then it behaves as in 0.1.10.
+
 ### An upstream NOTICE is pinned and checked like its LICENSE
 
 1. **`tools/hf_github_sync_check.py`:** a row can pin its upstream NOTICE with `upstream.notice_sha256` (optional). When it is set, `licenses/<id>/NOTICE` must be that file unchanged and `check --online` finds it at the Hugging Face repo root at the pinned revision; a NOTICE file with no sha256 on its row fails. The check reads files and never writes one.
