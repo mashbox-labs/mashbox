@@ -43,9 +43,10 @@ SPEC_DRAFT = True        # every layer is full attention: a file of this module 
 NEG = -1e30
 NEOX = ("qwen2", "qwen3", "exaone")      # rope on halves; llama, granite: adjacent pairs
 # a file whose block types differ by layer (Q4_K_M, Unsloth's dynamic quants) runs its layers in one lax.scan with one
-# weight rebuild per type of each role (ops.Mixed), not unrolled: unrolled, every program held one rebuild per layer and
-# was ~30x larger (Qwen3-0.6B Q4_K_M on CPU: 28-30k HLO ops per program vs ~1k stacked), which filled host RAM and the
-# compile cache during the serve warm-up. False keeps such files unrolled (the tests run both).
+# weight rebuild per type of each role (ops.Mixed), not unrolled: unrolled, every program held one rebuild per layer, so
+# it grew with the layer count, which filled host RAM and the compile cache during the serve warm-up
+# (tests/cpu/test_gguf_mixed_scan.py checks that the stacked program does not grow with the layer count). False keeps
+# such files unrolled (the tests run both).
 MIXED_SCAN = True
 
 
