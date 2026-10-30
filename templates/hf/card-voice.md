@@ -4,6 +4,8 @@ ${front_matter}
 
 # ${name} on Google Cloud TPU
 
+${status}
+
 ${summary}
 
 | | |

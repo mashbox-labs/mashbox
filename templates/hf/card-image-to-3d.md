@@ -6,7 +6,9 @@ ${front_matter}
 
 # ${name} on Google Cloud TPU
 
-${maturity_line}${badges}
+${maturity_line}${status}
+
+${badges}
 
 ### Read our guide: [run ${name} on TPU](${docs_url})
 

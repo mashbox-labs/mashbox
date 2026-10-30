@@ -13,6 +13,8 @@ tags:
 
 **Experimental**
 
+Runs with `mashbox run trellis-2` in the `mashbox` package, [release 0.1.10](https://pypi.org/project/mashbox/0.1.10/).
+
 <p>
   <a href="https://github.com/mashbox-labs/mashbox"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-mashbox--labs%2Fmashbox-181717?logo=github"></a>
   <a href="https://mashbox.gg/docs/models/trellis-2"><img alt="Docs" src="https://img.shields.io/badge/Docs-mashbox.gg-ff5a1f"></a>

@@ -71,8 +71,8 @@
         ]
       },
       "hf_repo": "mashbox-labs/Hy-Nomas-TPU",
-      "hf_revision": "ed20bf7e8bc3f502365449591f4ad2de33dd45ad",
-      "card_release": "0.1.5",
+      "hf_revision": "36b9189e9e483cf1b7848a6b788412c0e89f193f",
+      "card_release": "0.1.10",
       "base_model_relation": "quantized",
       "pipeline_tag": null,
       "chips": {
@@ -240,8 +240,8 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "5609eee53ba029a07756c6ffd450b8e3b60a9424",
-      "card_release": "0.1.5",
+      "hf_revision": "69efeb48850bfc267a631966fc80e67a2d5a1c76",
+      "card_release": "0.1.10",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
       "chat": {
@@ -747,9 +747,9 @@
         "note": "Trained from scratch by MASHBOX Labs; code and weights Apache-2.0."
       },
       "hf_repo": "mashbox-labs/Track2Rig",
-      "hf_revision": "009534c7be0a304af52c006f89eb3f25a6a6e068",
+      "hf_revision": "c6408bc6f1ee57510e6190e84bfb4f893bd894e5",
       "hf_tag": "2026-10-29",
-      "card_release": "0.1.5",
+      "card_release": "0.1.10",
       "pipeline_tag": null,
       "chips": {
         "v6e": {
@@ -958,7 +958,7 @@
         "license_sha256": "d9a1b1e30d633d5732ea18e3cba9538d293ebc53e1a9e4e96ab739e0c5c4f1cb"
       },
       "hf_repo": "mashbox-labs/TRELLIS.2-TPU",
-      "hf_revision": "150b6982a825e173d0dd06bb23581b6349431390",
+      "hf_revision": "428358a72ca30f927f48e5219d2cbea34312088a",
       "pipeline_tag": "image-to-3d",
       "chips": {
         "v5e": {

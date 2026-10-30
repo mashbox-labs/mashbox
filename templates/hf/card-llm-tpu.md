@@ -6,6 +6,8 @@ ${front_matter}
 
 # ${name} on Google Cloud TPU
 
+${status}
+
 ${badges}
 
 ### Read our guide: [run ${name} on TPU](${docs_url})

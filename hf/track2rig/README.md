@@ -14,6 +14,8 @@ tags:
 
 **Experimental**
 
+Runs with `mashbox run track2rig` in the `mashbox` package, [release 0.1.10](https://pypi.org/project/mashbox/0.1.10/).
+
 ### Read the guide: [Track2Rig docs](https://mashbox.gg/docs/models/track2rig)
 
 Our own model: dense 3D point tracks of a moving creature in, a rig out (bones, skin weights, per-frame bone transforms and a skeleton). Runs on a CPU. It does not work well on many clips yet. Newer weights will be published as dated versions. Trained from scratch by MASHBOX Labs. Code and weights: Apache-2.0.
@@ -27,7 +29,7 @@ Our own model: dense 3D point tracks of a moving creature in, a rig out (bones, 
 On a CPU, with Python 3.12 (tested on x86-64 Linux). If your `python3` is older, as on a Google Cloud TPU VM, use the uv steps in the [install guide](https://mashbox.gg/docs/models/track2rig#install). The first run downloads `track2rig-v2.safetensors` (11 MB) from this repo at the revision pinned in `models.json` and checks its sha256.
 
 ```bash
-git clone https://github.com/mashbox-labs/mashbox && cd mashbox
+git clone --branch v0.1.10 https://github.com/mashbox-labs/mashbox && cd mashbox
 python3 -m venv .venv && . .venv/bin/activate
 pip install ".[cpu,track2rig]"
 mashbox run track2rig examples/track2rig/tracks/grison_walk.npz -o grison_rig
@@ -65,7 +67,7 @@ The weights file `track2rig-v2.safetensors` has sha256 `f8a79263dc21d2af078c123f
 
 |  |  |
 |---|---|
-| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/track2rig) |
+| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.10/src/mashbox/models/track2rig) |
 | Guide | [mashbox.gg/docs/models/track2rig](https://mashbox.gg/docs/models/track2rig) |
 | Original model | [mashbox-labs/Track2Rig](https://huggingface.co/mashbox-labs/Track2Rig) by MASHBOX Labs |
 | Setup from a new Google account | [mashbox.gg/docs/google-cloud](https://mashbox.gg/docs/google-cloud) |
