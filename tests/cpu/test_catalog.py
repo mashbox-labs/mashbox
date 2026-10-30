@@ -1077,6 +1077,9 @@ def evidence_problems(reg, ev, repo, work=None):
         if "cpu_check" in g:
             out += cpu_record_problems(g, (ev.get("gguf") or {}).get(g["id"], {}).get("cpu_check"), read, root, repo,
                                        git_dir, f"{g['id']} cpu_check")
+        if g.get("speculation"):        # gate entries `--speculation auto` reads: each from its sealed n-gram runs
+            out += quick_ngram_problems(g, (ev.get("gguf") or {}).get(g["id"], {}), read, root,
+                                        reg.get("engine_kernels") or [])
         for chip, r in g["chips"].items():
             if r.get("status") == "pending":      # nobody ran it there: "Not tested yet", no record claimed
                 continue
@@ -1189,14 +1192,35 @@ def row_file_problems(g, have, what):
                                     ("license", g["license"], cd.get("license"))):
             if ours != theirs:
                 out.append(f"{what}: {field} {ours!r}, the pinned card says {theirs!r}")
-        if link is not None and g["license_link"] != link:
+        repo, rev = card.get("id"), card.get("sha")
+        if link is not None and _card_link(g["license_link"], repo, rev) != _card_link(link, repo, rev):
             out.append(f"{what}: license_link {g['license_link']!r}, the pinned card says {link!r}")
         elif link is None and not str(g["license_link"]).startswith(f"https://huggingface.co/{g['repo']}/"):
             out.append(f"{what}: license_link {g['license_link']!r}, and the pinned card names none, so it is a file "
                        f"of {g['repo']}")
-        if g["base"] not in (base if isinstance(base, list) else [base]):
+        org = str(repo or "").split("/")[0]
+        theirs = [_card_repo(b, org) for b in (base if isinstance(base, list) else [base])]
+        if _card_repo(g["base"], org) not in theirs:
             out.append(f"{what}: base {g['base']!r}, the pinned card says {base!r}")
     return out
+
+
+def _card_link(link, repo, rev):
+    """a licence link by meaning: a URL as it is; a relative path (the card's "LICENSE") is that file of the card's repo
+    at the pinned revision. The licence it names is never changed or compared here."""
+    s = str(link or "")
+    if re.match(r"^[a-z][a-z0-9+.-]*://", s) or not s:
+        return s
+    return f"https://huggingface.co/{repo}/blob/{rev}/{s.lstrip('./')}"
+
+
+def _card_repo(name, org):
+    """a base model by meaning, as an HF repo id: "https://huggingface.co/A/B" -> "A/B"; "B" with no org -> "<org>/B",
+    the card repo's own org; None stays None (the row may name none then)"""
+    if name is None:
+        return None
+    s = re.sub(r"^https?://huggingface\.co/", "", str(name)).strip("/")
+    return s if "/" in s or not org else f"{org}/{s}"
 
 
 # The locked CPU bars a cpu_check row's record must carry, and the files whose code
@@ -1579,7 +1603,7 @@ def quick_files(kind):
 
 
 QUICK_FILES = quick_files("quick-check")
-QUICK_MEASURED = ("decode_tok_s_1_user",)
+QUICK_MEASURED = ("decode_tok_s_1_user", "steady_decode_tok_s_1_user", "steady_condition")   # each optional
 QUICK_DEVICE_RE = re.compile(r"^\S+ \S+ \S+ (TPU .+)$", re.M)      # setup's last check: mashbox, jax, libtpu, device kind
 
 
@@ -1641,6 +1665,191 @@ def _quick_header_problems(g, header, work, chip, what):
     return out
 
 
+QUICK_EXACT_FALLBACK = ("did not load", "have no TPU kernel", "kq planes for")   # the lines ops and gguf.plan print when
+# the kernel package, or a block type of the file, runs on the exact path instead
+
+
+QUICK_BF16_RE = re.compile(r"^mashbox: BF16 \(([0-9.]+)% of the weights\) have no TPU kernel")
+
+
+def _quick_bf16_served(gp, w, text):
+    """BF16 on the native bf16 path (Dense16) counts as served (Dense16 reads a BF16 weight as fast as XLA's own plain
+    read of the same bytes, measured on a v6e chip): True only when the run's one exact-path line names BF16 alone, no
+    other fallback line, its load put 0 bytes on the exact path and more than 0 on Dense16, and the plan's share is
+    Dense16's bytes over the plan's weights (to its rounding: share 0.1 points, weights_gb 0.01 GB)"""
+    lines = [x for x in text.splitlines() if "have no TPU kernel" in x]
+    m = QUICK_BF16_RE.match(lines[0]) if len(lines) == 1 else None
+    nb, gb, share = w.get("native_bf16_bytes"), gp.get("weights_gb"), gp.get("reference_share")
+    if not m or any(x in text for x in QUICK_EXACT_FALLBACK if x != "have no TPU kernel") or w.get("reference_bytes") != 0:
+        return False
+    if (not isinstance(nb, int) or isinstance(nb, bool) or nb <= 0 or isinstance(gb, bool) or not isinstance(gb, (int, float))
+            or gb <= 0 or isinstance(share, bool) or not isinstance(share, (int, float)) or float(m.group(1)) != share):
+        return False
+    est = 100.0 * nb / (gb * 1e9)
+    return abs(share - est) <= 0.05 + est * 0.005 / gb + 1e-9
+
+
+def _host_chips(acc):
+    """the chips of an accelerator's host from its name ("v6e-4" -> 4), else None"""
+    t = str(acc).rsplit("-", 1)[-1]
+    return int(t) if t.isdigit() else None
+
+
+def _quick_bundle_run_problems(g, gp, w, text, krow, chip, run, what):
+    """one run on the kernel package (kernel_path bundle): its plan ran the engine_kernels row's types with 0% of the
+    weights on the exact path, its weights event put 0 bytes on the exact path and more than 0 on a kernel, and it
+    printed no line of a type or the package falling back to the exact path; BF16 on Dense16 counts as served
+    (_quick_bf16_served)"""
+    out = []
+    bf16 = _quick_bf16_served(gp, w, text)
+    kt = sorted(map(str, krow.get("types") or [])) if krow else None
+    if gp.get("kernel_types") != kt:
+        out.append(f"{what}: kernel_path bundle, and {run} ran kernel types {gp.get('kernel_types')}, the engine_kernels "
+                   f"row for {chip} has {kt}")
+    if gp.get("reference_share") != 0.0 and not bf16:
+        out.append(f"{what}: kernel_path bundle, and {run} ran {gp.get('reference_share')}% of the weights on the exact "
+                   "path")
+    if w.get("file") != g["file"] or w.get("reference_bytes") != 0:
+        out.append(f"{what}: kernel_path bundle, and {run} ran {w.get('reference_bytes')} bytes on the exact path "
+                   f"({w.get('file')})")
+    kb = w.get("kernel_bytes")
+    if not isinstance(kb, int) or isinstance(kb, bool) or kb <= 0:
+        out.append(f"{what}: kernel_path bundle, and {run} ran {kb} bytes on a kernel")
+    said = next((x for x in QUICK_EXACT_FALLBACK if x in text), None)
+    if said and not bf16:
+        out.append(f"{what}: kernel_path bundle, and {run} printed '{said}' (a block type or the kernel package on the "
+                   "exact path)")
+    return out
+
+
+def _quick_chips_problems(r, run, bundle, name, what):
+    """the chips a run used: the row's chip_count, else its accelerator's host (v6e-4: 4), is the device count the run
+    recorded (its observer's len(jax.devices())); a row with chip_count, or on the kernel package, needs that count"""
+    want = r["chip_count"] if "chip_count" in r else _host_chips(r.get("accelerator"))
+    nd = run.get("devices")
+    if nd is None:
+        return [f"{what}: {name} recorded no device count (the row's chip count needs the run's own)"] if (
+            "chip_count" in r or bundle) else []
+    if nd != want:
+        return [f"{what}: the row runs on {want} chip{'s' * (want != 1)} of a TPU {r.get('accelerator')}, and {name} "
+                f"saw {nd}"]
+    return []
+
+
+def _quick_compare_problems(cmp, runs, files, loaded, tokens, label, what):
+    """(problems, (ok, full, near, other, first) or None): the compare's rows are the runs' own ids and prompt ids,
+    llama.cpp ran the same prompt ids, each first difference is recomputed from the sealed ids, and the summary is the
+    rows' counts (label names the runs: "" or "ngram: ")"""
+    out = []
+    rows = cmp.get("rows") if isinstance(cmp, dict) else None
+    if not isinstance(rows, list) or [x.get("i") for x in rows] != list(range(QUICK_RUNS)):
+        return [f"{what}: {label}the compare has no row per run (0-{QUICK_RUNS - 1})"], None
+    ok, full, near, other, first = 0, 0, 0, 0, []
+    pre = label.replace(": ", "-") if label else ""
+    for i, (x, run) in enumerate(zip(rows, runs)):
+        calls = run.get("generate_calls") or [{}]
+        c = calls[0] if len(calls) == 1 else {}
+        pid, ours, stop = (c.get("prompt_ids") or [[]])[0], (c.get("ids") or [[]])[0], set(c.get("stop_ids") or [])
+        a, _, b = files[f"ref{i}.ids"].read_text().partition("\n\n")
+        rp, rg = [int(t) for t in a.split()], [int(t) for t in b.split()]
+        if x.get("ids_ours") != ours or x.get("ids_prompt") != pid:
+            out.append(f"{what}: {label}compare row {i} is not {pre}run{i}'s ids")
+        if rp != pid:
+            out.append(f"{what}: {label}prompt {i}: llama.cpp ran other prompt ids than the chip")
+        k = quick_check_first_diff(ours, rg, stop, tokens)
+        if x.get("first_diff") != k:
+            out.append(f"{what}: {label}prompt {i}: the compare says first difference {x.get('first_diff')}, the sealed "
+                       f"ids give {k}")
+        gap = x.get("ref_gap")
+        if k == 0:
+            first.append(i)
+        if k is None:
+            full += 1
+        elif isinstance(gap, (int, float)) and not isinstance(gap, bool) and gap < NEAR_TIE_GAP:
+            near += 1
+        else:
+            other += 1
+        ok += bool(loaded[i])
+    s = cmp.get("summary") or {}
+    said = (s.get("runs_ok"), s.get("full"), s.get("near"), s.get("other"))
+    if said != (ok, full, near, other):
+        out.append(f"{what}: {label}the compare's rows give runs {ok} / full {full} / near {near} / other {other}, its "
+                   f"summary says {said[0]} / {said[1]} / {said[2]} / {said[3]}")
+    return out, (ok, full, near, other, first)
+
+
+def _quick_fail_reason(ok, rows, forced=None):
+    """the reason class of a QUICK that did not pass (catalog.QUICK_FAIL_REASONS), from the sealed compare and forced
+    runs: "run" when fewer than 4 runs (or a forced run) load and print, then "first token" (an other difference at step
+    0), "divergence" (an other one later, or a forced continuation with one), else "near tie" (a token-0 near tie with
+    no forced run)"""
+    forced = forced or {}
+    if ok != QUICK_RUNS or any(not v[0] for v in forced.values()):
+        return "run"
+    other = [x.get("first_diff") for x in rows if x.get("first_diff") is not None and not (
+        isinstance(x.get("ref_gap"), (int, float)) and not isinstance(x.get("ref_gap"), bool)
+        and x["ref_gap"] < NEAR_TIE_GAP)]
+    if 0 in other:
+        return "first token"
+    return "divergence" if other or any(not v[1] for v in forced.values()) else "near tie"
+
+
+def _quick_forced_problems(cmp, runs, files, d, listed, tokens, what):
+    """(problems, {prompt: (loads and prints, 0 other divergences)}) of the sealed forced runs (the token-0 near-tie
+    rule: a token-0 near tie counts as a near tie, the rest checked by one forced run): each
+    tf-run<i> in the seal is of a prompt whose first difference is a token-0 near tie, ran the plain run's argv with no
+    MASHBOX_ variable and llama.cpp's sealed first token appended to the plain prompt ids, and tf-cmp.json's row is [that
+    token] + its ids with the first difference recomputed from llama.cpp's sealed ids"""
+    out, got = [], {}
+    names = sorted({Path(p).name for p in listed if Path(p).parent == Path(os.path.normpath(d))
+                    and Path(p).name.startswith("tf-run") and Path(p).name.endswith(".json")})
+    if not names:
+        return out, got
+    tcmp_p = d / "tf-cmp.json"
+    if os.path.normpath(tcmp_p) not in listed or not tcmp_p.is_file():
+        return [f"{what}: the seal holds forced runs and no tf-cmp.json"], got
+    trows = {x.get("i"): x for x in (json.loads(tcmp_p.read_text()).get("rows") or [])}
+    rows = {x.get("i"): x for x in (cmp.get("rows") or [])}
+    for n in names:
+        i = int(n[6:-5])
+        x = rows.get(i) or {}
+        gap = x.get("ref_gap")
+        if x.get("first_diff") != 0 or isinstance(gap, bool) or not isinstance(gap, (int, float)) or gap >= NEAR_TIE_GAP:
+            out.append(f"{what}: forced run {i}: prompt {i} has no token-0 near tie")
+            continue
+        parts = {e: d / f"tf-run{i}{e}" for e in (".json", ".rc", ".stdout", ".stderr")}
+        if any(os.path.normpath(p) not in listed or not p.is_file() for p in parts.values()):
+            out.append(f"{what}: forced run {i} is not sealed whole (tf-run{i}.json/.rc/.stdout/.stderr)")
+            continue
+        run, plain = json.loads(parts[".json"].read_text()), runs[i]
+        rg = [int(t) for t in files[f"ref{i}.ids"].read_text().partition("\n\n")[2].split()]
+        argv, pargv = [str(a) for a in run.get("argv") or []], [str(a) for a in plain.get("argv") or []]
+        if argv != pargv or run.get("env"):
+            out.append(f"{what}: forced run {i} ran `mashbox {' '.join(argv)}` with {run.get('env')}, the plain run{i} "
+                       f"`mashbox {' '.join(pargv)}`")
+        if run.get("forced") != rg[0]:
+            out.append(f"{what}: forced run {i} appended {run.get('forced')}, llama.cpp's first token is {rg[0]}")
+        calls = run.get("generate_calls") or []
+        c = calls[0] if len(calls) == 1 else {}
+        p0 = ((plain.get("generate_calls") or [{}])[0].get("prompt_ids") or [[]])[0]
+        if (c.get("cli_prompt_ids") or [[]])[0] != p0 or (c.get("prompt_ids") or [[]])[0] != p0 + [rg[0]]:
+            out.append(f"{what}: forced run {i} ran prompt ids {(c.get('prompt_ids') or [[]])[0]}, the plain run{i}'s + "
+                       f"[{rg[0]}] are {p0 + [rg[0]]}")
+        ours = ([rg[0]] + (c.get("ids") or [[]])[0])[:tokens]
+        k = quick_check_first_diff(ours, rg, set(c.get("stop_ids") or []), tokens)
+        t = trows.get(i) or {}
+        if t.get("ids_ours") != ours or t.get("first_diff") != k:
+            out.append(f"{what}: forced run {i}: tf-cmp.json says first difference {t.get('first_diff')}, the sealed ids "
+                       f"give {k}")
+        tg = t.get("ref_gap")
+        agree = k is None or (isinstance(tg, (int, float)) and not isinstance(tg, bool) and tg < NEAR_TIE_GAP)
+        rc = parts[".rc"].read_text().split()[:1]
+        loads = (rc == ["0"] and run.get("rc") in (0, None) and run.get("error") is None and len(calls) == 1
+                 and bool(parts[".stdout"].read_text().strip()))
+        got[i] = (loads, agree)
+    return out, got
+
+
 def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what, work=None):
     """A chip row from a quick-check run, every value read from its seal under the records root, never typed: the
     row and evidence both name the kind; the four runs ran `mashbox run REPO:TAG --prompt <sealed prompt i>
@@ -1660,8 +1869,13 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
     if g["moe"] is True:
         out.append(f"{what}: a mixture of experts passes only with its routed experts on the kernel; a quick-check run "
                    "is the exact path")
-    if r.get("kernel_path") != "exact" or "ctx" in r or "slots" in r:
-        out.append(f"{what}: a quick-check run records no ctx or slots and runs the exact path (kernel_path exact)")
+    bundle = r.get("kernel_path") == "bundle"
+    krow = next((k for k in kernels if chip in (k.get("chips") or [])), None)
+    if r.get("kernel_path") not in ("exact", "bundle") or "ctx" in r or "slots" in r:
+        out.append(f"{what}: a quick-check run records no ctx or slots and runs the exact path or the catalog's kernel "
+                   "package (kernel_path exact or bundle)")
+    if bundle and krow is None:
+        out.append(f"{what}: kernel_path bundle, and no engine_kernels row lists {chip}")
     have = {}
     for key in ("sha256sums", "compare", "file", "plan", "card", "header"):
         have[key] = read(e[key], f"{what} {key}") if key in e else out.append(f"{what}: no {key} in the evidence")
@@ -1674,7 +1888,7 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
         if key in e and listed.get(os.path.normpath(e[key]["path"])) != e[key]["sha256"]:
             out.append(f"{what}: {e[key]['path']} is not in {sums.name} with its sha256")
     files = {}
-    need = quick_files(kind)
+    need = quick_files(kind) + (("kernel-wheel.sha256",) if bundle else ())
     for n in need:
         p = sums.parent / n
         if os.path.normpath(p) not in listed:
@@ -1689,7 +1903,7 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
         out += _quick_header_problems(g, have["header"], work, chip, what)
     if len(files) != len(need):
         return out
-    tag, runs = f"{g['repo']}:{g['tag']}", []
+    tag, runs, loaded = f"{g['repo']}:{g['tag']}", [], []
     for i in range(QUICK_RUNS):
         try:
             run = json.loads(files[f"run{i}.json"].read_text())
@@ -1711,7 +1925,11 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
                 or not files[f"run{i}.stdout"].read_text().strip()):
             out.append(f"{what}: run{i} did not load and print (exit {rc}, rc {run.get('rc')}, error "
                        f"{run.get('error')!r}, {len(calls)} generate calls, {len(ids)} ids)")
-        ev = _quick_events(files[f"run{i}.stderr"].read_text())
+            loaded.append(False)
+        else:
+            loaded.append(True)
+        text = files[f"run{i}.stderr"].read_text()
+        ev = _quick_events(text)
         gf, gi, gp, w = (next(iter(ev.get(k) or []), {}) for k in ("gguf_file", "gguf_identity", "gguf_plan", "weights"))
         if (gf.get("repo"), gf.get("file"), gf.get("revision")) != (g["repo"], g["file"], g["revision"]):
             out.append(f"{what}: run{i} resolved {gf.get('repo')} {gf.get('file')} @ {gf.get('revision')}, the row is "
@@ -1720,11 +1938,15 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
             out.append(f"{what}: run{i} read a file of sha256 {gi.get('sha256')}, the row's is {g['sha256']}")
         if gp.get("arch") != g["arch"]:
             out.append(f"{what}: run{i} ran it as {gp.get('arch')}, the row says {g['arch']}")
-        if gp.get("kernel_types") != []:
-            out.append(f"{what}: kernel_path exact, and run{i} ran kernel types {gp.get('kernel_types')}")
-        if w.get("file") != g["file"] or w.get("kernel_bytes") != 0:
-            out.append(f"{what}: kernel_path exact, and run{i} ran {w.get('kernel_bytes')} bytes on a kernel "
-                       f"({w.get('file')})")
+        if bundle:
+            out += _quick_bundle_run_problems(g, gp, w, text, krow, chip, f"run{i}", what)
+        else:
+            if gp.get("kernel_types") != []:
+                out.append(f"{what}: kernel_path exact, and run{i} ran kernel types {gp.get('kernel_types')}")
+            if w.get("file") != g["file"] or w.get("kernel_bytes") != 0:
+                out.append(f"{what}: kernel_path exact, and run{i} ran {w.get('kernel_bytes')} bytes on a kernel "
+                           f"({w.get('file')})")
+        out += _quick_chips_problems(r, run, bundle, f"run{i}", what)
     setup = files["setup.log"].read_text()
     acc = files["accelerator-type.txt"].read_text().strip()
     if acc != r.get("accelerator"):
@@ -1738,65 +1960,337 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
     py = re.search(r"^Using CPython (\S+)", setup, re.M)
     if py:
         v["python"] = py.group(1)
-    krow = next((k for k in kernels if chip in (k.get("chips") or [])), None)
-    out += pins_problems({"versions": v}, krow, repo, chip, what, exact=True)
+    if bundle and "kernel-wheel.sha256" in files:
+        kw = files["kernel-wheel.sha256"].read_text().split()
+        name = Path(kw[1]).name if len(kw) > 1 else None
+        if krow is None or kw[:1] != [krow.get("sha256")] or name != krow.get("file"):
+            out.append(f"{what}: kernel_path bundle, and the kernel package the runs loaded is {name} sha256 "
+                       f"{kw[0] if kw else None}, the engine_kernels row for {chip} is {(krow or {}).get('file')} sha256 "
+                       f"{(krow or {}).get('sha256')}")
+        elif KERNELS_DIST not in v:     # the engine fetched the catalog's package (not pip-installed): its version
+            v[KERNELS_DIST] = bundle_version(krow)
+    out += pins_problems({"versions": v}, krow, repo, chip, what, exact=not bundle)
     built = files["CODE_SHA"].read_text().split()[:1]
     if built != [e["code"]["commit"]]:
         out.append(f"{what}: the wheel was built from {built[0] if built else None}, the evidence names "
                    f"{e['code']['commit']}")
-    cmp = have["compare"]
-    rows = cmp.get("rows") if isinstance(cmp, dict) else None
-    if not isinstance(rows, list) or [x.get("i") for x in rows] != list(range(QUICK_RUNS)):
-        out.append(f"{what}: the compare has no row per run (0-{QUICK_RUNS - 1})")
-    else:
-        ok, full, near, other, first = 0, 0, 0, 0, []
-        for i, (x, run) in enumerate(zip(rows, runs)):
-            calls = run.get("generate_calls") or [{}]
-            c = calls[0] if len(calls) == 1 else {}
-            pid, ours, stop = (c.get("prompt_ids") or [[]])[0], (c.get("ids") or [[]])[0], set(c.get("stop_ids") or [])
-            a, _, b = files[f"ref{i}.ids"].read_text().partition("\n\n")
-            rp, rg = [int(t) for t in a.split()], [int(t) for t in b.split()]
-            if x.get("ids_ours") != ours or x.get("ids_prompt") != pid:
-                out.append(f"{what}: compare row {i} is not run{i}'s ids")
-            if rp != pid:
-                out.append(f"{what}: prompt {i}: llama.cpp ran other prompt ids than the chip")
-            k = quick_check_first_diff(ours, rg, stop, tokens)
-            if x.get("first_diff") != k:
-                out.append(f"{what}: prompt {i}: the compare says first difference {x.get('first_diff')}, the sealed ids "
-                           f"give {k}")
-            gap = x.get("ref_gap")
-            if k == 0:
-                first.append(i)
-            if k is None:
-                full += 1
-            elif isinstance(gap, (int, float)) and not isinstance(gap, bool) and gap < NEAR_TIE_GAP:
-                near += 1
-            else:
-                other += 1
-            ok += not any(f"run{i} did not load and print" in y for y in out)
-        s = cmp.get("summary") or {}
-        said = (s.get("runs_ok"), s.get("full"), s.get("near"), s.get("other"))
-        if said != (ok, full, near, other):
-            out.append(f"{what}: the compare's rows give runs {ok} / full {full} / near {near} / other {other}, its "
-                       f"summary says {said[0]} / {said[1]} / {said[2]} / {said[3]}")
+    got_cmp = _quick_compare_problems(have["compare"], runs, files, loaded, tokens, "", what)
+    out += got_cmp[0]
+    forced = {}
+    if kind == catalog.QUICK_KIND and got_cmp[1] is not None:
+        bad, forced = _quick_forced_problems(have["compare"], runs, files, sums.parent, listed, tokens, what)
+        out += bad
+    if got_cmp[1] is not None:
+        ok, full, near, other, first = got_cmp[1]
+        first = [i for i in first if forced.get(i) != (True, True)]
         if r.get("status") == "passing" and kind == catalog.QUICK_KIND and first:
-            out.append(f"{what}: a QUICK run passes only with llama.cpp's first token on every prompt (a near tie there "
-                       f"fails); prompt {', '.join(map(str, first))} differ{'s' * (len(first) == 1)} at the first token")
+            out.append(f"{what}: a QUICK run passes only with llama.cpp's first token on every prompt, or a near tie there "
+                       "whose forced run agrees on the rest; prompt "
+                       f"{', '.join(map(str, first))} differ{'s' * (len(first) == 1)} at the first token")
         if r.get("status") == "passing" and (ok != QUICK_RUNS or other):
             out.append(f"{what}: passing needs {QUICK_RUNS}/{QUICK_RUNS} runs that load and print and 0 other divergences; "
                        f"the sealed runs give {ok} and {other} other divergence{'s' * (other != 1)}")
+        if r.get("status") == "failing" and kind == catalog.QUICK_KIND:
+            want = _quick_fail_reason(ok, have["compare"].get("rows") or [], forced)
+            if r.get("reason") != want:
+                out.append(f"{what}: the failing QUICK's reason is {r.get('reason')!r}, the sealed compare gives {want}")
     measured = r.get("measured") or {}
-    if sorted(measured) != list(QUICK_MEASURED):
-        out.append(f"{what}: a quick-check run measures decode_tok_s_1_user only; measured has {sorted(measured)}")
-    try:
-        got = quick_check_decode(runs)
-    except (KeyError, IndexError, TypeError, ZeroDivisionError):
-        out.append(f"{what}: runs 1-3 have no decode timing")
-    else:
-        if measured.get("decode_tok_s_1_user") != got:
-            out.append(f"{what}: models.json says {measured.get('decode_tok_s_1_user')}, the sealed runs 1-3 give {got}")
+    if set(measured) - set(QUICK_MEASURED):
+        out.append(f"{what}: a QUICK row's measured, when present, holds {', '.join(QUICK_MEASURED)} only; measured has "
+                   f"{sorted(measured)}")
+    if "decode_tok_s_1_user" in measured:      # optional; when present, the sealed runs' own number (never shown)
+        try:
+            got = quick_check_decode(runs)
+        except (KeyError, IndexError, TypeError, ZeroDivisionError):
+            out.append(f"{what}: runs 1-3 have no decode timing")
+        else:
+            if measured.get("decode_tok_s_1_user") != got:
+                out.append(f"{what}: models.json says {measured.get('decode_tok_s_1_user')}, the sealed runs 1-3 give "
+                           f"{got}")
+    if {"steady_decode_tok_s_1_user", "steady_condition"} & set(measured) or "steady" in e:
+        out += steady_problems(g, r, e, root, kernels, chip, what)
     if git_dir:
         out += code_problems(repo, git_dir, e["code"]["commit"], g["arch"], what, kernels, chip)
+    return out
+
+
+GGUF_SPEC_KEY_RE = re.compile(r"^(v\d+[a-z]*)-(\d+)$")       # the engine's chip_key: family-devices
+
+
+STEADY_FILES = ("steady.json", "steady.stderr", "steady.rc", "prompt.txt", "kernel-wheel.sha256", "CODE_SHA", "host.txt")
+STEADY_ARGV_TAIL = ["--max-tokens", "8", "--temperature", "0"]
+HOST_TIME = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _host_shared(text, what):
+    """(shared, problems) from a steady record's host.txt: one "observed-from T" (when the host's process log started),
+    one "window T0 T1" (the run's start and end) and one "other T0 T1 ..." line per other process that held a chip of the
+    host (the log's first sighting minus its elapsed time, to its last sighting); shared when an other line overlaps the
+    window. A run the log did not watch from its start, with no overlap seen, proves neither condition (a problem)."""
+    seen, window, others = None, None, []
+    for line in text.splitlines():
+        f = line.split()
+        try:
+            if not f:
+                continue
+            if f[0] == "observed-from" and len(f) == 2:
+                seen = datetime.datetime.strptime(f[1], HOST_TIME)
+            elif f[0] == "window" and len(f) == 3:
+                window = tuple(datetime.datetime.strptime(x, HOST_TIME) for x in f[1:])
+            elif f[0] == "other" and len(f) >= 3:
+                others.append(tuple(datetime.datetime.strptime(x, HOST_TIME) for x in f[1:3]))
+            else:
+                return None, [f"{what}: host.txt line {line!r} is not observed-from, window or other"]
+        except ValueError:
+            return None, [f"{what}: host.txt line {line!r} has a time that is not {HOST_TIME}"]
+    if seen is None or window is None or window[0] > window[1]:
+        return None, [f"{what}: host.txt needs one observed-from and one window (start no later than end)"]
+    shared = any(a <= window[1] and b >= window[0] for a, b in others)
+    if not shared and seen > window[0]:
+        return None, [f"{what}: the host log did not watch the steady run from its start (from {seen:%H:%M:%S}, the run "
+                      f"started {window[0]:%H:%M:%S}) and saw no other job: neither condition is proven"]
+    return shared, []
+
+
+def steady_problems(g, r, e, root, kernels, chip, what):
+    """A QUICK row's steady-decode speed (measured.steady_decode_tok_s_1_user with its steady_condition), every value read
+    from its own seal (the evidence's <chip>.steady.sha256sums), never typed: one `mashbox run REPO:TAG --prompt
+    <prompt.txt> --max-tokens 8 --temperature 0` process on one chip that exited 0, whose engine ran one warm request and
+    then STEADY_ROUNDS timed requests of STEADY_TOKENS new tokens each at 1 user, greedy, the same ids every round; its
+    events name the row's repo, file, revision, sha256 and arch with every weight on the kernel package (as a kernel-path
+    QUICK run), and the package it loaded is the catalog's engine_kernels row for the chip; each round's ms per new token
+    is its decode_s / (new tokens - 1); the number is 1000 / their median (2 decimals) and their spread (max / min - 1) is
+    at most STEADY_SPREAD; the condition is the one the sealed host log gives (_host_shared); its code commit is the
+    evidence's. The steady run's code is recorded, not held to this tree: a speed is a measurement of the version it ran
+    on, never a gate."""
+    out, m, se = [], r.get("measured") or {}, e.get("steady")
+    if not isinstance(se, dict) or not isinstance(se.get("sha256sums"), dict):
+        return [f"{what}: a steady-decode speed needs its steady record in the evidence (steady.sha256sums)"]
+    sums = Path(se["sha256sums"].get("path", ""))
+    if not sums.is_file() or _sha(sums) != se["sha256sums"].get("sha256"):
+        return [f"{what}: the steady record {sums} is not there with its sha256"]
+    out += seal_problems(sums, root, what)
+    listed, files = _sums(sums), {}
+    for n in STEADY_FILES:
+        q = sums.parent / n
+        if os.path.normpath(q) not in listed:
+            out.append(f"{what}: steady {n} is not in {sums}")
+        elif q.is_file() and _sha(q) == listed[os.path.normpath(q)]:
+            files[n] = q
+    if len(files) != len(STEADY_FILES):
+        return out
+    try:
+        st = json.loads(files["steady.json"].read_text())
+    except ValueError:
+        return out + [f"{what}: steady.json is not JSON"]
+    tag = f"{g['repo']}:{g['tag']}"
+    if st.get("model") != tag or st.get("argv_tail") != STEADY_ARGV_TAIL:
+        out.append(f"{what}: the steady run ran `mashbox run {st.get('model')} --prompt <prompt.txt> "
+                   f"{' '.join(map(str, st.get('argv_tail') or []))}`; a steady run is `mashbox run {tag} --prompt "
+                   f"<prompt.txt> {' '.join(STEADY_ARGV_TAIL)}`")
+    if st.get("devices") != r.get("chip_count", _host_chips(r.get("accelerator"))):
+        out.append(f"{what}: the steady run saw {st.get('devices')} devices, the row ran on "
+                   f"{r.get('chip_count', _host_chips(r.get('accelerator')))}")
+    if files["steady.rc"].read_text().split() != ["rc", "0"]:
+        out.append(f"{what}: the steady run did not exit 0 ({files['steady.rc'].read_text().strip()!r})")
+    rounds, ms = st.get("rounds") or [], []
+    try:
+        for x in rounds:
+            if abs(x["ms_per_token"] - 1e3 * x["decode_s"] / (x["new_tokens"] - 1)) > 1e-3:
+                out.append(f"{what}: steady round {x.get('round')}'s ms_per_token {x['ms_per_token']} is not its "
+                           "decode_s / (new tokens - 1)")
+            ms.append(x["ms_per_token"])
+        ids = {tuple(x["ids"]) for x in rounds}
+        tokens = [x["new_tokens"] for x in rounds]
+    except (KeyError, TypeError, ZeroDivisionError):
+        return out + [f"{what}: the steady rounds lack decode_s, new_tokens, ms_per_token or ids"]
+    if tokens != [catalog.STEADY_TOKENS] * catalog.STEADY_ROUNDS:
+        out.append(f"{what}: a steady run times {catalog.STEADY_ROUNDS} requests of {catalog.STEADY_TOKENS} new tokens "
+                   f"after its warm one; the record's rounds have {tokens}")
+    if len(ids) != 1:
+        out.append(f"{what}: the steady rounds did not give the same ids every round (greedy, 1 user)")
+    if ms and min(ms) > 0:
+        tok, spread = round(1e3 / statistics.median(ms), 2), max(ms) / min(ms) - 1
+        if m.get("steady_decode_tok_s_1_user") != tok:
+            out.append(f"{what}: models.json says {m.get('steady_decode_tok_s_1_user')} steady tok/s, the sealed steady "
+                       f"rounds give {tok}")
+        if spread > catalog.STEADY_SPREAD:
+            out.append(f"{what}: the steady rounds spread {spread:.2%} (max / min ms per token), above the "
+                       f"{catalog.STEADY_SPREAD:.0%} bar: no steady number")
+    text = files["steady.stderr"].read_text()
+    ev = _quick_events(text)
+    gf, gi, gp, w = (next(iter(ev.get(k) or []), {}) for k in ("gguf_file", "gguf_identity", "gguf_plan", "weights"))
+    if (gf.get("repo"), gf.get("file"), gf.get("revision")) != (g["repo"], g["file"], g["revision"]):
+        out.append(f"{what}: the steady run resolved {gf.get('repo')} {gf.get('file')} @ {gf.get('revision')}, the row is "
+                   f"{g['repo']} {g['file']} @ {g['revision']}")
+    if gi.get("sha256") != g["sha256"]:
+        out.append(f"{what}: the steady run read a file of sha256 {gi.get('sha256')}, the row's is {g['sha256']}")
+    if gp.get("arch") != g["arch"]:
+        out.append(f"{what}: the steady run ran it as {gp.get('arch')}, the row says {g['arch']}")
+    krow = next((k for k in kernels if chip in (k.get("chips") or [])), None)
+    out += _quick_bundle_run_problems(g, gp, w, text, krow, chip, "the steady run", what)
+    kw = files["kernel-wheel.sha256"].read_text().split()
+    name = Path(kw[1]).name if len(kw) > 1 else None
+    if krow is None or kw[:1] != [krow.get("sha256")] or name != krow.get("file"):
+        out.append(f"{what}: the steady run loaded the kernel package {name} sha256 {kw[0] if kw else None}, the "
+                   f"engine_kernels row for {chip} is {(krow or {}).get('file')} sha256 {(krow or {}).get('sha256')}")
+    if files["CODE_SHA"].read_text().split()[:1] != [(se.get("code") or {}).get("commit")]:
+        out.append(f"{what}: the steady run's code is {files['CODE_SHA'].read_text().split()[:1]}, the evidence names "
+                   f"{(se.get('code') or {}).get('commit')}")
+    shared, bad = _host_shared(files["host.txt"].read_text(), what)
+    out += bad
+    if shared is not None:
+        want = catalog.STEADY_CONDITIONS["shared" if shared else "alone"]
+        if m.get("steady_condition") != want:
+            out.append(f"{what}: steady_condition {m.get('steady_condition')!r}, the sealed host log gives {want!r}")
+    return out
+
+
+def quick_ngram_problems(g, e_row, read, root, kernels):
+    """A gguf[] row's speculation gate entries (speculation.ngram.<engine chip key>), each read from its seal, never
+    typed: the evidence names the seal of the row's own QUICK chip record on that chip family (one folder holds the
+    plain runs and the n-gram runs) and its n-gram compare; the entry's record is gguf/<row id>/ngram/<chip key> with
+    that seal's SHA256SUMS sha256; the four n-gram runs ran `mashbox run REPO:TAG --prompt <sealed prompt i> --speculation
+    ngram --max-tokens 32 --temperature 0` with no MASHBOX_ variable, loaded and printed, read the row's file on the
+    kernel package (kernel_path bundle, as the plain runs), ran the n-gram drafter at the k_table's 1-row k, on the
+    entry's chip key, component set and speculation step version; the compare's rows are their ids against llama.cpp's
+    sealed ids. Its status is what the runs give: passed only with the QUICK bars (4/4 load and print, llama.cpp's first
+    token on every prompt, 0 other divergences), the row's plain kernel-path QUICK on that chip passing, and the n-gram
+    decode (runs 1-3) at least the plain one."""
+    out = []
+    tag = f"{g['repo']}:{g['tag']}"
+    for kind, per in (g.get("speculation") or {}).items():
+        for ck, ent in (per or {}).items():
+            what = f"{g['id']} {kind} {ck}"
+            e = (((e_row or {}).get("speculation") or {}).get(kind) or {}).get(ck)
+            if e is None:
+                out.append(f"{what}: no evidence entry")
+                continue
+            m = GGUF_SPEC_KEY_RE.match(str(ck))
+            if kind != "ngram" or not m:
+                out.append(f"{what}: a GGUF row's gate entries are ngram, keyed by the engine's chip key")
+                continue
+            fam = m.group(1)
+            r, pe = (g.get("chips") or {}).get(fam) or {}, (e_row or {}).get(fam) or {}
+            if any(k not in e for k in ("sha256sums", "compare")):
+                out.append(f"{what}: the evidence needs sha256sums and compare")
+                continue
+            sums, cmp = read(e["sha256sums"], f"{what} sha256sums"), read(e["compare"], f"{what} compare")
+            if sums is None:
+                continue
+            listed = _sums(sums)
+            out += seal_problems(sums, root, what)
+            if ent.get("record_sha256") != e["sha256sums"]["sha256"]:
+                out.append(f"{what}: record_sha256 {ent.get('record_sha256')}, the record's SHA256SUMS is "
+                           f"{e['sha256sums']['sha256']}")
+            if ent.get("record") != f"gguf/{g['id']}/{kind}/{ck}":
+                out.append(f"{what}: the record is {ent.get('record')}, the entry's own is gguf/{g['id']}/{kind}/{ck}")
+            same_seal = (pe.get("sha256sums") or {}).get("path") == e["sha256sums"]["path"]
+            if not same_seal:
+                out.append(f"{what}: the n-gram runs are not sealed with the row's {fam} chip record (one folder holds "
+                           "the plain and the n-gram runs)")
+            if os.path.normpath(e["compare"]["path"]) != os.path.normpath(sums.parent / "ngram-cmp.json") or \
+                    listed.get(os.path.normpath(e["compare"]["path"])) != e["compare"]["sha256"]:
+                out.append(f"{what}: the compare is not the seal's ngram-cmp.json with its sha256")
+            files = {}
+            need = ([f"ngram-run{i}{x}" for i in range(QUICK_RUNS) for x in (".json", ".rc", ".stdout", ".stderr")]
+                    + [f"{x}{i}{y}" for i in range(QUICK_RUNS) for x, y in (("prompt", ".txt"), ("ref", ".ids"))])
+            for n in need:
+                q = sums.parent / n
+                if os.path.normpath(q) not in listed:
+                    out.append(f"{what}: {n} is not in {sums.name}")
+                elif q.is_file() and _sha(q) == listed[os.path.normpath(q)]:
+                    files[n] = q
+            if len(files) != len(need) or not isinstance(cmp, dict):
+                continue
+            krow = next((k for k in kernels if fam in (k.get("chips") or [])), None)
+            kt = ent.get("k_table") or {}
+            runs, loaded, dks, steps, csss = [], [], set(), set(), set()
+            for i in range(QUICK_RUNS):
+                name = f"ngram-run{i}"
+                try:
+                    run = json.loads(files[f"{name}.json"].read_text())
+                except ValueError:
+                    out.append(f"{what}: {name}.json is not JSON")
+                    break
+                runs.append(run)
+                argv, env = [str(x) for x in run.get("argv") or []], run.get("env")
+                prompt = files[f"prompt{i}.txt"].read_text()
+                want = ["run", tag, "--prompt", prompt, "--speculation", "ngram", "--max-tokens",
+                        str(catalog.QUICK_TOKENS), "--temperature", "0"]
+                if argv != want:
+                    out.append(f"{what}: {name} ran `mashbox {' '.join(argv)}`; an n-gram gate run is `mashbox run {tag} "
+                               f"--prompt <prompt{i}.txt> --speculation ngram --max-tokens {catalog.QUICK_TOKENS} "
+                               "--temperature 0`")
+                if env:
+                    out.append(f"{what}: {name} ran with {' '.join(f'{k}={v}' for k, v in sorted(dict(env).items()))}; "
+                               "a gate run sets no MASHBOX_ variable")
+                calls = run.get("generate_calls") or []
+                ids = (calls[0].get("ids") or [[]])[0] if len(calls) == 1 else []
+                rc = files[f"{name}.rc"].read_text().split()[:1]
+                good = not (rc != ["0"] or run.get("rc") not in (0, None) or run.get("error") is not None
+                            or len(calls) != 1 or not ids or not files[f"{name}.stdout"].read_text().strip())
+                if not good:
+                    out.append(f"{what}: {name} did not load and print (exit {rc}, rc {run.get('rc')}, error "
+                               f"{run.get('error')!r}, {len(calls)} generate calls, {len(ids)} ids)")
+                loaded.append(good)
+                text = files[f"{name}.stderr"].read_text()
+                ev = _quick_events(text)
+                gi, gp, w, sp, dp = (next(iter(ev.get(k) or []), {}) for k in (
+                    "gguf_identity", "gguf_plan", "weights", "speculation", "deployment"))
+                if gi.get("sha256") != g["sha256"]:
+                    out.append(f"{what}: {name} read a file of sha256 {gi.get('sha256')}, the row's is {g['sha256']}")
+                out += _quick_bundle_run_problems(g, gp, w, text, krow, fam, name, what)
+                if (sp.get("used"), sp.get("method"), sp.get("gated")) != (True, "ngram", False):
+                    out.append(f"{what}: {name} ran speculation {sp.get('method')} (used {sp.get('used')}, gated "
+                               f"{sp.get('gated')}), not the forced n-gram drafter")
+                dks.add(sp.get("draft_k"))
+                steps.add(sp.get("spec_step_version"))
+                csss.add(dp.get("component_set_sha"))
+                if run.get("chip_key") != ck:
+                    out.append(f"{what}: {name} ran on chip key {run.get('chip_key')}, the entry is {ck}")
+            if len(runs) != QUICK_RUNS:
+                continue
+            if dks != {kt.get("1")}:
+                out.append(f"{what}: the k_table's 1-row k {kt.get('1')} is not the runs' draft_k "
+                           f"{' / '.join(map(str, sorted(dks, key=str)))}")
+            if steps != {ent.get("spec_step_version")}:
+                out.append(f"{what}: the entry says speculation step version {ent.get('spec_step_version')}, the runs "
+                           f"measured speculation step version {' / '.join(map(str, sorted(steps, key=str)))}")
+            if csss != {ent.get("component_set_sha")}:
+                out.append(f"{what}: the entry names component set {ent.get('component_set_sha')}, the runs' component "
+                           f"set is {' / '.join(map(str, sorted(csss, key=str)))}")
+            got, counts = _quick_compare_problems(cmp, runs, files, loaded, catalog.QUICK_TOKENS, "ngram: ", what)
+            out += got
+            if counts is None:
+                continue
+            ok, full, near, other, first = counts
+            why = []
+            if ok != QUICK_RUNS:
+                why.append(f"{ok}/{QUICK_RUNS} runs load and print")
+            if other:
+                why.append(f"{other} other divergence{'s' * (other != 1)}")
+            if first:
+                why.append(f"prompt {', '.join(map(str, first))} differ{'s' * (len(first) == 1)} at the first token")
+            try:        # the plain runs sealed in the same folder (same_seal), timed as the n-gram runs are
+                plain = quick_check_decode([json.loads((sums.parent / f"run{i}.json").read_text())
+                                            for i in range(QUICK_RUNS)])
+            except (OSError, ValueError, KeyError, IndexError, TypeError, ZeroDivisionError):
+                plain = None
+            if not (r.get("status") == "passing" and r.get("kernel_path") == "bundle" and same_seal
+                    and isinstance(plain, (int, float))):
+                why.append(f"the row's plain kernel-path QUICK on {fam} does not pass")
+            try:
+                fast = quick_check_decode(runs)
+            except (KeyError, IndexError, TypeError, ZeroDivisionError):
+                fast = None
+                why.append("n-gram runs 1-3 have no decode timing")
+            if fast is not None and isinstance(plain, (int, float)) and fast < plain:
+                why.append(f"n-gram {fast} tok/s below plain {plain}")
+            verdict = "not_passed" if why else "passed"
+            if ent.get("status") != verdict:
+                out.append(f"{what}: status {ent.get('status')}, and the sealed runs give {verdict}"
+                           + (f" ({'; '.join(why)})" if why else ""))
     return out
 
 
@@ -2650,6 +3144,56 @@ def test_record_guard_names_each_bad_form(tmp_path, form):
     if form in MOE_RECORD_FORMS and _moe_record() is None:
         pytest.skip("maintainers only: internal/moe_record.py, the MoE record validator, is not in this tree")
     reg, ev = _fake_records(tmp_path, edit)
+    found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(words in x for x in found), found
+
+
+def _card_meaning(card_link=..., card_base=..., row=None):
+    """an edit: the pinned card states license_link card_link / base_model card_base (None drops the field, ... leaves
+    it), and the row's fields are updated with row"""
+    def card(c):
+        for k, v in (("license_link", card_link), ("base_model", card_base)):
+            if v is None:
+                c["cardData"].pop(k, None)
+            elif v is not ...:
+                c["cardData"][k] = v
+    edits = [_in_place("card", card), _in_place("reg", lambda r: r["gguf"][0].update(row or {}))]
+    return _both(*edits)
+
+
+REV0 = "0" * 40
+CARD_MEANING_GOOD = {
+    "a relative licence link, resolved at the pinned revision": dict(
+        card_link="LICENSE", row={"license_link": f"https://huggingface.co/someone/Tiny-Qwen3-GGUF/blob/{REV0}/LICENSE"}),
+    "a base model named without its org, the card repo's own": dict(card_base="Tiny-Qwen3",
+                                                                    row={"base": "someone/Tiny-Qwen3"}),
+    "a base model given as its HF URL": dict(card_base="https://huggingface.co/Qwen/Tiny-Qwen3", row={"base": "Qwen/Tiny-Qwen3"}),
+}
+CARD_MEANING_BAD = {
+    "a relative licence link at another revision": (dict(card_link="LICENSE", row={
+        "license_link": "https://huggingface.co/someone/Tiny-Qwen3-GGUF/blob/main/LICENSE"}), "the pinned card says 'LICENSE'"),
+    "a relative licence link to another file": (dict(card_link="LICENSE.md", row={
+        "license_link": f"https://huggingface.co/someone/Tiny-Qwen3-GGUF/blob/{REV0}/LICENSE"}), "the pinned card says 'LICENSE.md'"),
+    "a base model of another org": (dict(card_base="Tiny-Qwen3", row={"base": "Qwen/Tiny-Qwen3"}),
+                                    "base 'Qwen/Tiny-Qwen3', the pinned card says 'Tiny-Qwen3'"),
+    "a base model the card and the header do not name": (dict(card_base=None, row={"base": "Qwen/Tiny-Qwen3"}),
+                                                         "base 'Qwen/Tiny-Qwen3', the pinned card says None"),
+}
+
+
+@pytest.mark.parametrize("form", sorted(CARD_MEANING_GOOD))
+def test_record_guard_compares_card_fields_by_meaning(tmp_path, form):
+    """the row's licence link and base are the pinned card's by meaning, never by spelling: a relative licence link is
+    a file of the card's repo at the pinned revision, a base_model with no org is a repo of the card repo's own org, an
+    HF URL is its repo id. The licence itself is compared as the card states it."""
+    reg, ev = _fake_records(tmp_path, _card_meaning(**CARD_MEANING_GOOD[form]))
+    assert not [x for x in evidence_problems(reg, ev, ROOT, tmp_path / "fit") if "card" in x], form
+
+
+@pytest.mark.parametrize("form", sorted(CARD_MEANING_BAD))
+def test_record_guard_refuses_card_fields_of_another_meaning(tmp_path, form):
+    kw, words = CARD_MEANING_BAD[form]
+    reg, ev = _fake_records(tmp_path, _card_meaning(**kw))
     found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
     assert any(words in x for x in found), found
 
@@ -3561,6 +4105,24 @@ def test_a_cpu_only_row_needs_a_passing_check_and_every_chip_pending_with_its_re
     assert any("cpu_check must have" in x for x in problems(with_row(cpu_row(cpu_check={"status": "passing"}))))
 
 
+def test_a_cpu_checked_row_whose_chip_quick_failed_says_so():
+    """a CPU-checked row whose chip QUICK ran and did not pass carries that failing QUICK (record_kind quick, the reason
+    class its sealed compare gives) and reads "TPU: QUICK check did not pass": never "Not tested yet", never a speed"""
+    fail = dict(QUICK_K, status="failing", reason="divergence", measured={"decode_tok_s_1_user": 9.5})
+    row = cpu_row(chips={"v6e": fail})
+    assert problems(with_row(row, bundle=BUNDLE)) == []
+    assert catalog.level(row) == "Checked on CPU" and catalog.chips_run(row) == [] and catalog.quick_line(row) is None
+    assert catalog.tpu_line(row) == "TPU: QUICK check did not pass"
+    r = next(x for x in catalog.gguf_rows(with_row(row, bundle=BUNDLE)) if x["id"] == ROW["id"])
+    assert (r["tpu"], r["tok_s_1_user"]) == ("TPU: QUICK check did not pass", None)
+    assert catalog.QUICK_FAIL_REASONS == SC.QUICK_FAIL_REASONS and set(catalog.QUICK_FAIL_REASONS) == {
+        "run", "first token", "divergence", "near tie"}
+    for bad in (dict(fail, reason=None), dict(fail, reason="slow"), {k: v for k, v in fail.items() if k != "reason"},
+                {k: v for k, v in fail.items() if k != "record_kind"}):
+        assert problems(with_row(cpu_row(chips={"v6e": bad}), bundle=BUNDLE)), bad
+    assert problems(with_row(cpu_row(cpu_check=dict(CPU, status="failing"), chips={"v6e": fail}), bundle=BUNDLE))
+
+
 def test_a_mixture_of_experts_is_never_listed_from_a_cpu_check():
     moe = cpu_row(moe=True, params_b={"total": 30.0, "active": 3.0})
     assert any("mixture of experts is only listed" in x for x in problems(with_row(moe)))
@@ -3745,6 +4307,16 @@ QUICK_DECODE = 14.2
 # a QUICK run (record_kind "quick") is 32 tokens: (32 + 14 + 32) / (2.0 + 1.6 + 2.4) = 13.0
 QUICK_TIMING_Q = [(3, 100.0), (32, 2.0), (14, 1.6), (32, 2.4)]
 QUICK_DECODE_Q = 13.0
+# its `--speculation ngram` runs (same ids): (32 + 14 + 32) / (1.0 + 0.8 + 1.2) = 26.0
+QUICK_TIMING_N = [(3, 90.0), (32, 1.0), (14, 0.8), (32, 1.2)]
+QUICK_DECODE_N = 26.0
+# the engine_kernels row a bundle QUICK ran (types: the fixture's quantized types), the n-gram runs' component set, the
+# engine's speculation step version and the gate entry's k_table: k 3 (the runs' draft_k) at the 1-row bucket it
+# measured, 0 at every other bucket the engine has (engine._rows)
+QUICK_KROW = dict(BUNDLE, sha256="c" * 64)
+QUICK_CSS = "f" * 64
+QUICK_SPEC_STEP = __import__("mashbox.runtime.spec_step", fromlist=["x"]).SPEC_STEP_VERSION
+QUICK_K_TABLE = {"1": 3, "4": 0, "16": 0, "64": 0, "256": 0}
 
 
 def _quick_ids(i, timing=QUICK_TIMING, top=64):
@@ -3759,66 +4331,95 @@ def _quick_ids(i, timing=QUICK_TIMING, top=64):
     return pid, ours, ref
 
 
-def _fake_quick_check(base, edit=None, kind="quick-check"):
+STEADY_MS = [10.0, 10.0008, 9.9992, 10.0, 10.0016]     # ms per new token of the 5 timed rounds: median 10.0
+STEADY_TOK = 100.0
+STEADY_HOST = "observed-from 2026-10-30T15:00:00Z\nwindow 2026-10-30T15:30:00Z 2026-10-30T15:31:00Z\n"
+
+
+def _fake_quick_check(base, edit=None, kind="quick-check", path="exact", ngram=False, forced=None, steady=None):
     """A records root under base with one quick-check chip run of the qwen3-kquant fixture: the four runs (json, exit
     code, stdout, stderr events), the compare, llama.cpp's ids, the prompts, the chip's setup log, pip freeze,
     accelerator type and code commit, the file/plan/card/header of the row, one SHA256SUMS seal, and the git repo of the
     code it ran. edit(part, value) changes a part before it is written ("run0".."run3", "rc0".., "stderr0"..,
-    "cmp", "setup", "freeze", "accelerator", "code_sha", "prompt0".., "ref0".., "seal" (lines), "row", "reg", "ev")."""
+    "cmp", "setup", "freeze", "accelerator", "code_sha", "prompt0".., "ref0".., "seal" (lines), "row", "reg", "ev").
+    path="bundle": the runs ran on the engine_kernels row's package (QUICK_KROW, fetched by the engine from the catalog:
+    kernel-wheel.sha256 sealed), on one chip of a v6e-4 host (chip_count 1; each run records the engine's chip key and
+    device count). ngram=True: the same folder also seals the four `--speculation ngram` runs ("ngram-run0".., their
+    compare "ngram_cmp") and the row carries their gate entry (edit "spec"). forced={i: {"token", "ids", "gap"}}: the
+    same folder also seals prompt i's forced run (the token-0 near-tie rule: the plain argv, `token` appended to the prompt ids,
+    `ids` its output; edit "tfrun<i>") and their compare tf-cmp.json (gap: llama.cpp's gap at a first difference).
+    steady="alone"|"shared" (path bundle): the row's number is its steady-decode speed with that condition, from its own
+    sealed record in steady-row/ (edit "steady_json", "steady_stderr", "steady_rc", "steady_prompt", "steady_wheel",
+    "steady_code", "host", "steady_seal"); "shared" adds an other-job line over the run's window to host.txt."""
     edit = edit or (lambda part, v: v)
     top, tool = QUICK_KINDS[kind]
     timing, decode = (QUICK_TIMING, QUICK_DECODE) if kind == "quick-check" else (QUICK_TIMING_Q, QUICK_DECODE_Q)
+    bundle = path == "bundle"
     root = base / "records"
     d = root / "p1row"
     d.mkdir(parents=True)
     from mashbox.gguf import File
     fx = File(str(FIXTURE))
     code = {f: (ROOT / f).read_bytes() for f in gguf_code_files(ROOT, fx.arch) + [ARCHS_SRC]}
-    code["models.json"] = json.dumps({"engine_kernels": []}).encode()
+    krow = dict(QUICK_KROW, types=sorted(t for t in fx.census()[0] if t not in ("F32", "F16", "BF16")))
+    code["models.json"] = json.dumps({"engine_kernels": [krow] if bundle else []}).encode()
     code["pyproject.toml"] = (ROOT / "pyproject.toml").read_bytes()
     for f, data in code.items():
         (root / "code" / f).parent.mkdir(parents=True, exist_ok=True)
         (root / "code" / f).write_bytes(data)
     commit = _commit(root / "code")
+    on = ({"accelerator": "v6e-4", "chip_count": 1, "kernel_path": "bundle"} if bundle else
+          {"accelerator": "v6e-1", "kernel_path": "exact"})
+    measured = ({"steady_decode_tok_s_1_user": STEADY_TOK, "steady_condition": catalog.STEADY_CONDITIONS[steady]}
+                if steady else {"decode_tok_s_1_user": decode})
     row = edit("row", dict(ROW, arch=fx.arch, bytes=FIXTURE.stat().st_size, types=sorted(fx.census()[0]), chips={
-        "v6e": {"status": "passing", "accelerator": "v6e-1", "kernel_path": "exact", "record_kind": kind,
-                "measured": {"decode_tok_s_1_user": decode}}}))
+        "v6e": {"status": "passing", **on, "record_kind": kind, "measured": measured}}))
     tag = f"{row['repo']}:{row['tag']}"
     parts, rows = {}, []
-    for i in range(4):
-        pid, ours, ref = _quick_ids(i, timing, top)
-        n, dec = timing[i]
-        parts[f"prompt{i}"] = QUICK_PROMPTS[i]
-        parts[f"run{i}"] = {"argv": ["run", tag, "--prompt", QUICK_PROMPTS[i], "--max-tokens", str(top), "--temperature", "0"],
-                            "env": {}, "rc": None, "error": None, "wall_s": dec + 12.0, "generate_calls": [{
-                                "call_start_s": 11.0, "call_end_s": 11.0 + dec, "prompt_ids": [pid], "ids": [ours],
-                                "timing": {"prefill_s": 0.5, "decode_s": dec, "decode_calls": 9, "new_tokens": n,
-                                           "sampled": False}, "max_new": top, "stop_ids": QUICK_STOP, "samp": None}]}
-        parts[f"rc{i}"] = f"0 {dec + 12.5}\n"
-        parts[f"stdout{i}"] = "some text\n"
-        parts[f"stderr{i}"] = "\n".join(json.dumps(x) for x in (
-            {"event": "gguf_file", "repo": row["repo"], "file": row["file"], "shards": 1, "gb": 0.0,
-             "revision": row["revision"], "rule": f"tag {row['tag']}"},
-            {"event": "gguf_plan", "arch": row["arch"], "layers": 2, "kernel_types": [], "reference_share": 99.9,
-             "chip": None},
-            {"event": "weights", "file": row["file"], "kernel_bytes": 0, "reference_bytes": 1000},
-            {"event": "gguf_identity", "sha256": row["sha256"], "shards": 1},
-            {"event": "done", "new_tokens": n, "prefill_s": 0.5, "decode_s": dec})) + "\n"
-        parts[f"ref{i}"] = " ".join(map(str, pid)) + "\n\n" + " ".join(map(str, ref)) + "\n"
-        k = 31 if i == 3 else None
-        rows.append({"i": i, "rc": None, "process_rc": 0, "wall_s": dec + 12.5, "error": None, "printed_chars": 9,
-                     "generate_calls": 1, "loads_and_prints": True, "ids_prompt": pid, "ids_ours": ours,
-                     "ids_ref": ref, "ref_prompt_equal": True, "compared": len(ours), "first_diff": k,
-                     "ref_gap": 0.21 if k is not None else None, "near_tie": k is not None,
-                     "kind": "near" if k is not None else "full"})
-    parts["cmp"] = {"summary": {"runs_ok": 4, "full": 3, "near": 1, "other": 0, "PASS": True},
-                    "bar": f"{top} greedy tokens vs llama.cpp", "rows": rows}
+    for pre, tm, flags in (("", timing, []),) + ((("ngram-", QUICK_TIMING_N, ["--speculation", "ngram"]),) if ngram else ()):
+        rows = []
+        for i in range(4):
+            pid, ours, ref = _quick_ids(i, timing, top)
+            n, dec = tm[i]
+            parts[f"prompt{i}"] = QUICK_PROMPTS[i]
+            parts[f"{pre}run{i}"] = {"argv": ["run", tag, "--prompt", QUICK_PROMPTS[i], *flags, "--max-tokens", str(top),
+                                              "--temperature", "0"],
+                                     **({"chip_key": "v6e-1", "devices": 1} if bundle else {}),
+                                     "env": {}, "rc": None, "error": None, "wall_s": dec + 12.0, "generate_calls": [{
+                                         "call_start_s": 11.0, "call_end_s": 11.0 + dec, "prompt_ids": [pid], "ids": [ours],
+                                         "timing": {"prefill_s": 0.5, "decode_s": dec, "decode_calls": 9, "new_tokens": n,
+                                                    "sampled": False}, "max_new": top, "stop_ids": QUICK_STOP, "samp": None}]}
+            parts[f"{pre}rc{i}"] = f"0 {dec + 12.5}\n"
+            parts[f"{pre}stdout{i}"] = "some text\n"
+            parts[f"{pre}stderr{i}"] = "\n".join(json.dumps(x) for x in (
+                {"event": "gguf_file", "repo": row["repo"], "file": row["file"], "shards": 1, "gb": 0.0,
+                 "revision": row["revision"], "rule": f"tag {row['tag']}"},
+                {"event": "gguf_plan", "arch": row["arch"], "layers": 2,
+                 "kernel_types": krow["types"] if bundle else [], "reference_share": 0.0 if bundle else 99.9,
+                 "chip": None},
+                {"event": "weights", "file": row["file"], "kernel_bytes": 900 if bundle else 0,
+                 "reference_bytes": 0 if bundle else 1000},
+                *([{"event": "speculation", "used": True, "method": "ngram", "draft_k": 3, "gated": False,
+                    "reason": "--speculation ngram", "spec_step_version": QUICK_SPEC_STEP}] if flags else []),
+                {"event": "gguf_identity", "sha256": row["sha256"], "shards": 1},
+                {"event": "deployment", "deployment_id": "d" * 64, "component_set_sha": QUICK_CSS if flags else "e" * 64},
+                {"event": "done", "new_tokens": n, "prefill_s": 0.5, "decode_s": dec})) + "\n"
+            parts[f"ref{i}"] = " ".join(map(str, pid)) + "\n\n" + " ".join(map(str, ref)) + "\n"
+            k = 31 if i == 3 else None
+            rows.append({"i": i, "rc": None, "process_rc": 0, "wall_s": dec + 12.5, "error": None, "printed_chars": 9,
+                         "generate_calls": 1, "loads_and_prints": True, "ids_prompt": pid, "ids_ours": ours,
+                         "ids_ref": ref, "ref_prompt_equal": True, "compared": len(ours), "first_diff": k,
+                         "ref_gap": 0.21 if k is not None else None, "near_tie": k is not None,
+                         "kind": "near" if k is not None else "full"})
+        parts[f"{pre.replace('-', '_')}cmp"] = {"summary": {"runs_ok": 4, "full": 3, "near": 1, "other": 0, "PASS": True},
+                                                "bar": f"{top} greedy tokens vs llama.cpp", "rows": rows}
     parts["setup"] = ("Using CPython 3.12.12\nCreating virtual environment\nsetup rc 0\n"
                       "0.1.5 0.11.2 0.0.48.1 TPU v6 lite\n")
     parts["freeze"] = "".join(f"{k}=={v}\n" for k, v in (
         ("gguf", "0.19.0"), ("jax", "0.11.2"), ("jaxlib", "0.11.2"), ("jinja2", "3.1.6"), ("libtpu", "0.0.48.1"),
         ("numpy", "2.5.4"), ("tokenizers", "0.23.3"))) + "mashbox @ file:///k/wheel/mashbox-0.1.5-py3-none-any.whl\n"
-    parts["accelerator"] = "v6e-1"
+    parts["accelerator"] = on["accelerator"]
+    parts["kernel_wheel"] = f"{krow['sha256']}  /home/u/.cache/mashbox/kernels/{krow['sha256'][:16]}/{krow['file']}\n"
     parts["code_sha"] = commit + "\n"
     parts["cmp_tool"] = "# the compare tool\n"
     parts["card"] = {"id": row["repo"], "sha": row["revision"], "cardData": {
@@ -3831,14 +4432,40 @@ def _fake_quick_check(base, edit=None, kind="quick-check"):
         ("prompt", "prompt", ".txt"), ("ref", "ref", ".ids"))},
              "cmp": "cmp.json", "setup": "setup.log", "freeze": "freeze.txt", "accelerator": "accelerator-type.txt",
              "code_sha": "CODE_SHA", "cmp_tool": tool, "card": "card-api.json", "file": "file-row.sha256",
-             "plan": "plan-row.txt", "header": "header-row.gguf"}
+             "plan": "plan-row.txt", "header": "header-row.gguf",
+             **({"kernel_wheel": "kernel-wheel.sha256"} if bundle else {}),
+             **({f"ngram-{x}{i}": f"ngram-{y}{i}{z}" for i in range(4) for x, y, z in (
+                 ("run", "run", ".json"), ("rc", "run", ".rc"), ("stdout", "run", ".stdout"),
+                 ("stderr", "run", ".stderr"))} if ngram else {}),
+             **({"ngram_cmp": "ngram-cmp.json"} if ngram else {})}
     for k, n in names.items():
         v = edit(k, parts[k])
         if isinstance(v, bytes):
             (d / n).write_bytes(v)
         else:
             (d / n).write_text(v if isinstance(v, str) else json.dumps(v))
-    seal = edit("seal", [f"{_sha(d / n)}  {n}" for n in names.values()])
+    tf_names, tf_rows = [], []
+    for i, f in (forced or {}).items():
+        a, _, b = (d / f"ref{i}.ids").read_text().partition("\n\n")
+        rg = [int(t) for t in b.split()]
+        run = json.loads((d / f"run{i}.json").read_text())
+        c = run["generate_calls"][0]
+        tf = edit(f"tfrun{i}", {**run, "forced": f["token"], "generate_calls": [dict(
+            c, cli_prompt_ids=c["prompt_ids"], prompt_ids=[c["prompt_ids"][0] + [f["token"]]], ids=[f["ids"]])]})
+        ours = ([f["token"]] + f["ids"])[:top]
+        k = quick_check_first_diff(ours, rg, set(QUICK_STOP), top)
+        gap = None if k is None else f.get("gap", 1.0)
+        tf_rows.append({"i": i, "forced": f["token"], "ids_ours": ours, "first_diff": k, "ref_gap": gap,
+                        "kind": "full" if k is None else ("near" if gap < NEAR_TIE_GAP else "other"),
+                        "loads_and_prints": True})
+        for n, v in ((f"tf-run{i}.json", json.dumps(tf)), (f"tf-run{i}.rc", "0 9.0\n"), (f"tf-run{i}.stdout", "some text\n"),
+                     (f"tf-run{i}.stderr", (d / f"run{i}.stderr").read_text())):
+            (d / n).write_text(v)
+            tf_names.append(n)
+    if forced:
+        (d / "tf-cmp.json").write_text(json.dumps({"summary": {"runs": len(tf_rows)}, "rows": tf_rows}))
+        tf_names.append("tf-cmp.json")
+    seal = edit("seal", [f"{_sha(d / n)}  {n}" for n in [*names.values(), *tf_names]])
     (d / "SHA256SUMS").write_text("\n".join(seal) + "\n")
 
     def src(n):
@@ -3848,8 +4475,43 @@ def _fake_quick_check(base, edit=None, kind="quick-check"):
               "kind": kind, "sha256sums": src("SHA256SUMS"), "compare": src("cmp.json"),
               "file": src("file-row.sha256"), "plan": src("plan-row.txt"), "card": src("card-api.json"),
               "header": src("header-row.gguf"), "code": {"commit": commit}}}}}
+    if ngram:
+        row["speculation"] = {"ngram": {"v6e-1": edit("spec", {
+            "status": "passed", "record": f"gguf/{row['id']}/ngram/v6e-1", "record_sha256": _sha(d / "SHA256SUMS"),
+            "component_set_sha": QUICK_CSS, "spec_step_version": QUICK_SPEC_STEP, "k_table": dict(QUICK_K_TABLE)})}}
+        ev["gguf"][row["id"]]["speculation"] = {"ngram": {"v6e-1": {"sha256sums": src("SHA256SUMS"),
+                                                                    "compare": src("ngram-cmp.json")}}}
+    if steady:
+        sd = root / "steady-row"
+        sd.mkdir()
+        ids = [5 + (i % 50) for i in range(128)]
+        rounds = [{"round": i, "wall_s": 1.3, "prefill_s": 0.01, "decode_s": round(ms * 127 / 1e3, 6), "new_tokens": 128,
+                   "decode_calls": 17, "ms_per_token": ms, "ids": list(ids)} for i, ms in enumerate(STEADY_MS)]
+        sparts = {
+            "steady_json": {"model": tag, "rounds": rounds, "new": 128, "jax": "0.11.2", "devices": 1,
+                            "argv_tail": ["--max-tokens", "8", "--temperature", "0"], "slots": 8, "kernels": "0.1.5",
+                            "warm_s": 6.0, "median_ms_per_token": 10.0, "steady_decode_tok_s_1_user": STEADY_TOK,
+                            "spread": 0.00024, "same_ids": True},
+            "steady_stderr": parts["stderr1"],
+            "steady_rc": "rc 0\n",
+            "steady_prompt": QUICK_PROMPTS[0],
+            "steady_wheel": parts["kernel_wheel"],
+            "steady_code": commit + "\n",
+            "host": STEADY_HOST + ("other 2026-10-30T15:13:29Z 2026-10-30T15:40:00Z chip 0\n" if steady == "shared" else ""),
+        }
+        snames = {"steady_json": "steady.json", "steady_stderr": "steady.stderr", "steady_rc": "steady.rc",
+                  "steady_prompt": "prompt.txt", "steady_wheel": "kernel-wheel.sha256", "steady_code": "CODE_SHA",
+                  "host": "host.txt"}
+        for k, n in snames.items():
+            v = edit(k, sparts[k])
+            (sd / n).write_text(v if isinstance(v, str) else json.dumps(v))
+        sseal = edit("steady_seal", [f"{_sha(sd / n)}  {n}" for n in snames.values()])
+        (sd / "SHA256SUMS").write_text("\n".join(sseal) + "\n")
+        ev["gguf"][row["id"]]["v6e"]["steady"] = {"sha256sums": {"path": str(sd / "SHA256SUMS"),
+                                                                 "sha256": _sha(sd / "SHA256SUMS")},
+                                                  "code": {"commit": commit}}
     reg = copy.deepcopy(REG)
-    reg["gguf"], reg["engine_kernels"], reg["models"] = [row], [], []
+    reg["gguf"], reg["engine_kernels"], reg["models"] = [row], [krow] if bundle else [], []
     return edit("reg", reg), edit("ev", ev)
 
 
@@ -3893,6 +4555,13 @@ def _quick_stderr(i, fn):
     return _set(f"stderr{i}", change)
 
 
+def _quick_stderr_n(i, fn):
+    """an edit of ngram-run i's stderr: fn(event dict) on every event line"""
+    def change(v):
+        return "\n".join(json.dumps((lambda x: (fn(x), x)[1])(json.loads(line))) for line in v.splitlines()) + "\n"
+    return _set(f"ngram-stderr{i}", change)
+
+
 def _quick_row(fn):
     return _in_place("row", lambda r: fn(r["chips"]["v6e"]))
 
@@ -3934,7 +4603,7 @@ QUICK_BAD = {
     "decode timing": (_in_place("run2", lambda v: v["generate_calls"][0]["timing"].update(decode_s=2.6)),
                       "models.json says 14.2, the sealed runs 1-3 give 12.91"),
     "a typed number": (_quick_row(lambda r: r["measured"].update(decode_tok_s_8_users=120.0)),
-                       "measures decode_tok_s_1_user only"),
+                       "measured, when present, holds"),
     "not sealed": (_set("seal", lambda v: [x for x in v if not x.endswith("setup.log")]), "setup.log is not in SHA256SUMS"),
     "seal sha256": (_set("seal", lambda v: [("0" * 64 + x[64:]) if x.endswith("freeze.txt") else x for x in v]),
                     "freeze.txt sha256 differs from its seal line"),
@@ -3977,11 +4646,13 @@ def test_the_schema_holds_a_quick_check_row_to_what_it_measured():
         "ctx": (dict(qc, ctx=2048), "records no ctx or slots"),
         "slots": (dict(qc, slots=8), "records no ctx or slots"),
         "8 users": (dict(qc, measured={"decode_tok_s_1_user": 14.2, "decode_tok_s_8_users": 99.0}),
-                    "measures decode_tok_s_1_user only"),
-        "bundle": (dict(qc, kernel_path="bundle"), "kernel_path exact"),
+                    "measured, when present, holds"),
+        "bundle without the package": (dict(qc, kernel_path="bundle"),
+                                       "kernel_path bundle, but no engine_kernels row for v6e has"),
         "kind": (dict(qc, record_kind="other"), "record_kind must be one of"),
-        "no measured": ({k: v for k, v in qc.items() if k != "measured"}, "chips.v6e needs"),
+        "no status": ({k: v for k, v in qc.items() if k != "status"}, "chips.v6e needs"),
     }
+    assert problems(with_row(dict(ROW, chips={"v6e": {k: v for k, v in qc.items() if k != "measured"}}))) == []
     for name, (chip, want) in bad.items():
         got = problems(with_row(dict(ROW, chips={"v6e": chip})))
         assert any(want in x for x in got), (name, got)
@@ -3996,7 +4667,7 @@ def test_the_schema_holds_a_quick_check_row_to_what_it_measured():
 
 QUICK_Q = {"status": "passing", "accelerator": "v6e-1", "kernel_path": "exact", "record_kind": "quick",
            "measured": {"decode_tok_s_1_user": 0.52}}
-QUICK_Q_LINE = "Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.52 tok/s for one request"
+QUICK_Q_LINE = "Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens)"
 
 
 def test_the_guard_reads_the_quick_check_the_catalog_names():
@@ -4027,8 +4698,9 @@ def test_the_schema_holds_a_quick_row_to_what_it_measured():
     bad = {
         "ctx": (dict(QUICK_Q, ctx=2048), "records no ctx or slots"),
         "8 users": (dict(QUICK_Q, measured={"decode_tok_s_1_user": 0.52, "decode_tok_s_8_users": 9.0}),
-                    "measures decode_tok_s_1_user only"),
-        "bundle": (dict(QUICK_Q, kernel_path="bundle"), "kernel_path exact"),
+                    "measured, when present, holds"),
+        "bundle without the package": (dict(QUICK_Q, kernel_path="bundle"),
+                                       "kernel_path bundle, but no engine_kernels row for v6e has"),
     }
     for name, (chip, want) in bad.items():
         got = problems(with_row(dict(ROW, chips={"v6e": chip})))
@@ -4063,5 +4735,553 @@ QUICK_Q_BAD = {
 def test_record_guard_names_each_bad_quick_form(tmp_path, form):
     edit, want = QUICK_Q_BAD[form]
     reg, ev = _fake_quick_check(tmp_path, edit, kind="quick")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(want in x for x in got), got
+
+
+# ---------------------------------------------------------------- QUICK on the kernel package, and its n-gram gate entry
+# A QUICK run with zero flags on a TPU loads the kernel package the catalog's engine_kernels row names (the engine fetches
+# it, sha256-checked): kernel_path "bundle" when every weight ran on it. Run on one chip of a larger host (one process
+# per chip), the row says so: accelerator "v6e-4" and chip_count 1, rendered "one chip of a TPU v6e-4". The same seal
+# can hold the file's four `--speculation ngram` runs: their gate entry (speculation.ngram.<engine chip key>) is what
+# `--speculation auto` reads, passed only when those runs pass the QUICK bars and decode at least as fast as the plain runs.
+
+QUICK_K = {"status": "passing", "accelerator": "v6e-4", "chip_count": 1, "kernel_path": "bundle", "record_kind": "quick",
+           "measured": {"decode_tok_s_1_user": 26.4}}
+QUICK_K_LINE = ("Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x "
+                "32 tokens)")
+QUICK_K0 = {k: v for k, v in QUICK_K.items() if k != "measured"}     # what the seal tool writes: no number
+STEADY_ALONE = {"steady_decode_tok_s_1_user": 91.01, "steady_condition": catalog.STEADY_CONDITIONS["alone"]}
+
+
+def test_a_kernel_path_quick_row_on_one_chip_of_a_host_says_one_chip():
+    row = dict(ROW, chips={"v6e": QUICK_K})
+    assert catalog.quick_line(row) == QUICK_K_LINE
+    assert catalog.chips_run(row) == ["one chip of a TPU v6e-4"]
+    assert catalog.speed(row) == (None, None)      # a QUICK run's own number is its fresh process's first request
+    assert catalog.level(row) == "Quick check"
+    reg = with_row(row, bundle=BUNDLE)
+    r = next(x for x in catalog.gguf_rows(reg) if x["id"] == ROW["id"])
+    assert (r["tpu"], r["tok_s_1_user"], r["tok_s_chip"]) == (QUICK_K_LINE, None, None)
+    for view in (catalog.render_markdown(reg), catalog.render_text(reg), json.dumps(catalog.entries(reg))):
+        assert "26.4" not in view
+    # the whole host, or a one-chip host, keeps its plain name
+    assert catalog.chips_run(dict(ROW, chips={"v6e": dict(QUICK_K, chip_count=4)})) == ["TPU v6e-4"]
+    assert catalog.chips_run(dict(ROW, chips={"v6e": dict(QUICK_K, accelerator="v6e-1")})) == ["TPU v6e-1"]
+
+
+def test_a_quick_row_shows_only_its_steady_decode_speed():
+    """a QUICK run's own decode number is the first request of a fresh process (first-call cost in it): no view shows
+    it, with or without a steady number beside it. A row's speed is its steady-decode number
+    (measured.steady_decode_tok_s_1_user, from its own sealed record: one warm request, then the median of 5 requests of
+    128 new tokens at 1 user), shown as "N tok/s, steady decode, 1 user" with the chip it ran on; its condition
+    (steady_condition) goes in the JSON entries"""
+    assert (catalog.STEADY_ROUNDS, catalog.STEADY_TOKENS, catalog.STEADY_SPREAD) == (5, 128, 0.02)
+    assert SC.STEADY_CONDITIONS == catalog.STEADY_CONDITIONS and set(catalog.STEADY_CONDITIONS) == {"alone", "shared"}
+    for measured in (STEADY_ALONE, dict(STEADY_ALONE, decode_tok_s_1_user=26.4)):
+        row = dict(ROW, chips={"v6e": dict(QUICK_K, measured=measured)})
+        assert catalog.speed(row) == (91.01, "one chip of a TPU v6e-4")
+        reg = with_row(row, bundle=BUNDLE)
+        assert problems(reg) == []
+        r = next(x for x in catalog.gguf_rows(reg) if x["id"] == ROW["id"])
+        assert (r["tpu"], r["tok_s_1_user"], r["tok_s_chip"], r["tok_s_condition"]) == (
+            QUICK_K_LINE, 91.01, "one chip of a TPU v6e-4", catalog.STEADY_CONDITIONS["alone"])
+        said = "91.01 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4"
+        for view in (catalog.render_markdown(reg), catalog.render_text(reg)):
+            assert said in view and "26.4" not in view
+        assert "26.4" not in json.dumps(catalog.entries(reg))
+    # another chip record's number keeps its own words; a failing or exact-path QUICK shows no speed
+    assert catalog.speed(dict(ROW, chips={"v6e": dict(QUICK_K, status="failing", reason="run", measured=STEADY_ALONE)})) == (
+        None, None)
+    assert catalog.speed(dict(ROW, chips={"v6e": dict(QUICK_Q, measured=STEADY_ALONE)})) == (None, None)
+
+
+def test_the_schema_holds_a_quick_rows_steady_speed_to_its_form():
+    ok = dict(QUICK_K, measured=STEADY_ALONE)
+    assert problems(with_row(dict(ROW, chips={"v6e": ok}), bundle=BUNDLE)) == []
+    shared = dict(QUICK_K, measured=dict(STEADY_ALONE, steady_condition=catalog.STEADY_CONDITIONS["shared"]))
+    assert problems(with_row(dict(ROW, chips={"v6e": shared}), bundle=BUNDLE)) == []
+    assert problems(with_row(dict(ROW, chips={"v6e": QUICK_K0}), bundle=BUNDLE)) == []     # no number at all
+    bad = {
+        "no condition": dict(QUICK_K, measured={"steady_decode_tok_s_1_user": 91.01}),
+        "a condition only": dict(QUICK_K, measured={"steady_condition": catalog.STEADY_CONDITIONS["alone"]}),
+        "another condition": dict(QUICK_K, measured=dict(STEADY_ALONE, steady_condition="steady decode, 1 user")),
+        "zero": dict(QUICK_K, measured=dict(STEADY_ALONE, steady_decode_tok_s_1_user=0)),
+        "a string": dict(QUICK_K, measured=dict(STEADY_ALONE, steady_decode_tok_s_1_user="91.01")),
+        "failing": dict(QUICK_K, status="failing", reason="run", measured=STEADY_ALONE),
+        "exact path": dict(QUICK_K, kernel_path="exact", measured=STEADY_ALONE),
+    }
+    for name, chip in bad.items():
+        got = problems(with_row(dict(ROW, chips={"v6e": chip}), bundle=BUNDLE))
+        assert any("a steady-decode speed is measured.steady_decode_tok_s_1_user" in x for x in got), (name, got)
+    for name, m in {"empty": {}, "8 users": dict(STEADY_ALONE, decode_tok_s_8_users=9.0)}.items():
+        got = problems(with_row(dict(ROW, chips={"v6e": dict(QUICK_K, measured=m)}), bundle=BUNDLE))
+        assert any("measured, when present, holds" in x for x in got), (name, got)
+
+
+def test_the_schema_takes_a_kernel_path_quick_row_and_its_chip_count():
+    assert problems(with_row(dict(ROW, chips={"v6e": QUICK_K}), bundle=BUNDLE)) == []
+    assert problems(with_row(dict(ROW, chips={"v6e": dict(QUICK_K, accelerator="v6e-1", chip_count=1)}),
+                             bundle=BUNDLE)) == []
+    bad = {
+        "no package": (dict(QUICK_K), None, "kernel_path bundle, but no engine_kernels row for v6e has"),
+        "zero chips": (dict(QUICK_K, chip_count=0), BUNDLE, "chip_count"),
+        "more chips than the host": (dict(QUICK_K, chip_count=8), BUNDLE, "chip_count"),
+        "a string": (dict(QUICK_K, chip_count="1"), BUNDLE, "chip_count"),
+    }
+    for name, (chip, bundle, want) in bad.items():
+        got = problems(with_row(dict(ROW, chips={"v6e": chip}), bundle=bundle))
+        assert any(want in x for x in got), (name, got)
+
+
+QUICK_SPEC = {"ngram": {"v6e-1": {"status": "passed", "record": f"gguf/{ROW['id']}/ngram/v6e-1", "record_sha256": "e" * 64,
+                                  "component_set_sha": "f" * 64, "spec_step_version": 1, "k_table": QUICK_K_TABLE}}}
+
+
+def test_the_schema_holds_a_gguf_rows_speculation_gate_entries_to_their_form():
+    ok = dict(ROW, chips={"v6e": QUICK_K}, speculation=QUICK_SPEC)
+    assert problems(with_row(ok, bundle=BUNDLE)) == []
+    no = copy.deepcopy(QUICK_SPEC)
+    no["ngram"]["v6e-1"]["status"] = "not_passed"
+    assert problems(with_row(dict(ok, speculation=no), bundle=BUNDLE)) == []
+
+    def spec(fn):
+        x = copy.deepcopy(QUICK_SPEC)
+        fn(x)
+        return x
+    bad = {
+        "mtp": (spec(lambda x: x.__setitem__("mtp", x["ngram"])), "speculation kinds"),
+        "status": (spec(lambda x: x["ngram"]["v6e-1"].update(status="ok")), "status passed or not_passed"),
+        "no record": (spec(lambda x: x["ngram"]["v6e-1"].pop("record")), "needs"),
+        "a path": (spec(lambda x: x["ngram"]["v6e-1"].update(record="release/engine/x")), "record gguf/"),
+        "sha": (spec(lambda x: x["ngram"]["v6e-1"].update(record_sha256="e" * 63)), "record_sha256"),
+        "css": (spec(lambda x: x["ngram"]["v6e-1"].update(component_set_sha=None)), "component_set_sha"),
+        "chip key": (spec(lambda x: x["ngram"].__setitem__("v6e", x["ngram"].pop("v6e-1"))), "chip key"),
+        "k at an unmeasured bucket": (spec(lambda x: x["ngram"]["v6e-1"]["k_table"].update({"4": 3})), "k_table"),
+        "k 0 where measured": (spec(lambda x: x["ngram"]["v6e-1"]["k_table"].update({"1": 0})), "k_table"),
+        "another chip family": (spec(lambda x: x["ngram"].__setitem__("v5e-1", x["ngram"].pop("v6e-1"))),
+                                "a passed gate entry needs the row's passing kernel-path QUICK"),
+    }
+    for name, (sp, want) in bad.items():
+        got = problems(with_row(dict(ok, speculation=sp), bundle=BUNDLE))
+        assert any(want in x for x in got), (name, got)
+    exact = dict(ROW, chips={"v6e": QUICK_Q}, speculation=QUICK_SPEC)
+    assert any("a passed gate entry needs the row's passing kernel-path QUICK" in x
+               for x in problems(with_row(exact, bundle=BUNDLE)))
+
+
+def test_record_guard_holds_a_kernel_path_quick_row(tmp_path):
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle")
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+@pytest.mark.parametrize("kind,path", [("quick-check", "exact"), ("quick", "exact"), ("quick", "bundle")])
+def test_record_guard_holds_a_quick_row_with_no_number(tmp_path, kind, path):
+    """measured is optional on a QUICK row: pass/fail is the record's claim"""
+    reg, ev = _fake_quick_check(tmp_path, _quick_row(lambda r: r.pop("measured")), kind=kind, path=path)
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+def test_record_guard_reads_the_plain_runs_of_an_ngram_gate_entry_from_the_seal(tmp_path):
+    """the n-gram gate compares the n-gram runs with the plain runs sealed in the same folder, not with a number on the
+    row: a row with no number keeps its passed entry"""
+    reg, ev = _fake_quick_check(tmp_path, _quick_row(lambda r: r.pop("measured")), kind="quick", path="bundle", ngram=True)
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+def test_record_guard_holds_a_quick_rows_steady_speed(tmp_path):
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", steady="alone")
+    assert reg["gguf"][0]["chips"]["v6e"]["measured"] == {"steady_decode_tok_s_1_user": STEADY_TOK,
+                                                          "steady_condition": catalog.STEADY_CONDITIONS["alone"]}
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+    reg2, ev2 = _fake_quick_check(tmp_path / "b", kind="quick", path="bundle", steady="shared", ngram=True)
+    assert evidence_problems(reg2, ev2, ROOT, tmp_path / "fit2") == []
+
+
+def _steady_round(i, fn):
+    return _in_place("steady_json", lambda s: fn(s["rounds"][i]))
+
+
+STEADY_BAD = {
+    "a typed number": (_quick_row(lambda r: r["measured"].update(steady_decode_tok_s_1_user=101.0)),
+                       f"models.json says 101.0 steady tok/s, the sealed steady rounds give {STEADY_TOK}"),
+    "a slow round": (_steady_round(2, lambda x: x.update(decode_s=1.397, ms_per_token=11.0)), "above the 2% bar"),
+    "a round's ms": (_steady_round(1, lambda x: x.update(ms_per_token=9.0)), "is not its decode_s / (new tokens - 1)"),
+    "four rounds": (_in_place("steady_json", lambda s: s["rounds"].pop()), "requests of 128 new tokens"),
+    "64 tokens": (_steady_round(0, lambda x: x.update(new_tokens=64, decode_s=0.63)), "requests of 128 new tokens"),
+    "other ids": (_steady_round(3, lambda x: x["ids"].__setitem__(5, 1)), "the same ids every round"),
+    "exit code": (_set("steady_rc", lambda v: "rc 1\n"), "the steady run did not exit 0"),
+    "another model": (_in_place("steady_json", lambda s: s.update(model="someone/Tiny-Qwen3-GGUF:Q8_0")),
+                      "a steady run is `mashbox run someone/Tiny-Qwen3-GGUF:Q4_K_M"),
+    "another argv": (_in_place("steady_json", lambda s: s.update(argv_tail=["--max-tokens", "8"])),
+                     "a steady run is `mashbox run"),
+    "another file": (_set("steady_stderr", lambda v: v.replace(ROW["sha256"], "b" * 64)),
+                     f"the steady run read a file of sha256 {'b' * 64}"),
+    "exact path": (_set("steady_stderr", lambda v: v.replace('"reference_bytes": 0', '"reference_bytes": 7')),
+                   "ran 7 bytes on the exact path"),
+    "another package": (_set("steady_wheel", lambda v: "d" * 64 + v[64:]), "the steady run loaded the kernel package"),
+    "another code": (_set("steady_code", lambda v: "c" * 40 + "\n"), "the steady run's code is"),
+    "two chips": (_in_place("steady_json", lambda s: s.update(devices=2)), "the steady run saw 2 devices"),
+    "a shared host said alone": (_set("host", lambda v: v + "other 2026-10-30T15:20:00Z 2026-10-30T15:30:30Z chip 0\n"),
+                                 "the sealed host log gives"),
+    "an unwatched start": (_set("host", lambda v: v.replace("observed-from 2026-10-30T15:00:00Z",
+                                                            "observed-from 2026-10-30T15:30:10Z")),
+                           "did not watch the steady run from its start"),
+    "a host line": (_set("host", lambda v: v + "note all fine\n"), "is not observed-from, window or other"),
+    "not sealed": (_set("steady_seal", lambda v: [x for x in v if not x.endswith("steady.json")]),
+                   "steady steady.json is not in"),
+    "seal sha256": (_set("steady_seal", lambda v: [("0" * 64 + x[64:]) if x.endswith("host.txt") else x for x in v]),
+                    "host.txt sha256 differs from its seal line"),
+    "no record": (_in_place("ev", lambda e: next(iter(e["gguf"].values()))["v6e"].pop("steady")),
+                  "a steady-decode speed needs its steady record"),
+    "a record and no number": (_quick_row(lambda r: r.pop("measured")), "models.json says None steady tok/s"),
+}
+
+
+@pytest.mark.parametrize("form", sorted(STEADY_BAD))
+def test_record_guard_names_each_bad_steady_form(tmp_path, form):
+    edit, want = STEADY_BAD[form]
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", steady="alone")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(want in x for x in got), got
+
+
+def test_record_guard_holds_a_kernel_path_quick_row_with_its_ngram_gate_entry(tmp_path):
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", ngram=True)
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+    # the engine reads that entry: auto picks n-gram on the chip key it was measured on, with the measured k
+    from mashbox.runtime.drafters import select as SEL
+    g = reg["gguf"][0]
+    rec = SEL.catalog_records(reg, dict(repo=g["repo"], revision=g["revision"], file=g["file"]))
+    meta = dict(format="gguf", verify=True, mtp_head=False, experts=0, mtp_layers=0, draft_given=False, trained=[],
+                trained_why=None, draft_models=[])
+    kind, gated, why, gcss = SEL.pick(meta, "v6e-1", records=rec, later=True)
+    assert (kind, gated, gcss) == ("ngram", True, QUICK_CSS), why
+    assert SEL.pick(meta, "v6e-4", records=rec, later=True)[0] is None       # another chip key: not gated there
+
+
+def _ngram_slower(v):
+    """the n-gram runs decode slower than the plain runs (run 2: 0.8 s -> 6.0 s): (32 + 14 + 32) / 8.2 = 9.51"""
+    v["generate_calls"][0]["timing"]["decode_s"] = 6.0
+
+
+QUICK_BF16_LINE = ("mashbox: BF16 (25.0% of the weights) have no TPU kernel in this install and run on the exact float32 "
+                   "reference path, which is slow (it rebuilds the weights at every step)\n")
+
+
+def _bf16_dense16(i, share=25.0, bf16=300_000_000, ref=0, line=QUICK_BF16_LINE):
+    """run i as a file with a BF16 output weight runs on 0.1.9: its plan names BF16 (share% of weights_gb 1.2) as having
+    no TPU kernel, and its load puts bf16 bytes on the native bf16 path (Dense16) and ref bytes on the exact path"""
+    def ev(x):
+        if x["event"] == "gguf_plan":
+            x.update(reference_share=share, weights_gb=1.2)
+        if x["event"] == "weights":
+            x.update(native_bf16_bytes=bf16, reference_bytes=ref)
+    return _both(_quick_stderr(i, ev), _set(f"stderr{i}", lambda v: v + line))
+
+
+# BF16 on Dense16 counts as served (Dense16 reads a BF16 weight as fast as XLA's own plain read of the same bytes,
+# measured on a v6e chip); never a BF16 byte
+# rebuilt on the exact path, another type beside it, or a plan share the Dense16 bytes do not cover
+QUICK_BF16_BAD = {
+    "bf16 on the exact path": (_bf16_dense16(1, bf16=0, ref=300_000_000),
+                               "kernel_path bundle, and run1 ran 300000000 bytes on the exact path"),
+    "bf16 share not on dense16": (_bf16_dense16(2, bf16=0), "kernel_path bundle, and run2 ran 25.0% of the weights on the "
+                                                            "exact path"),
+    "bf16 and another type": (_bf16_dense16(0, line=QUICK_BF16_LINE.replace("BF16 (", "BF16, Q6_K (")),
+                              "kernel_path bundle, and run0 printed 'have no TPU kernel'"),
+    "bf16 share past its bytes": (_bf16_dense16(3, share=30.0), "kernel_path bundle, and run3 ran 30.0% of the weights on "
+                                                                "the exact path"),
+}
+
+
+QUICK_K_BAD = {
+    "reference share": (_quick_stderr(1, lambda x: x.update(reference_share=2.5) if x["event"] == "gguf_plan" else None),
+                        "kernel_path bundle, and run1 ran 2.5% of the weights on the exact path"),
+    "reference bytes": (_quick_stderr(2, lambda x: x.update(reference_bytes=7) if x["event"] == "weights" else None),
+                        "kernel_path bundle, and run2 ran 7 bytes on the exact path"),
+    "no kernel bytes": (_quick_stderr(0, lambda x: x.update(kernel_bytes=0) if x["event"] == "weights" else None),
+                        "kernel_path bundle, and run0 ran 0 bytes on a kernel"),
+    "other kernel types": (_quick_stderr(3, lambda x: x.update(kernel_types=["Q4_K"]) if x["event"] == "gguf_plan" else None),
+                           "kernel_path bundle, and run3 ran kernel types ['Q4_K'], the engine_kernels row for v6e has"),
+    "a type on the exact path": (_set("stderr1", lambda v: v + "mashbox: Q6_K (1.0% of the weights) have no TPU kernel "
+                                                         "in this install and run on the exact float32 reference path\n"),
+                                 "kernel_path bundle, and run1 printed 'have no TPU kernel'"),
+    "the package did not load": (_set("stderr0", lambda v: v + "mashbox: kernel package mashbox_engine_kernels did not "
+                                                         "load (x); every type runs on the exact path\n"),
+                                 "kernel_path bundle, and run0 printed 'did not load'"),
+    "another package": (_set("kernel_wheel", lambda v: "d" * 64 + v[64:]), "kernel_path bundle, and the kernel package the runs "
+                                                                        "loaded is"),
+    "no package sealed": (_set("seal", lambda v: [x for x in v if not x.endswith("kernel-wheel.sha256")]),
+                          "kernel-wheel.sha256 is not in SHA256SUMS"),
+    "more chips": (_in_place("run1", lambda v: v.update(devices=4)), "the row runs on 1 chip of a TPU v6e-4, and run1 saw 4"),
+    "no chip count": (_quick_row(lambda r: r.pop("chip_count")), "the row runs on 4 chips of a TPU v6e-4, and run0 saw 1"),
+    "no device count": (_in_place("run2", lambda v: v.pop("devices")), "run2 recorded no device count"),
+    **QUICK_BF16_BAD,
+}
+
+
+@pytest.mark.parametrize("form", sorted(QUICK_K_BAD))
+def test_record_guard_names_each_bad_kernel_path_quick_form(tmp_path, form):
+    edit, want = QUICK_K_BAD[form]
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(want in x for x in got), got
+
+
+def _spec_entry(fn):
+    return _in_place("spec", fn)
+
+
+QUICK_N_BAD = {
+    "slower than plain": (_in_place("ngram-run2", _ngram_slower),
+                          "status passed, and the sealed runs give not_passed (n-gram 9.51 tok/s below plain 13.0)"),
+    "a hidden divergence": (_in_place("ngram-run2", lambda v: v["generate_calls"][0]["ids"][0].__setitem__(5, 6)),
+                            "ngram: prompt 2: the compare says first difference None, the sealed ids give 5"),
+    "said divergence": (_both(_in_place("ngram-run2", lambda v: v["generate_calls"][0]["ids"][0].__setitem__(5, 6)),
+                              _in_place("ngram_cmp", lambda c: (c["rows"][2].update(first_diff=5, ref_gap=1.5,
+                                                                                     near_tie=False, kind="other",
+                                                                                     ids_ours=c["rows"][2]["ids_ours"][:5] + [6] + c["rows"][2]["ids_ours"][6:]),
+                                                                c["summary"].update(full=2, other=1, PASS=False)))),
+                        "status passed, and the sealed runs give not_passed (1 other divergence"),
+    "plain flags": (_in_place("ngram-run0", lambda v: v["argv"].__delitem__(slice(4, 6))),
+                    "ngram-run0 ran `mashbox run someone/Tiny-Qwen3-GGUF:Q4_K_M --prompt"),
+    "env": (_in_place("ngram-run1", lambda v: v["env"].update(MASHBOX_GGUF_KERNELS="off")),
+            "ngram-run1 ran with MASHBOX_GGUF_KERNELS=off"),
+    "not n-gram": (_quick_stderr_n(3, lambda x: x.update(method="draft_model") if x["event"] == "speculation" else None),
+                   "ngram-run3 ran speculation"),
+    "k": (_spec_entry(lambda e: e["k_table"].update({"1": 4})), "k_table's 1-row k 4 is not the runs' draft_k 3"),
+    "css": (_spec_entry(lambda e: e.update(component_set_sha="0" * 64)), "the runs' component set is " + QUICK_CSS),
+    "step": (_spec_entry(lambda e: e.update(spec_step_version=99)), "the runs measured speculation step version"),
+    "chip key": (_in_place("ngram-run1", lambda v: v.update(chip_key="v6e-4")), "ngram-run1 ran on chip key v6e-4"),
+    "record sha": (_spec_entry(lambda e: e.update(record_sha256="0" * 64)), "record_sha256 0000"),
+    "record name": (_spec_entry(lambda e: e.update(record="gguf/x/ngram/v6e-1")), "the record is gguf/x/ngram/v6e-1"),
+    "not_passed hides a pass": (_spec_entry(lambda e: e.update(status="not_passed")),
+                                "status not_passed, and the sealed runs give passed"),
+    "no evidence": (_in_place("ev", lambda e: e["gguf"][ROW["id"]].pop("speculation")), "ngram v6e-1: no evidence entry"),
+    "not sealed": (_set("seal", lambda v: [x for x in v if not x.endswith("ngram-run2.stderr")]),
+                   "ngram-run2.stderr is not in SHA256SUMS"),
+}
+
+
+def _seal_inputs(base, src, krow, ngram=True, tf=()):
+    """the folders tools/gguf_quick_seal.py reads, cut from a fake seal folder src: runs, compare, chip kit, kit, pin,
+    and the n-gram runs and compare, each with its own SHA256SUMS; the kernel wheel line and the code's models.json"""
+    def folder(name, files, sums="SHA256SUMS"):
+        d = base / name
+        for dst, data in files.items():
+            (d / dst).parent.mkdir(parents=True, exist_ok=True)
+            (d / dst).write_bytes(data)
+        (d / sums).write_text("".join(f"{_sha(d / n)}  {n}\n" for n in sorted(files)))
+        return d
+    rd = lambda n: (src / n).read_bytes()      # noqa: E731
+    runs = folder("runs", {f"run{i}{x}": rd(f"run{i}{x}") for i in range(4) for x in (".json", ".rc", ".stdout", ".stderr")})
+    cmp = folder("cmp", {"cmp.json": rd("cmp.json"), **{f"ref{i}.ids": rd(f"ref{i}.ids") for i in range(4)}})
+    chip = folder("chip", {n: rd(n) for n in ("setup.log", "freeze.txt", "accelerator-type.txt")}, "SHA256SUMS-chipkit")
+    kit = folder("kit", {"CODE_SHA": rd("CODE_SHA"), **{f"in/prompt{i}.txt": rd(f"prompt{i}.txt") for i in range(4)}},
+                 "SHA256SUMS-kit")
+    card = json.loads(rd("card-api.json"))
+    pin = folder("pin", {"header.bin": rd("header-row.gguf"), "card.json": rd("card-api.json"), "pin.json": json.dumps(dict(
+        repo=card["id"], revision=card["sha"], file=ROW["file"], tag=ROW["tag"], lfs_sha256=ROW["sha256"],
+        bytes=FIXTURE.stat().st_size)).encode()})
+    out = dict(runs=runs, compare=cmp, chip=chip, kit=kit, pin=pin, tool=src / "cmp_q.py")
+    if ngram:
+        out["ngram_runs"] = folder("nruns", {f"run{i}{x}": rd(f"ngram-run{i}{x}") for i in range(4)
+                                             for x in (".json", ".rc", ".stdout", ".stderr")})
+        out["ngram_compare"] = folder("ncmp", {"cmp.json": rd("ngram-cmp.json"),
+                                               **{f"ref{i}.ids": rd(f"ref{i}.ids") for i in range(4)}})
+    if tf:
+        out["tf_runs"] = folder("truns", {f"tf-run{i}{x}": rd(f"tf-run{i}{x}") for i in tf
+                                          for x in (".json", ".rc", ".stdout", ".stderr")})
+        out["tf_compare"] = folder("tcmp", {"tf-cmp.json": rd("tf-cmp.json")})
+    (base / "kernel-wheel.sha256").write_bytes(rd("kernel-wheel.sha256"))
+    (base / "models.json").write_text(json.dumps({"engine_kernels": [krow]}))
+    return out
+
+
+def _run_seal(base, ins, out, row_id=None):
+    spec = importlib.util.spec_from_file_location("gguf_quick_seal_t", ROOT / "tools" / "gguf_quick_seal.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    argv = ["--kind", "quick", "--runs", str(ins["runs"]), "--compare", str(ins["compare"]), "--chip", str(ins["chip"]),
+            "--kit", str(ins["kit"]), "--tool", str(ins["tool"]), "--pin", str(ins["pin"]), "--tag", "row",
+            "--out", str(out), "--kernel-wheel", str(base / "kernel-wheel.sha256"), "--models", str(base / "models.json")]
+    if "ngram_runs" in ins:
+        argv += ["--ngram-runs", str(ins["ngram_runs"]), "--ngram-compare", str(ins["ngram_compare"])]
+    if "tf_runs" in ins:
+        argv += ["--tf-runs", str(ins["tf_runs"]), "--tf-compare", str(ins["tf_compare"])]
+    if row_id:
+        argv += ["--row-id", row_id]
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        mod.main(argv)
+    return json.loads(buf.getvalue())
+
+
+def test_the_quick_seal_tool_writes_a_kernel_path_row_and_gate_entry_the_guard_holds(tmp_path):
+    """tools/gguf_quick_seal.py on a bundle QUICK's plain and n-gram runs: it reads kernel_path, chip_count, the chip
+    key, component set, step version and k from the runs' own events, seals both sets in one folder, and the row block,
+    gate entry and evidence it prints pass the record guard as they are"""
+    reg, ev = _fake_quick_check(tmp_path, kind="quick", path="bundle", ngram=True)
+    root = Path(ev["records_root"])
+    ins = _seal_inputs(tmp_path / "in", root / "p1row", reg["engine_kernels"][0])
+    got = _run_seal(tmp_path / "in", ins, root / "seal", row_id=ROW["id"])
+    assert got["chips"] == {"v6e": QUICK_K0}        # pass/fail only: the runs' first-request number is never a row's
+    ent = got["speculation"]["ngram"]["v6e-1"]
+    assert (ent["status"], ent["component_set_sha"], ent["k_table"], ent["record"]) == (
+        "passed", QUICK_CSS, QUICK_K_TABLE, f"gguf/{ROW['id']}/ngram/v6e-1")
+    g = reg["gguf"][0]
+    g["chips"], g["speculation"] = got["chips"], got["speculation"]
+    ev["gguf"][g["id"]] = {**got["evidence"]}
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+    # slower n-gram runs: the same tool seals a not_passed entry, which the guard also holds
+    reg2, ev2 = _fake_quick_check(tmp_path / "b", _in_place("ngram-run2", _ngram_slower), kind="quick", path="bundle",
+                                  ngram=True)
+    root2 = Path(ev2["records_root"])
+    got2 = _run_seal(tmp_path / "b" / "in", _seal_inputs(tmp_path / "b" / "in", root2 / "p1row", reg2["engine_kernels"][0]),
+                     root2 / "seal", row_id=ROW["id"])
+    assert got2["speculation"]["ngram"]["v6e-1"]["status"] == "not_passed"
+    g2 = reg2["gguf"][0]
+    g2["chips"], g2["speculation"] = got2["chips"], got2["speculation"]
+    ev2["gguf"][g2["id"]] = {**got2["evidence"]}
+    assert evidence_problems(reg2, ev2, ROOT, tmp_path / "fit2") == []
+
+
+def test_the_quick_seal_tool_refuses_a_run_set_with_weights_on_the_exact_path(tmp_path):
+    """MIXED (some weights on the kernel package, some on the exact path): no kernel-path row, no exact row"""
+    reg, ev = _fake_quick_check(tmp_path, _quick_stderr(1, lambda x: x.update(reference_share=2.5, reference_bytes=7) if
+                                                         x["event"] in ("gguf_plan", "weights") else None),
+                                kind="quick", path="bundle", ngram=False)
+    root = Path(ev["records_root"])
+    ins = _seal_inputs(tmp_path / "in", root / "p1row", reg["engine_kernels"][0], ngram=False)
+    with pytest.raises(SystemExit) as x:
+        _run_seal(tmp_path / "in", ins, root / "seal", row_id=ROW["id"])
+    assert "mixed" in str(x.value) and not (root / "seal").exists()
+
+
+def test_bf16_on_dense16_counts_as_served_in_the_seal_and_the_guard(tmp_path):
+    """a file whose only exact-path type is BF16, every byte of it on the native bf16 path (Dense16) and 0 bytes on the
+    exact path, in all four runs: the seal tool writes a kernel_path bundle row and the record guard holds it"""
+    edit = _both(*(_bf16_dense16(i) for i in range(4)))
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", ngram=False)
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+    root = Path(ev["records_root"])
+    ins = _seal_inputs(tmp_path / "in", root / "p1row", reg["engine_kernels"][0], ngram=False)
+    got = _run_seal(tmp_path / "in", ins, root / "seal", row_id=ROW["id"])
+    assert got["chips"]["v6e"]["kernel_path"] == "bundle"
+    g = reg["gguf"][0]
+    g["chips"] = got["chips"]
+    ev["gguf"][g["id"]] = {**got["evidence"]}
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit2") == []
+
+
+def _later_divergence(c):
+    """an edit of the compare: prompt 3's difference at step 31 has llama.cpp's gap 0.9 (an other divergence)"""
+    c["rows"][3].update(ref_gap=0.9, near_tie=False, kind="other")
+    c["summary"].update(near=0, other=1, PASS=False)
+
+
+def test_a_failing_quick_seal_names_its_reason_class_and_the_guard_recomputes_it(tmp_path):
+    """the seal of a QUICK that did not pass writes status failing and the reason class its compare gives (run, first
+    token, divergence, near tie); the record guard recomputes the class from the sealed compare, never typed"""
+    reg, ev = _fake_quick_check(tmp_path, _set("cmp", _later_divergence), kind="quick", path="bundle", ngram=False)
+    root = Path(ev["records_root"])
+    ins = _seal_inputs(tmp_path / "in", root / "p1row", reg["engine_kernels"][0], ngram=False)
+    got = _run_seal(tmp_path / "in", ins, root / "seal", row_id=ROW["id"])
+    assert (got["chips"]["v6e"]["status"], got["chips"]["v6e"]["reason"]) == ("failing", "divergence")
+    g = reg["gguf"][0]
+    g["chips"] = got["chips"]
+    ev["gguf"][g["id"]] = {**got["evidence"]}
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+    g["chips"]["v6e"]["reason"] = "near tie"
+    assert any("the sealed compare gives divergence" in x for x in evidence_problems(reg, ev, ROOT, tmp_path / "fit2"))
+
+
+QUICK_T0 = _both(_set("ref1", _quick_ref_first), _in_place("cmp", _quick_cmp_first))   # prompt 1: a near tie at token 0
+QUICK_T0_TF = {1: {"token": 6, "ids": list(range(201, 232))}}     # its forced run: llama.cpp's tokens 2..32
+
+
+def _t0_seal(tmp_path, forced, edit=QUICK_T0, row_edit=None):
+    """a bundle QUICK whose prompt 1 meets a near tie at the first token (gap 0.1), with the forced runs given; -> (reg,
+    ev, the seal tool's output)"""
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", forced=forced)
+    root = Path(ev["records_root"])
+    ins = _seal_inputs(tmp_path / "in", root / "p1row", reg["engine_kernels"][0], ngram=False, tf=tuple(forced or ()))
+    return reg, ev, _run_seal(tmp_path / "in", ins, root / "seal", row_id=ROW["id"])
+
+
+def _guard_with(reg, ev, got, tmp_path, name):
+    g = reg["gguf"][0]
+    g["chips"] = copy.deepcopy(got["chips"])
+    ev["gguf"][g["id"]] = {**got["evidence"]}
+    return evidence_problems(reg, ev, ROOT, tmp_path / name)
+
+
+def test_a_first_token_near_tie_passes_when_its_forced_run_agrees(tmp_path):
+    """The token-0 near-tie rule: a first-token difference under llama.cpp's own
+    near-tie gap counts as a near tie, and the rest is checked by one forced run (the chip's prompt ids + llama.cpp's
+    first token, the plain argv) with 0 other divergences on tokens 2..32: the seal passes it and the guard holds it"""
+    reg, ev, got = _t0_seal(tmp_path, QUICK_T0_TF)
+    assert got["chips"]["v6e"]["status"] == "passing" and "reason" not in got["chips"]["v6e"]
+    assert _guard_with(reg, ev, got, tmp_path, "fit") == []
+    # the same seal without its forced run: failing, reason near tie; a row that says passing is refused
+    reg2, ev2, got2 = _t0_seal(tmp_path / "b", None)
+    assert (got2["chips"]["v6e"]["status"], got2["chips"]["v6e"]["reason"]) == ("failing", "near tie")
+    assert _guard_with(reg2, ev2, got2, tmp_path / "b", "fit") == []
+    got2["chips"]["v6e"].update(status="passing")
+    got2["chips"]["v6e"].pop("reason")
+    assert any("prompt 1 differs at the first token" in x for x in _guard_with(reg2, ev2, got2, tmp_path / "b", "fit2"))
+
+
+def test_a_forced_run_that_diverges_fails_as_a_divergence(tmp_path):
+    """the forced continuation meets an other divergence (llama.cpp's gap 0.9 at step 5): failing, reason divergence,
+    recomputed by the guard; a row that says passing is refused"""
+    ids = list(range(201, 232))
+    ids[4] = 7
+    reg, ev, got = _t0_seal(tmp_path, {1: {"token": 6, "ids": ids, "gap": 0.9}})
+    assert (got["chips"]["v6e"]["status"], got["chips"]["v6e"]["reason"]) == ("failing", "divergence")
+    assert _guard_with(reg, ev, got, tmp_path, "fit") == []
+    got["chips"]["v6e"].update(status="passing")
+    got["chips"]["v6e"].pop("reason")
+    assert any("forced run" in x for x in _guard_with(reg, ev, got, tmp_path, "fit2"))
+
+
+QUICK_T0_BAD = {
+    "another forced token": ({1: {"token": 7, "ids": list(range(201, 232))}}, None,
+                             "forced run 1 appended 7, llama.cpp's first token is 6"),
+    "another argv": (QUICK_T0_TF, _in_place("tfrun1", lambda v: v["argv"].insert(3, "--ctx")), "forced run 1 ran `mashbox"),
+    "other prompt ids": (QUICK_T0_TF, _in_place("tfrun1", lambda v: v["generate_calls"][0]["prompt_ids"][0].insert(0, 9)),
+                         "forced run 1 ran prompt ids"),
+}
+
+
+@pytest.mark.parametrize("form", sorted(QUICK_T0_BAD))
+def test_the_guard_and_the_seal_refuse_each_bad_forced_run(tmp_path, form):
+    forced, extra, want = QUICK_T0_BAD[form]
+    edit = _both(QUICK_T0, extra) if extra else QUICK_T0
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", forced=forced)
+    assert any(want in x for x in evidence_problems(reg, ev, ROOT, tmp_path / "fit")), want
+    root = Path(ev["records_root"])
+    ins = _seal_inputs(tmp_path / "in", root / "p1row", reg["engine_kernels"][0], ngram=False, tf=(1,))
+    with pytest.raises(SystemExit) as x:
+        _run_seal(tmp_path / "in", ins, root / "seal", row_id=ROW["id"])
+    assert "forced run 1" in str(x.value) and not (root / "seal").exists()
+
+
+@pytest.mark.parametrize("form", sorted(QUICK_BF16_BAD))
+def test_the_quick_seal_tool_refuses_each_bad_bf16_form(tmp_path, form):
+    edit, _ = QUICK_BF16_BAD[form]
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", ngram=False)
+    root = Path(ev["records_root"])
+    ins = _seal_inputs(tmp_path / "in", root / "p1row", reg["engine_kernels"][0], ngram=False)
+    with pytest.raises(SystemExit) as x:
+        _run_seal(tmp_path / "in", ins, root / "seal", row_id=ROW["id"])
+    assert "mixed" in str(x.value) and not (root / "seal").exists()
+
+
+@pytest.mark.parametrize("form", sorted(QUICK_N_BAD))
+def test_record_guard_names_each_bad_ngram_gate_form(tmp_path, form):
+    edit, want = QUICK_N_BAD[form]
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick", path="bundle", ngram=True)
     got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
     assert any(want in x for x in got), got

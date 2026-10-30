@@ -325,10 +325,29 @@ GGUF_KEYS = ("id", "model", "publisher", "family", "maker", "repo", "revision", 
              "types", "license", "license_link", "base", "in", "out", "run", "experimental", "chips")
 GGUF_CHIP_KEYS = ("status", "accelerator", "ctx", "slots", "kernel_path", "measured")
 # a quick-check chip run (record_kind "quick-check": four zero-flag `mashbox run REPO:TAG --prompt P --max-tokens 64
-# --temperature 0` runs compared with llama.cpp) measures decode tok/s at 1 user on the exact path, nothing else
-GGUF_QUICK_KEYS = ("status", "accelerator", "kernel_path", "measured", "record_kind")
+# --temperature 0` runs compared with llama.cpp) measures decode tok/s at 1 user, nothing else: on the exact path, or on
+# the kernel package the catalog names (kernel_path bundle; the record guard holds every weight to it). chip_count
+# (optional) = the chips the runs used, fewer than the accelerator's host has for one chip of a larger host
+GGUF_QUICK_KEYS = ("status", "accelerator", "kernel_path", "record_kind")      # measured is optional on a QUICK row
+# gguf[].speculation {kind: {engine chip key: gate entry}}: what `--speculation auto` reads for the file
+# (runtime/drafters/select.py). n-gram only: MTP is off for GGUF files and a draft model needs --draft-model. An entry
+# is sealed (record "gguf/<row id>/<kind>/<chip key>", the record's SHA256SUMS sha256), names the component set and
+# speculation step version its runs measured, and its k_table holds k > 0 only at the row bucket it measured ("1")
+GGUF_SPEC_KINDS = ("ngram",)
+GGUF_SPEC_KEYS = ("status", "record", "record_sha256", "component_set_sha", "spec_step_version", "k_table")
+GGUF_SPEC_BUCKETS = ("1", "4", "16", "64", "256")      # runtime/engine.py _rows
+CHIP_KEY_RE = re.compile(r"^(v\d+[a-z]*)-(\d+)$")
 RECORD_KINDS = ("quick-check", "quick")   # "quick": the same run with 32 tokens (catalog.QUICK_TOKENS)
-QUICK_MEASURED = ("decode_tok_s_1_user",)
+# a QUICK row's measured, when present: its runs' decode_tok_s_1_user (the record's number, never shown) and/or its
+# steady-decode speed steady_decode_tok_s_1_user with its steady_condition (one of STEADY_CONDITIONS), from its own record
+QUICK_MEASURED = ("decode_tok_s_1_user", "steady_decode_tok_s_1_user", "steady_condition")
+STEADY_CONDITIONS = {      # catalog.STEADY_CONDITIONS
+    "alone": ("steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one "
+              "chip, no other job on the host's chips"),
+    "shared": ("steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one "
+               "chip, another job on another chip of the same host"),
+}
+QUICK_FAIL_REASONS = ("run", "first token", "divergence", "near tie")    # catalog.QUICK_FAIL_REASONS
 UNQUANTIZED = ("F32", "F16", "BF16")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -480,18 +499,21 @@ def validate_catalog(reg, problems):
         chips = g["chips"] if isinstance(g["chips"], dict) else {}
         cpu_ok = "cpu_check" in g and not cpu_check_problems(g["cpu_check"], problems, where)
         pending = [ch for ch, r in chips.items() if isinstance(r, dict) and r.get("status") == "pending"]
+        failed = [ch for ch, r in chips.items() if isinstance(r, dict) and r.get("status") == "failing"
+                  and r.get("record_kind") == "quick"]
         if not chips or any(ch not in CHIPS for ch in chips):
             problems.add(where, f"chips must name at least one chip from {CHIPS}")
         elif not any(isinstance(r, dict) and r.get("status") == "passing" for r in chips.values()):
-            # Checked on CPU: no chip run, its CPU check against llama.cpp passed (sealed record), every chip pending
-            # with its not_run_reason; never a mixture of experts (no MoE without its routed experts on the kernel)
+            # Checked on CPU: its CPU check against llama.cpp passed (sealed record), and every chip is pending with its
+            # not_run_reason or a sealed QUICK that did not pass (with its reason class); never a mixture of experts (no
+            # MoE without its routed experts on the kernel)
             if moe:
                 problems.add(where, "a mixture of experts is only listed with a passing chip record of its routed experts "
                                     "on the kernel, never from a CPU check alone")
-            elif not cpu_ok or (g["cpu_check"] or {}).get("status") != "passing" or len(pending) != len(chips):
+            elif not cpu_ok or (g["cpu_check"] or {}).get("status") != "passing" or len(pending) + len(failed) != len(chips):
                 problems.add(where, "no passing chip: a row is only added from a passing run (a failing outcome sits only "
                                     "beside a passing one), or from a passing CPU check (cpu_check status passing) with "
-                                    "every chip pending and its not_run_reason")
+                                    "every chip pending and its not_run_reason, or a QUICK that did not pass")
         for ch in pending:
             # a not-run chip holds status and not_run_reason only: a row shows a speed only when measured on that exact
             # file, so no smoke from another row (same architecture or not) and nothing measured
@@ -512,34 +534,102 @@ def validate_catalog(reg, problems):
                     problems.add(where, f"chips.{ch}.record_kind must be one of {RECORD_KINDS}")
                 if "ctx" in r or "slots" in r:
                     problems.add(where, f"chips.{ch}: a quick-check run records no ctx or slots, so its row has none")
-                if r["kernel_path"] != "exact":
-                    problems.add(where, f"chips.{ch}: a quick-check run is the zero-flag run: kernel_path exact")
-                if sorted(r["measured"] or {}) != list(QUICK_MEASURED):
-                    problems.add(where, f"chips.{ch}: a quick-check run measures decode_tok_s_1_user only (1 user, no "
-                                        "8-user number)")
+                m = r.get("measured")
+                if m is not None and (not isinstance(m, dict) or not m or set(m) - set(QUICK_MEASURED)):
+                    problems.add(where, f"chips.{ch}: a QUICK row's measured, when present, holds {QUICK_MEASURED} only "
+                                        "(1 user, no 8-user number)")
+                m = m if isinstance(m, dict) else {}
+                one = m.get("decode_tok_s_1_user")
+                if "decode_tok_s_1_user" in m and (not isinstance(one, (int, float)) or isinstance(one, bool) or one <= 0):
+                    problems.add(where, f"chips.{ch}.measured.decode_tok_s_1_user must be the record's number")
+                if "steady_decode_tok_s_1_user" in m or "steady_condition" in m:
+                    st = m.get("steady_decode_tok_s_1_user")
+                    if (not isinstance(st, (int, float)) or isinstance(st, bool) or st <= 0
+                            or m.get("steady_condition") not in STEADY_CONDITIONS.values()
+                            or r["status"] != "passing" or r["kernel_path"] != "bundle"):
+                        problems.add(where, f"chips.{ch}: a steady-decode speed is measured.steady_decode_tok_s_1_user "
+                                            "(> 0) with its steady_condition (one of catalog.STEADY_CONDITIONS), on a "
+                                            "passing kernel-path row (its own sealed record)")
             if r["status"] not in ("passing", "failing"):
                 problems.add(where, f"chips.{ch}.status must be passing or failing (the outcome of the run's record)")
+            if quick and r["status"] == "failing" and r.get("reason") not in QUICK_FAIL_REASONS:
+                problems.add(where, f"chips.{ch}: a QUICK that did not pass names its reason class, one of "
+                                    f"{QUICK_FAIL_REASONS} (the record guard recomputes it from the sealed compare)")
+            if "chip_count" in r:
+                n, host = r["chip_count"], str(r["accelerator"]).rsplit("-", 1)[-1]
+                if (not isinstance(n, int) or isinstance(n, bool) or n < 1 or not host.isdigit()
+                        or n > int(host)):
+                    problems.add(where, f"chips.{ch}.chip_count {n!r}: the chips the run used, 1 to the {host} of "
+                                        f"{r['accelerator']}")
             if r["kernel_path"] not in ("bundle", "exact"):
                 problems.add(where, f"chips.{ch}.kernel_path must be bundle or exact")
             if moe and r["status"] == "passing":      # no mixture of experts without its experts on the kernel
                 if r.get("routed_experts") != "kernel":
                     problems.add(where, f"chips.{ch}: a mixture of experts passes only with a sealed chip record of its "
                                         "routed experts on the kernel (routed_experts \"kernel\")")
-                if not all(isinstance((r["measured"] or {}).get(f"goodput_roofline_pct_{n}"), (int, float))
+                if not all(isinstance((r.get("measured") or {}).get(f"goodput_roofline_pct_{n}"), (int, float))
                            for n in ("1_user", "8_users")):
                     problems.add(where, f"chips.{ch}: a mixture of experts passes only with its goodput as % of the "
                                         "roofline for 1 and 8 users (measured.goodput_roofline_pct_1_user and "
                                         "goodput_roofline_pct_8_users, from its record)")
             if not moe and "routed_experts" in r:
                 problems.add(where, f"chips.{ch}.routed_experts on a row whose file has no experts")
-            tok = (r["measured"] or {}).get("decode_tok_s_1_user")
-            if not isinstance(tok, (int, float)) or tok <= 0:
+            tok = (r.get("measured") or {}).get("decode_tok_s_1_user")
+            if not quick and (not isinstance(tok, (int, float)) or tok <= 0):
                 problems.add(where, f"chips.{ch}.measured.decode_tok_s_1_user must be the record's number")
             if r["kernel_path"] == "bundle":
                 need = {t for t in g["types"] if t not in UNQUANTIZED}
                 lack = sorted(need - kern_types.get(ch, set()))
                 if lack:
                     problems.add(where, f"chips.{ch}: kernel_path bundle, but no engine_kernels row for {ch} has {lack}")
+        if "speculation" in g:
+            gguf_spec_problems(g, chips, problems, where)
+
+
+def gguf_spec_problems(g, chips, problems, where):
+    """gguf[].speculation in form (the record guard reads each entry's sealed runs): n-gram only; per engine chip key
+    ("v6e-1": family-devices) an entry with status passed or not_passed, its record named "gguf/<row id>/<kind>/<chip
+    key>" with that record's SHA256SUMS sha256, the runs' component_set_sha (64 hex) and speculation step version, and a
+    k_table of the engine's row buckets with k > 0 at the 1-row bucket it measured and 0 at every other. A passed entry
+    stands only beside the row's passing kernel-path QUICK on that chip family and chip count."""
+    sp = g["speculation"]
+    if not isinstance(sp, dict) or not sp or set(sp) - set(GGUF_SPEC_KINDS):
+        problems.add(where, f"speculation kinds: {sorted(sp) if isinstance(sp, dict) else sp!r}; a GGUF row's gate "
+                            f"entries are {list(GGUF_SPEC_KINDS)} only (MTP is off for GGUF files)")
+        return
+    for kind, per in sp.items():
+        for ck, e in (per.items() if isinstance(per, dict) else ()):
+            w = f"speculation.{kind}.{ck}"
+            m = CHIP_KEY_RE.match(str(ck))
+            if not m:
+                problems.add(where, f"{w}: the chip key is the engine's chip_key (family-devices, e.g. v6e-1)")
+                continue
+            if not isinstance(e, dict) or any(k not in e for k in GGUF_SPEC_KEYS):
+                problems.add(where, f"{w} needs {GGUF_SPEC_KEYS}")
+                continue
+            if e["status"] not in ("passed", "not_passed"):
+                problems.add(where, f"{w}: status passed or not_passed (the outcome of its sealed runs)")
+            if e["record"] != f"gguf/{g['id']}/{kind}/{ck}":
+                problems.add(where, f"{w}: record gguf/{g['id']}/{kind}/{ck} (the record catalog-evidence.json seals)")
+            for k in ("record_sha256", "component_set_sha"):
+                if not isinstance(e[k], str) or not HEX64_RE.match(e[k]):
+                    problems.add(where, f"{w}: {k} must be 64 hex")
+            if not isinstance(e["spec_step_version"], int) or isinstance(e["spec_step_version"], bool):
+                problems.add(where, f"{w}: spec_step_version must be the runs' integer version")
+            kt = e["k_table"]
+            if (not isinstance(kt, dict) or set(kt) != set(GGUF_SPEC_BUCKETS)
+                    or any(not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 8 for v in kt.values())
+                    or not kt.get("1") or any(kt[b] for b in GGUF_SPEC_BUCKETS[1:])):
+                problems.add(where, f"{w}: k_table {kt!r}: every row bucket {list(GGUF_SPEC_BUCKETS)}, k 1-8 at the "
+                                    "1-row bucket it measured and 0 at every other")
+            if e["status"] == "passed":
+                fam, n = m.group(1), int(m.group(2))
+                r = chips.get(fam) if isinstance(chips.get(fam), dict) else {}
+                count = r.get("chip_count") or int(str(r.get("accelerator") or "x-0").rsplit("-", 1)[-1] or 0)
+                if (r.get("status") != "passing" or r.get("kernel_path") != "bundle" or "record_kind" not in r
+                        or count != n):
+                    problems.add(where, f"{w}: a passed gate entry needs the row's passing kernel-path QUICK on {n} "
+                                        f"{fam} chip{'s' * (n != 1)} (chips.{fam}: kernel_path bundle, chip count {n})")
 
 
 CPU_CHECK_KEYS = {"status", "reference", "identical_weights", "block_path", "greedy", "tokenizer"}
