@@ -1,4 +1,4 @@
-"""A model's drafter for speculative decoding (INTERFACES-v1 §10): its models.json declaration, the gate rule that turns
+"""A model's drafter for speculative decoding: its models.json declaration, the gate rule that turns
 it on by default, and its part of the deployment key.
 
 models.json, on the model row (absent = no drafter = speculation off):
@@ -60,7 +60,7 @@ def k_table(dr, chip):
 
 
 def key(dr):
-    """The drafter's part of component_set_sha (INTERFACES-v1 §6): kind, id@version, weights sha256, k rule and the
+    """The drafter's part of component_set_sha: kind, id@version, weights sha256, k rule and the
     speculation step version (runtime/spec_step.py SPEC_STEP_VERSION: a passed gate never covers a step it did not
     measure). None (speculation off) for no drafter."""
     if dr is None:

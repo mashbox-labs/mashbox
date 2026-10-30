@@ -1,63 +1,70 @@
-/* MASHBOX app screens and the window frame. Built only from the shell's tokens (ui/shell/shell.css). */
+/* MASHBOX app screens and the window frame. Built only from the shell's tokens (ui/shell/shell.css), in the homepage's
+   look: filled rounded tiles, pill buttons, a full 1px rounded stroke or none (never one side). */
 .app-panel { margin-bottom: 16px; }
 .app-stack { display: grid; gap: 4px; }
 .app-cols { align-items: start; }
-.app-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.app-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
 .app-row .mbx-note { margin: 0; flex: 1 1 240px; }
 .app-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.app-field { display: grid; gap: 4px; margin: 8px 0; }
+.app-field { display: grid; gap: 5px; margin: 10px 0; }
 .app-field input, .app-field select { width: 100%; box-sizing: border-box; }
-.mbx-ui .app-field input[type=password] { font: inherit; color: var(--mbx-ink); background: var(--mbx-field);
-  border: 2px solid var(--mbx-line-2); padding: 9px 12px; border-radius: 0; }
-.mbx-ui .app-field input[type=password]:focus { outline: none; border-color: var(--mbx-line-3); }
+.mbx-ui .app-field input[type=password] { font: inherit; font-size: 14.5px; color: var(--mbx-ink); background: var(--mbx-field); min-height: 40px;
+  border: 1px solid var(--mbx-line-2); padding: 9px 11px; border-radius: var(--mbx-r-sm); }
+.mbx-ui .app-field input[type=password]:focus { outline: 2px solid var(--mbx-up); outline-offset: 2px; }
 .app-hint, .app-dim { color: var(--mbx-faint); }
 .app-list { display: grid; gap: 10px; }
-.app-item { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; padding: 12px;
-  border: 2px solid var(--mbx-line); background: var(--mbx-panel-2); }
-.app-item.app-on { border-color: var(--mbx-line-3); }
+/* a row inside a panel: a 1px rule stroke all round at radius 14, no second fill (skill: dense screens); the row in use is filled (paper) */
+.app-item { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; padding: 14px 16px;
+  border: 1px solid var(--mbx-line); border-radius: var(--mbx-r); background: none; }
+.app-item.app-on { background: var(--mbx-bg); }
 .app-item-main { min-width: 0; flex: 1; }
-.app-item-main p { margin: 4px 0 8px; color: var(--mbx-dim); }
-.app-name { font-family: var(--mbx-font); }
+.app-item-main p { margin: 4px 0 8px; color: var(--mbx-dim); font-size: 14.5px; }
+.app-name { font-family: var(--mbx-font); font-weight: 700; font-size: 16.5px; line-height: 1.3; letter-spacing: -0.012em; }
 .app-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.app-live { color: var(--mbx-up); border-color: var(--mbx-up); }
+/* Live tag: 1px ember pill, ember text, 600 11px */
+.mbx-chip.app-live, .app-live { color: var(--mbx-accent); background: none; border: 1px solid var(--mbx-up); padding: 3px 7px; font: 600 11px/1 var(--mbx-font); letter-spacing: 0.02em; }
+.app-name + .app-live { margin-left: 8px; vertical-align: 2px; }
 .app-acts { display: flex; flex-direction: column; gap: 6px; flex: none; }
-.app-btn { display: inline-block; text-decoration: none; text-align: center; padding: 6px 12px; border: 2px solid var(--mbx-line-2);
-  color: var(--mbx-ink); background: var(--mbx-panel); font-family: var(--mbx-font); font-weight: 700; text-transform: uppercase;
-  font-size: 12.5px; box-shadow: 3px 3px 0 var(--mbx-hard); }
-.app-btn.pri { background: var(--mbx-up); border-color: var(--mbx-up); color: var(--mbx-bg); }
-.app-danger { border-color: var(--mbx-down) !important; }
+.app-btn { display: inline-block; text-decoration: none; text-align: center; min-height: 40px; line-height: 40px; padding: 0 18px; border: 0;
+  border-radius: var(--mbx-r-pill); color: var(--mbx-ink); background: var(--mbx-btn-in); font-family: var(--mbx-font); font-weight: 500;
+  font-size: 15px; white-space: nowrap; }
+.app-btn:hover { background: var(--mbx-btn-inh); }
+.mbx-ui a.app-btn { color: var(--mbx-ink); }
+.mbx-ui a.app-btn.pri { color: var(--mbx-on-btn); }
+.app-btn.pri { background: var(--mbx-btn); color: var(--mbx-on-btn); font-weight: 600; }
+.app-btn.pri:hover { background: var(--mbx-btn-h); }
+.app-danger { color: var(--mbx-down) !important; }
 .app-mono, .app-code, .app-log { font-family: var(--mbx-mono); overflow-wrap: anywhere; }
-.app-code, .app-log { background: var(--mbx-field); border: 2px solid var(--mbx-line); padding: 10px; margin: 6px 0 0;
-  white-space: pre-wrap; font-size: 12.5px; color: var(--mbx-ink); }
+.app-code, .app-log { background: var(--mbx-field); border: 0; border-radius: var(--mbx-r); padding: 10px 13px; margin: 6px 0 0;
+  white-space: pre-wrap; font-size: 13px; color: var(--mbx-ink); }
 .app-log { max-height: 260px; overflow: auto; min-height: 2.5em; }
-.app-copy { margin: 10px 0; }
+.app-copy { margin: 12px 0; }
 .app-copy-head { display: flex; gap: 10px; align-items: center; }
 .app-copy-head button { margin-left: auto; }
 .app-kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 10px 0; align-items: baseline; }
 .app-kv > span { color: var(--mbx-faint); }
-.app-dot { display: inline-block; width: 9px; height: 9px; margin-right: 8px; background: var(--mbx-faint); }
+.app-dot { display: inline-block; width: 8px; height: 8px; margin-right: 8px; border-radius: 50%; background: var(--mbx-faint); }
 .app-dot.live { background: var(--mbx-up); }
 .app-dot.busy { background: var(--mbx-ok); }
 .app-dot.off { background: var(--mbx-down); }
 @media (max-width: 700px) { .app-item { flex-direction: column; } .app-acts { flex-direction: row; } .app-grid2 { grid-template-columns: 1fr; } }
 
-/* the window frame: module sidebar on the left, one page on the right */
+/* the window frame: module sidebar on the left (a filled column, no stroke), one page on the right */
 body.app-frame { margin: 0; height: 100vh; display: flex; overflow: hidden; background: var(--mbx-bg); }
-.app-side { width: 212px; flex: none; display: flex; flex-direction: column; background: var(--mbx-panel);
-  border-right: 2px solid var(--mbx-line); }
-.app-brand { display: flex; align-items: center; gap: 10px; padding: 16px 16px 12px; font-family: var(--mbx-font);
-  font-weight: 700; letter-spacing: .04em; color: var(--mbx-ink); }
-.app-brand img { width: 22px; height: 22px; }
-.app-side h4 { margin: 14px 16px 6px; font-family: var(--mbx-pixel), var(--mbx-mono); font-size: 11px; color: var(--mbx-faint);
-  font-weight: 400; letter-spacing: .08em; text-transform: uppercase; }
-.app-nav { display: grid; }
-.app-nav a { display: flex; align-items: center; gap: 10px; padding: 9px 16px; color: var(--mbx-dim); text-decoration: none;
-  font-family: var(--mbx-font); font-weight: 700; text-transform: uppercase; font-size: 12.5px; border-left: 3px solid transparent; }
-.app-nav a:hover { color: var(--mbx-ink); background: var(--mbx-panel-2); }
-.app-nav a.sel { color: var(--mbx-ink); border-left-color: var(--mbx-up); background: var(--mbx-panel-2); }
-.app-nav a kbd { margin-left: auto; font-family: var(--mbx-mono); font-size: 11px; color: var(--mbx-faint); }
-.app-srv { margin-top: auto; padding: 12px 16px; border-top: 2px solid var(--mbx-line); font-size: 13px; color: var(--mbx-dim);
+.app-side { width: 220px; flex: none; display: flex; flex-direction: column; padding: 0 10px 10px; background: var(--mbx-panel); }
+.app-brand { display: flex; align-items: center; gap: 10px; padding: 18px 8px 14px; color: var(--mbx-ink); }
+.app-brand .mark { width: 24px; height: 24px; flex: none; }
+.app-brand .wmo { display: block; height: 15px; width: auto; aspect-ratio: 461.75 / 100; }
+.app-side h4 { margin: 14px 8px 6px; font: 500 13px/1.2 var(--mbx-font); color: var(--mbx-faint); }
+.app-nav { display: grid; gap: 2px; }
+.app-nav a { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 0 12px; border-radius: var(--mbx-r-pill); color: var(--mbx-dim);
+  text-decoration: none; font: 500 15px/1 var(--mbx-font); }
+.app-nav a:hover { color: var(--mbx-ink); background: var(--mbx-sel); }
+.app-nav a.sel { color: var(--mbx-ink); font-weight: 600; background: var(--mbx-sel); }
+.app-nav a kbd { margin-left: auto; font: 500 12px/1 var(--mbx-mono); color: var(--mbx-faint); }
+.app-srv { margin-top: auto; padding: 12px 14px; border-radius: var(--mbx-r); background: var(--mbx-bg); font-size: 13.5px; color: var(--mbx-dim);
   cursor: pointer; display: grid; gap: 2px; }
+.app-srv:hover { background: var(--mbx-sel); }
 .app-srv b { color: var(--mbx-ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-srv small { font-family: var(--mbx-mono); color: var(--mbx-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-frame iframe { flex: 1; border: 0; height: 100%; min-width: 0; background: var(--mbx-bg); }

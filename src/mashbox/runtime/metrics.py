@@ -5,7 +5,7 @@ block size and block count; the protocol's names are recommendations) plus reque
 scrape or an inference gateway reads the server's load without parsing logs. One slot holds one whole context here, so
 a "block" is a slot: block_size = the context length, num_blocks = the slots.
 
-No label names a tenant, an API key, a session or an agent (E41): a scrape shows the server as a whole. The route is
+No label names a tenant, an API key, a session or an agent: a scrape shows the server as a whole. The route is
 behind the API key when the server has keys, as every /v1 route.
 """
 import bisect

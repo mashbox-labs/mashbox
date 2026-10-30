@@ -76,7 +76,7 @@ The server's terminal shows one line per request, with the agent in `ua`, the AP
 
 ## Benchmark: a 9-turn coding task
 
-Nine prompts to an agent that works in a clone of [python-slugify](https://github.com/un33k/python-slugify) (133 tests), one run per agent. Each agent runs in its terminal interface with the settings on its page, on one TPU v6e-1 (on demand) with `mashbox` 0.1.0, which keeps only the conversation in the slot (no host-memory cache). So that the agents answer without stopping to ask, Claude Code runs with `--permission-mode acceptEdits --allowedTools Bash` and Codex with `--dangerously-bypass-approvals-and-sandbox`, added to the commands above. Each agent answers every turn correctly, and the project's full test suite passes at the end.
+Nine prompts to an agent that works in a clone of [python-slugify](https://github.com/un33k/python-slugify) (133 tests), one run per agent. Each agent runs in its terminal interface with the settings on its page, on one TPU v6e-1 (on demand) with a `mashbox` build that keeps only the conversation in the slot (no host-memory cache). So that the agents answer without stopping to ask, Claude Code runs with `--permission-mode acceptEdits --allowedTools Bash` and Codex with `--dangerously-bypass-approvals-and-sandbox`, added to the commands above. Each agent answers every turn correctly, and the project's full test suite passes at the end.
 
 Seconds per turn, from sending the prompt to the agent finishing the turn (approximate):
 

@@ -18,7 +18,7 @@ a row's finish are dropped. generate() is admit + step until its rows end.
 Padding rows (free or still-prefilling slots inside a decode bucket) never write live state: their K/V writes go past the
 cache and are dropped, and their linear-attention state rows are written back unchanged (keep mask), so a row paused
 mid-prefill keeps its state. trace=True records, per generated token, a hash of the row's f32 logits and its top-1 / top-2
-gap (the E25 identity harness compares these between a lone run and a batched run).
+gap (an identity check compares these between a lone run and a batched run).
 
 Prefix cache (prefix_cache=True, used by the server): the slot state lives on between calls. Each slot remembers the
 token ids its state holds at a few points (the end of the prompt, the start of its last message and, as llama.cpp's
@@ -173,9 +173,9 @@ class Engine:
         self.stats = dict(requests=0, prompt_tokens=0, cached_tokens=0, restored_tokens=0, saves=0, dropped_other=0,
                           other_copy_bytes=0, owner_checks=0)
         self.cache_ns = None        # the prefix-cache namespace (set_namespace; runtime/tenancy.py)
-        # prefill tokens per step: while any row decodes (spec 2.3 stall-free budget; ~128 on v6e-1 8-bit, ESTIMATE) and idle
+        # prefill tokens per step: while any row decodes (a stall-free budget; ~128 on v6e-1 8-bit, estimated) and idle
         self.budget_busy, self.budget_idle, self.trace = max(ALIGN, int(budget_busy)), max(ALIGN, int(budget_idle)), bool(trace)
-        # sampled rows on row buckets (spec 7, G13): OFF until the batch-invariance probe passes for the sampler and the decode
+        # sampled rows on row buckets: OFF until the batch-invariance probe passes for the sampler and the decode
         # ops at every bucket on the chip type; off, any sampled row runs the sampled program on all S rows
         self.sampled_buckets = False
         self.order = []             # live rows in admission order (prefill chunks are handed out first come, first served)
@@ -585,7 +585,7 @@ class Engine:
         per call, which the scheduler runs while a row prefills or a request waits), with speculative decoding on
         (--mtp K) its programs (spec_programs()), and the helper programs a request runs (logit rows by slot for each
         prefill row bucket, the sampled first token, logit hashes, slot state take / put / swap, host-cache copies when
-        the host cache is on). The CPU gate E14 counts every compile, eager ops included, over 40 mixed requests after
+        the host cache is on). A CPU test counts every compile, eager ops included, over 40 mixed requests after
         this. Arguments are made as a request makes them (committed slot state and sampler counts, host-made token
         arrays, numpy slot indexes and host copies, the same static arguments), since JAX keys programs on that too. The
         prefill, decode and speculation programs are compiled first in `workers` threads (XLA compiles on the host): the
@@ -599,7 +599,7 @@ class Engine:
         windows, step widths, row buckets) first runs in a request. Any failure here while a loaded table is in use,
         including one a representative reports only at the final barrier, quarantines and drops the table and raises
         programs.TableFailed, as a loaded program that fails in a request does: the engine's process ends, and the next
-        one starts without the table and compiles before it says ready (A13: a failed device call restarts the process;
+        one starts without the table and compiles before it says ready (a failed device call restarts the process;
         this one never warms a second time). MASHBOX_WARM_RUN_ALL=1 runs every program. Call before the first request, with no row live: the slot
         states are cleared after. self.program_list = the signature of each program (runtime/programs.py).
         -> dict(prefill=programs, decode=programs, helpers=programs, programs=total, list_sha, compile_s, run_s,
@@ -623,7 +623,7 @@ class Engine:
                     calls.append(("decode", self.dec, (a(np.zeros(B, i32)), a(np.full(B, CTX, i32))), dict(Tc=Tc, K=K, trace=tr)))
                 calls.append(("decode", self.decs, (a(np.zeros(S, i32)), a(np.full(S, CTX, i32)), sp, a(np.zeros(S, i32)),
                                                     cnt, seen), dict(Tc=Tc, K=K, trace=tr)))
-        calls += self.spec_programs(ck, cv)         # speculation (G-D3): [] when off
+        calls += self.spec_programs(ck, cv)         # speculation: [] when off
 
         def comp(c):
             try:        # into the executable table (a program already there, loaded from a saved table, is skipped)
@@ -950,7 +950,7 @@ class Engine:
         if live and self.DK and not self.spec_off and self._spec_call(live, K):     # speculation: every row in one program
             try:
                 dec_out, ck, cv, K = self._spec_step(ck, cv, live, K)
-            except Exception as e:      # the call replays with plain decoding while its state is unchanged, else A13
+            except Exception as e:      # the call replays with plain decoding while its state is unchanged, else its streams end and the worker restarts
                 if not self._spec_fault(e, ck, cv):
                     raise
         if live and dec_out is None:
@@ -1135,8 +1135,10 @@ class Engine:
         return res
 
     # per-row backoff (POLICY, the row's own history only): after BO_MISS rounds in a row with 0 accepted drafts the row
-    # drafts nothing for BO_WAIT rounds, then tries again; each further failure doubles the wait up to BO_MAX; any
-    # accepted draft resets it. Only for drafters that ask for it (n-gram).
+    # waits BO_WAIT rounds, then tries again: a call that starts during the wait gives it no drafts, the rest of the call
+    # in which the wait began still drafts, and every round counts down the wait (a plain call's K rounds too, in
+    # _spec_call); each further failure doubles the wait up to BO_MAX; an accepted draft outside a wait resets it. Only
+    # for drafters that ask for it (n-gram, draft model).
     BO_MISS, BO_WAIT, BO_MAX = 4, 16, 256
 
     def _k_row(self, r):
@@ -1259,8 +1261,8 @@ class Engine:
         """A speculation call raised. When it failed before the device took the slot state (its
         donated K/V and linear state are all still there: tracing, compiling, the drafter's host side), the state is
         unchanged: this call replays with the plain decode program (warmed), and speculation stays off for this engine's
-        life (spec_off, spec_why; spec_stats faults). -> True. Else False: the state is gone, so the A13 failure rules
-        apply (the call's streams end with the error and the worker restarts), never a silent re-run."""
+        life (spec_off, spec_why; spec_stats faults). -> True. Else False: the state is gone, so the call's streams end with
+        the error and the worker restarts, never a silent re-run."""
         if getattr(self, "_spec_ran", False) or any(getattr(x, "is_deleted", lambda: False)() for x in jax.tree.leaves((ck, cv))):
             return False
         self.spec_off = True

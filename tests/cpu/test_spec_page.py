@@ -85,6 +85,137 @@ def test_backoff_sentence_names_exactly_the_drafters_that_back_off():
                      rf"up to {Engine.BO_MAX} passes, and a pass that keeps a guess sets it back to {Engine.BO_WAIT}\b", s), s
 
 
+def _ngram_engine(tmp_path):
+    """a tiny llama GGUF on CPU with copy from the conversation (k = 3) and 3 passes per speculation call"""
+    import importlib.util
+    import jax.numpy as jnp
+    from mashbox.gguf import open_model
+    from mashbox.runtime.drafters import ngram as NG
+    spec = importlib.util.spec_from_file_location("gguf_fixtures", os.path.join(ROOT, "tools", "gguf_fixtures", "fixtures.py"))
+    fxt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fxt)
+    f, A, c = open_model(fxt.build("llama-f32", str(tmp_path)), act=jnp.float32)
+    W, _ = A.load(f, c, use_kernels=False)
+    return Engine(c, W, A, CTX=128, S=4, K=4, drafter=NG.NGram(3), draft_k=3, spec_rounds=3), c
+
+
+def test_the_back_off_is_counted_per_device_call(tmp_path):
+    """The engine runs several passes in one device call and picks plain or speculation once per call. Here (no row
+    bucket at k = 0) a call runs the plain program only when no request has a guess; it changes no request's miss count,
+    and a request that is already waiting counts the call's K passes toward its wait. In a call that speculates, every pass counts for each request
+    that may guess, whether or not it has a guess in that pass: a pass in which the model keeps none of its guesses
+    raises the request's miss count (or starts its wait), and a pass that keeps a guess sets the miss count to 0 and the
+    next wait back to BO_WAIT. A pass of a request that is waiting (from the call's start, or for the rest of the call in
+    which its wait began) only counts down its wait, whether or not the model keeps a guess. Measured on a tiny model:
+    one request that repeats a phrase and one that never does, in one batch; the page's back-off sentence says the
+    same."""
+    import inspect
+    import textwrap
+    import numpy as np
+    from mashbox.runtime.drafters import ngram as NG
+    tree = ast.parse(textwrap.dedent(inspect.getsource(Engine)))
+    callers = {f.name for f in ast.walk(tree) if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "_backoff" for n in ast.walk(f))}
+    assert callers == {"_spec_step"}, callers       # only a speculation pass changes the miss count
+    writes = {}       # back-off field -> the methods that write it: a plain call (_spec_call) only counts down a wait
+    for f in ast.walk(tree):
+        if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for n in ast.walk(f):
+                for t in (n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, ast.AugAssign) else []):
+                    for e in (t.elts if isinstance(t, ast.Tuple) else [t]):
+                        if isinstance(e, ast.Subscript) and isinstance(e.slice, ast.Constant) \
+                                and e.slice.value in ("miss", "wait", "span"):
+                            writes.setdefault(e.slice.value, set()).add(f.name)
+    assert writes == {"miss": {"_backoff"}, "span": {"_backoff"}, "wait": {"_backoff", "_spec_call"}}, writes
+    eng, c = _ngram_engine(tmp_path)
+    k, N = eng.DK, eng.NR
+    assert N > 1, N
+    rng = np.random.default_rng(2)
+    phrase = rng.integers(1, c.V, 5).tolist()
+    plan = [dict(ids=(rng.integers(1, c.V, 3).tolist() + phrase * 3)[:40], max_new=24), dict(ids=list(range(1, 30)), max_new=40)]
+    bo = lambda r: dict(r.get("bo") or dict(miss=0, wait=0, span=Engine.BO_WAIT))         # noqa: E731
+    calls, cur = [], {}
+    real_call, real_step, real_bo = eng._spec_call, eng._spec_step, eng._backoff
+
+    def spec_call(live, K):
+        cur.update(K=K, live=list(live), row={s: eng.rows[s] for s in live}, before={s: bo(eng.rows[s]) for s in live},
+                   cap={s: eng._k_row(eng.rows[s]) for s in live}, guess={s: eng.drafter.found(eng, eng.rows[s], k) for s in live})
+        cur["spec"] = real_call(live, K)
+        return cur["spec"]
+
+    def spec_step(ck, cv, live, K):
+        cur["start"] = {s: dict(seq=list(eng.rows[s]["prompt"]) + list(eng.rows[s]["ids"]), kr=min(k, eng._k_row(eng.rows[s])),
+                                rem=eng.rows[s]["max_new"] - len(eng.rows[s]["ids"])) for s in live}
+        cur["rounds"] = []
+        out = real_step(ck, cv, live, K)
+        cur["toks"] = {s: [int(x) for x in out[0][0][:, s] if x >= 0] for s in live}
+        return out
+
+    def backoff(r, n_, kr):
+        b = bo(r)
+        real_bo(r, n_, kr)
+        cur["rounds"].append((r["slot"], n_, kr, b, bo(r)))
+
+    eng._spec_call, eng._spec_step, eng._backoff = spec_call, spec_step, backoff
+    nxt, plain_wait_counted = 0, 0
+    while nxt < len(plan) or eng.busy():
+        while nxt < len(plan) and eng.free_slots():
+            eng.admit([plan[nxt]], ())
+            nxt += 1
+        cur.clear()
+        eng.step(waiting=False)
+        if "spec" in cur:
+            calls.append({x: cur[x] for x in cur})
+            if not cur["spec"]:
+                assert not cur.get("rounds"), "a plain call counted a pass"
+                for s in cur["live"]:
+                    b, a = cur["before"][s], bo(cur["row"][s])
+                    assert a["miss"] == b["miss"], ("a plain call changed a miss count", s)
+                    # the plain program runs K passes: a request already waiting counts them toward its wait
+                    assert a == dict(b, wait=max(0, b["wait"] - cur["K"])), ("a plain call's passes and the wait", s, b, a)
+                    plain_wait_counted += b["wait"] > 0
+
+    plain = [x for x in calls if not x["spec"]]
+    spec = [x for x in calls if x["spec"]]
+    assert plain and spec, (len(plain), len(spec))
+    for x in plain:     # a call runs plain only when no request has a guess
+        assert all(x["guess"][s] == 0 or x["cap"][s] == 0 for s in x["live"]), (x["guess"], x["cap"])
+    no_guess_counted = kept_in_wait = 0
+    for x in spec:
+        used = {s: 0 for s in x["live"]}
+        for s, n_, kr, b, a in x["rounds"]:
+            st = x["start"][s]
+            seq = st["seq"] + x["toks"][s][:used[s]]
+            had = min(len(NG.find(np.asarray(seq, np.int64), k)), kr, max(0, st["rem"] - used[s] - 1))
+            used[s] += n_
+            if b["wait"] > 0:   # waiting: the pass only counts down the wait, and a kept guess (rest of the call) resets nothing
+                assert a == dict(b, wait=b["wait"] - 1), (s, n_, kr, b, a)
+                kept_in_wait += kr > 0 and n_ > 1
+                continue
+            if kr == 0:
+                assert a == b, (s, n_, kr, b, a)
+                continue
+            if n_ == 1:     # the model kept none of the request's guesses in this pass (or it had none): it counts
+                assert a["miss"] == b["miss"] + 1 or (a["miss"] == 0 and a["wait"] > 0), (s, n_, b, a)
+                no_guess_counted += had == 0
+            else:           # a kept guess outside a wait: the miss count to 0 and the next wait back to BO_WAIT
+                assert a == dict(b, miss=0, span=Engine.BO_WAIT), (s, n_, b, a)
+    assert no_guess_counted > 0, "no pass of a speculating call without a guess for a request that may guess"
+    assert plain_wait_counted > 0, "no plain call ran while a request was waiting"
+    assert kept_in_wait > 0, "no pass kept a guess for the rest of the call in which a wait began"
+    s = [t for t in re.split(r"(?<=\.)\s+", PAGE.replace("\n", " ")) if "keep missing" in t]
+    assert len(s) == 1, s
+    for said in ("decides once per device call whether it speculates", "in which the model keeps none of its guesses",
+                 "a call in which no request has a guess runs without speculation, and its passes do not count toward "
+                 "the misses, only toward the wait of a request that is already waiting",
+                 "in a call that speculates, every pass counts for each request that may guess, whether or not it has a "
+                 "guess in that pass", "a device call that starts during the wait makes no guesses for it",
+                 "the rest of the call in which the wait began still guesses, and those passes count toward the "
+                 f"{Engine.BO_WAIT} until the wait ends, whether or not the model keeps a guess",
+                 f"a pass that keeps a guess sets it back to {Engine.BO_WAIT} unless the request is waiting"):
+        assert said in s[0], (said, s[0])
+
+
 def _section(title):
     return PAGE.split(f"\n## {title}\n", 1)[1].split("\n## ", 1)[0]
 

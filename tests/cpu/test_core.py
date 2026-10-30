@@ -310,6 +310,22 @@ def test_an_allow_line_covers_exactly_its_count_of_hits(copies):
     assert dl.lint_text("docs/x.md", split, {key: (7, 4)}, set()) == []
 
 
+def test_a_page_never_says_which_mashbox_version_measured_a_number():
+    """the measurement stands: a page never notes the mashbox version a number or a run came from; an install pin and the
+    changelog table (its rows start with the version) are not version notes"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("docs_lint", ROOT / "tools" / "docs_lint.py")
+    dl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dl)
+    for line in ("The other tables on this page were measured with `mashbox` 0.1.0.\n",
+                 "Ours: `mashbox` 0.1.0 with the weights file and default options.\n",
+                 "Start to ready with mashbox 0.1.2 on one chip.\n"):
+        probs = dl.lint_text("docs/x.md", line, {}, set())
+        assert len(probs) == 1 and "measured-version" in probs[0], (line, probs)
+    for line in ("pip install mashbox==0.1.5\n", "| 0.1.2 | Runs on a TPU v5e-4. |\n", "Ours: `mashbox` with the weights file.\n"):
+        assert dl.lint_text("docs/x.md", line, {}, set()) == [], line
+
+
 @pytest.mark.parametrize("line,ok", [("docs/x.md | Not tested yet | 3 | a chip cell", True),
                                      ("docs/x.md | Not tested yet | a chip cell", False),
                                      ("docs/x.md | Not tested yet | 0 | a chip cell", False),
@@ -430,8 +446,8 @@ def test_chip_status_keeps_its_condition():
             why = row.get("note") if row.get("status") == "passing" else (row.get("reason") or row.get("note"))
             if sc.chip_note(m, chip):  # a public note replaces "Not supported: <reason>" (test_chip_note_replaces_not_supported)
                 assert want == row["note"], (m["id"], chip, want)
-            elif why and row.get("status") != "pending":
-                assert want.endswith(": " + why), (m["id"], chip, want)
+            elif why and row.get("status") != "pending":   # the condition right after the status; a measured speed may follow
+                assert want.split(": ", 1)[1].startswith(why), (m["id"], chip, want)
             page = f"Status: <!-- r:{m['id']}/chip-{chip} -->x<!-- /r -->."
             got = sc.fill_numbers(reg, page, "docs/x.md", sc.Problems())
             assert want in got, (m["id"], chip, got)
@@ -629,8 +645,8 @@ def test_path_filter_runs_what_a_change_can_break():
 def test_sync_online_coming_soon_model():
     """The nightly --online check passes a coming-soon model whose HF repo is private (401/403) or absent (404), and
     fails one that is public before its launch or whose state cannot be read (fixtures, no network). The fixture also
-    answers the release-wide checks (tag, PyPI's newest version, the org profile's rendered block), so any problem
-    left is the coming-soon model's own."""
+    answers the release-wide checks (tag, PyPI's newest version, the org profile's rendered block, the HF org card's
+    rendered block and the TPU models collection), so any problem left is the coming-soon model's own."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
     sc = importlib.util.module_from_spec(spec)
@@ -639,7 +655,8 @@ def test_sync_online_coming_soon_model():
            "models": [{"id": "soon", "name": "Soon", "kind": "world", "in": "text", "out": "video",
                        "upstream": {"maker": "Someone"}, "hf_repo": "mashbox-labs/Soon-TPU", "hf_revision": "",
                        "launch": "coming soon"}]}
-    profile = f"# Org\n\n{sc.MARK_START}\n{sc.profile_table(reg)}\n{sc.MARK_END}\n"
+    profile = f"# Org\n\n{sc.MARK_START}\n{sc.profile_block(reg)}\n{sc.MARK_END}\n"
+    org_card = f"# Org\n\n{sc.MARK_START}\n{sc.org_card_block(reg)}\n{sc.MARK_END}\n"
 
     class Fetch:
         def __init__(self, repo_state):
@@ -656,6 +673,10 @@ def test_sync_online_coming_soon_model():
                 return 200, json.dumps({"info": {"version": "0.1.1"}})
             if url == "https://raw.githubusercontent.com/mashbox-labs/.github/main/profile/README.md":
                 return 200, profile
+            if url == "https://huggingface.co/spaces/mashbox-labs/README/raw/main/README.md":
+                return 200, org_card
+            if url == "https://huggingface.co/api/collections?owner=mashbox-labs&limit=100":
+                return 200, json.dumps([{"title": "TPU models", "items": []}])   # a coming-soon port is not listed
             return 404, ""
 
     def problems(repo_state):
@@ -862,3 +883,25 @@ def test_sync_check_result_condition_never_dropped(tmp_path):
     problems = sc.Problems()
     sc.check_conditions(json.loads((ROOT / "models.json").read_text()), ROOT, problems)
     assert not list(problems), list(problems)
+
+
+def test_package_comments_name_no_internal_spec_section():
+    """The package's comments and docstrings say what the code does, never where an internal spec says it (src/mashbox,
+    every .py file): no section signs; no "spec N", "spec section" or document names of the form NAME-vN or NAME-PLAN;
+    no rule or check ids (a capital letter and one or two digits, or one to three capitals, a dash, a capital and one or
+    two digits; the float types F16, F32 and F64 excepted)."""
+    import io
+    import tokenize
+    bad_re = re.compile(r"§|\bINTERFACES(?:-v\d+)?\b|\bspec (?:\d|[A-Z]\d)|\bspec section\b|\b[A-Z]{2,}-v\d+\b|\b[A-Z]{2,}-PLAN\b|"
+                        r"(?<![\w.-])(?!F(?:16|32|64)(?![\w-]))(?:[A-Z]\d{1,2}|[A-Z]{1,3}-[A-Z]\d{1,2})(?![\w-])")   # F16/F32: types
+    bad = []
+    for f in sorted((ROOT / "src" / "mashbox").rglob("*.py")):
+        text = f.read_text()
+        pieces = [(t.start[0], t.string) for t in tokenize.generate_tokens(io.StringIO(text).readline)
+                  if t.type == tokenize.COMMENT]
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and ast.get_docstring(node):
+                d = node.body[0]
+                pieces += [(d.lineno + i, ln) for i, ln in enumerate(d.value.value.splitlines())]
+        bad += [f"{f.relative_to(ROOT)}:{n}: {m.group(0)!r}" for n, t in pieces for m in bad_re.finditer(t)]
+    assert not bad, bad

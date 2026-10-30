@@ -118,7 +118,7 @@ def test_shell_files_are_bundled_and_offline():
     assert not re.search(r"url\(\s*['\"]?https?:", css)
     assert not re.search(r"\b(fetch|XMLHttpRequest|import\s*\(|WebSocket|sendBeacon)\b", js)
     assert "Made by MASHBOX Labs" in js
-    for lic in ("OFL-ChakraPetch.txt", "OFL-ShareTechMono.txt"):
+    for lic in ("OFL-ChakraPetch.txt", "OFL-ShareTechMono.txt", "OFL-Outfit.txt", "OFL-Geist.txt", "OFL-BigShoulders.txt"):
         assert (SHELL / "fonts" / lic).is_file()
 
 

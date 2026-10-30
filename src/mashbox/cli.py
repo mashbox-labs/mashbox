@@ -135,7 +135,7 @@ def forced_plain():
 
 
 def speculation(a, m, cfg, tp, component_set_sha=None, later=False, model=None):
-    """Engine arguments for speculative decoding with the model's drafter (models.json `drafter`, INTERFACES-v1 §10).
+    """Engine arguments for speculative decoding with the model's drafter (models.json `drafter`).
 
     No flag: on only where the drafter passed its gate on this chip for this deployment (gate[chip] "passed" with the
     component_set_sha this deployment has with the drafter on; component_set_sha(drafter key) computes it, None = not
@@ -238,7 +238,7 @@ def speculation(a, m, cfg, tp, component_set_sha=None, later=False, model=None):
 
 def drafter_identity(m, dr, path, k, kmax, mfile=None):
     """The drafter's part of the deployment's component set (runtime/drafter.key: kind, id@version, weights_sha256, k
-    rule; INTERFACES-v1 section 6) for the draft file this start loaded (path), bound to its bytes: weights_sha256 is the
+    rule) for the draft file this start loaded (path), bound to its bytes: weights_sha256 is the
     pinned sha256 hub.draft_file checked the file against (every download; a --mtp-file unless MASHBOX_VERIFY=0), else
     the sha256 of the file's own bytes. A drafter models.json does not declare keys as kind "mtp", the file's name and
     this k."""
@@ -676,7 +676,7 @@ def warm(eng, chat):
     another program list, is moved aside (programs.set_aside) so the save writes a new table there; after a save,
     programs.prune removes the tables no start needs. A program loaded from the table that fails in the two requests or
     in Engine.warm raises programs.TableFailed out of here (the table quarantined and dropped; info["closed"] says
-    whether its folder could be closed): the caller ends this process, which never warms a second time (A13), and the
+    whether its folder could be closed): the caller ends this process, which never warms a second time, and the
     next start compiles without the table (worker.main sends the table's fatal frame to the front; cmd_run exits 70).
     Any other failure while speculation is on leaves the plain engine (drop_speculation), which warms again."""
     from .runtime import programs
@@ -704,7 +704,7 @@ def warm(eng, chat):
         w = run()
     except Exception as e:      # fallback: speculation that fails before ready leaves the plain engine, which warms again
         if isinstance(e, programs.TableFailed) or not getattr(eng, "DK", 0):
-            raise               # a table program's failure ends this process, which never warms a second time (A13)
+            raise               # a table program's failure ends this process, which never warms a second time
         eng.drop_speculation(failed=True)
         eng.spec_why = f"a speculation program failed before ready: {type(e).__name__}: {e}"[:300] + "; plain decoding"
         log(json.dumps(dict(event="speculation", used=False,
@@ -777,7 +777,7 @@ def cmd_run(a, argv=None):
         from .runtime import programs
         try:
             warm(eng, chat)
-        except programs.TableFailed as e:       # quarantined and dropped: this process never warms a second time (A13)
+        except programs.TableFailed as e:       # quarantined and dropped: this process never warms a second time
             log(json.dumps(dict(event="aot_table", phase="failed", **e.info)))
             log("mashbox: a program loaded from the saved program table failed while the server started; start it again"
                 + ("" if e.info.get("closed", True) else " with MASHBOX_AOT=0 (the table's folder could not be closed: "

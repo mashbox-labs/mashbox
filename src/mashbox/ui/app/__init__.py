@@ -1014,7 +1014,8 @@ def make_handler(token=None, ports=None, host="127.0.0.1"):
                         "chat" if p["models"] else "world" if p["ok"] else "chat")
                     s["servers"].append({"id": sid, "name": b.get("name") or u.hostname, "url": url, "from": "url",
                                          "module": module, "model": p["models"][0]["id"] if p["models"] else None})
-                    s["active"] = sid if module == "chat" else s["active"]
+                    # the chat's server: a chat server, or an add-on's server that lists a model (it answers chat too)
+                    s["active"] = sid if module == "chat" or (module != "world" and p["models"]) else s["active"]
                     _save("state.json", s)
                     if b.get("key"):
                         k = keys()

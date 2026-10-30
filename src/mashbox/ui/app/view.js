@@ -124,19 +124,23 @@
           var on = x.id === s.active;
           var light = el('span', { class: 'app-dot' });
           var info = el('small', { class: 'app-dim' }, ['checking']);
+          var ext = (s.addons || []).filter(function (a) { return a.id === x.module; })[0];   // a server of an add-on module
+          var use = function () { return el('button', { class: 'sm', type: 'button', on: { click: function () { post('/api/servers/use', { id: x.id }).then(draw); } } }, ['Use']); };
+          var remove = el('button', { class: 'sm ghost', type: 'button', on: { click: function () { post('/api/servers/remove', { id: x.id }).then(draw); } } }, ['Remove']);
+          var acts = el('div', { class: 'app-acts' }, [
+            ext ? el('a', { class: 'app-btn pri', href: '/m/' + ext.id + '/', target: '_top' }, ['Open ' + ext.label]) : on ? null : use(),
+            remove]);
           get('/api/check?id=' + encodeURIComponent(x.id)).then(function (p) {
             light.className = 'app-dot ' + (p.ok ? (p.health === 503 ? 'busy' : 'live') : 'off');
             info.textContent = p.ok ? (p.health === 503 ? 'loading the model' : 'answers in ' + p.ms + ' ms') + (p.models.length ? ' · ' + p.models.map(function (m) { return m.id; }).join(', ') : '') : (p.error || 'no answer');
+            // an add-on's server that lists a model answers chat too: it can be the chat's server
+            if (ext && !on && p.ok && p.models && p.models.length) acts.insertBefore(use(), remove);
           });
-          var ext = (s.addons || []).filter(function (a) { return a.id === x.module; })[0];   // a server of an add-on module
           mine.appendChild(el('article', { class: 'app-item' + (on ? ' app-on' : ''), 'data-server': x.id }, [
             el('div', { class: 'app-item-main' }, [light, el('b', { class: 'app-name' }, [x.name]), on ? el('span', { class: 'mbx-chip app-live' }, ['In use']) : null,
               ext ? el('span', { class: 'mbx-chip' }, [ext.label]) : null,
               el('div', { class: 'app-mono' }, [x.url]), info]),
-            el('div', { class: 'app-acts' }, [
-              ext ? el('a', { class: 'app-btn pri', href: '/m/' + ext.id + '/', target: '_top' }, ['Open ' + ext.label]) :
-              on ? null : el('button', { class: 'sm', type: 'button', on: { click: function () { post('/api/servers/use', { id: x.id }).then(draw); } } }, ['Use']),
-              el('button', { class: 'sm ghost', type: 'button', on: { click: function () { post('/api/servers/remove', { id: x.id }).then(draw); } } }, ['Remove'])])]));
+            acts]));
         });
       });
     }

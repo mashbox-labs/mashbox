@@ -2,6 +2,27 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.6
+
+### A model card never names a Hugging Face tag of another revision
+
+1. **`tools/hf_github_sync_check.py` `weights_version`:** a `rig` card names its weights by file and sha256 (the default weights row of `files`), never by `hf_tag`. Uploading a card makes a new revision that no tag points at, and a tag is never moved, so a tag named in the card would name another revision.
+2. **`check --online`:** a card line that names a Hugging Face tag of its repo fails unless that tag points at the pinned revision. `hf_tag` must point at a revision whose default weights file has the sha256 that `models.json` pins, and so must the pinned revision.
+
+Why: after a card-only upload the Track2Rig card still called its weights tag the tag of the pinned revision, and that tag points at the revision before. Compatible: `mashbox run` and the weights it downloads are unchanged; a card without `hf_tag` renders as before.
+
+### Docs say what the records say: new checks and chip lists
+
+1. **`tools/hf_github_sync_check.py` `check_conditions`:** a results row with a `condition` (words that change what its number means, such as "main model quantized") never loses them: every sentence or table row that prints its number, on a page, a model card, `llms.txt` or a `models.json` text field of that model, carries the condition.
+2. **`tools/docs_lint.py` rule `measured-version`:** a page never puts a `mashbox` version beside a measured number or run; versions go in the changelog.
+3. **`tpu/__init__.py` `pick_chip`:** `tpu up --chip` with a chip type the model passes on names the host to ask for ("On v6e: use --chip v6e-1"), a measured chip prints its measured line, a chip nobody ran says "Not tested yet"; "Not on" is left for a chip with no row or a failing one.
+4. **CPU in every chip list (`runs_on`, `models_table`, `catalog.chips_run`, `tpu.model`):** a model whose `chips.cpu` row passes is named CPU first in `llms.txt`, the README chips cell, `docs/supported-models.md` and `mashbox models`; `tpu up` for one without TPU settings says it runs on a CPU, with its install and run lines.
+5. **`chips_block` "Runs on":** the docs chips table names every chip the model starts on, the same list as the package catalog (`starts_on`).
+6. **`chip_text`:** a passing chips row with a `measured` block prints its decode speed for 1 request, and for 8 when measured.
+7. **The docs site build:** every rendered page is checked against the `models.json` chips rows (a chip with a run never reads not supported, does not fit, "Not on" or not tested; a chip nobody ran reads "Not tested yet"), and every number on a home page result tile must be on the docs page it links to, rendered from `models.json`. Either one fails the build.
+
+Why: one source (`models.json`), many views, and a chip a model ran on is never dropped. Compatible: `mashbox run` behaves as before, and `tpu up` with a host it offers is unchanged.
+
 ## 0.1.5
 
 ### Chip status in `models.json`: a chip a model ran on is never "not supported"

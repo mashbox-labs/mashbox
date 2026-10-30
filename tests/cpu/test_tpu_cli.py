@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -10,8 +11,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
-
-import re
+from pathlib import Path
 
 import pytest
 
@@ -876,3 +876,63 @@ def test_top_help_lists_tpu_and_every_tpu_command_has_help(capsys):
     for n in ("up", "down", "status", "ssh", "tunnel"):
         line = next((l for l in out.splitlines() if l.strip().startswith(n + " ") or l.strip() == n), None)
         assert line is not None and len(line.split(None, 1)) == 2, (n, out)
+
+
+UP_CHIPS = [(r["id"], chip) for r in tpu.registry()["models"] if "cloud" in r
+            for chip in [None] + [c for c, _ in tpu.offered(tpu.model(r["id"]))]]
+
+
+@pytest.mark.parametrize("mid,chip", UP_CHIPS)
+def test_up_names_the_chip_it_creates_never_that_the_model_needs_it(cloud, capsys, mid, chip):
+    """`tpu up` printed "Qwen3.8-27B needs a TPU v6e-1" while Qwen also runs on a v5e-4 and a v6e-4. For every model with
+    TPU settings and every chip `tpu up` offers it (no --chip: the default), the price line names the chip it creates
+    and never says the model needs or requires one when it has a run on more than one chips row; a page that shows the
+    line for a model's default chip shows it as printed."""
+    m = tpu.pick_chip(tpu.model(mid), chip)
+    cloud(plain={m["cloud"]["zones"][0]: "ok"})
+    tpu.main(["up", mid, "--yes"] + (["--chip", chip] if chip else []))
+    line = next(x for x in capsys.readouterr().out.splitlines() if "per hour while it exists" in x)
+    gtype = m["cloud"]["accelerator"]
+    assert f"on a new TPU {gtype if chip in (None, gtype) else f'{chip} ({gtype})'}:" in line, line
+    ran = [k for k, c in m["chips"].items() if isinstance(c, dict) and c.get("status") in ("passing", "measured")]
+    if len(ran) > 1:
+        assert not re.search(r"\b(?:needs?|requires?|required|must|only)\b", line), (mid, chip, line)
+    if chip is None:
+        root = Path(__file__).resolve().parents[2]
+        for page in [root / "README.md", root / "AGENTS.md", root / "llms.txt", *sorted((root / "docs").rglob("*.md")),
+                     *sorted((root / "hf").glob("*/README.md"))]:
+            for shown in (x.strip() for x in page.read_text().splitlines()):
+                if shown.startswith(m["name"] + " ") and "per hour while it exists" in shown:
+                    assert shown == line, (page.relative_to(root).as_posix(), shown, line)
+
+
+def test_up_on_a_chip_that_exists_never_says_new_and_prices_the_chip_it_uses(cloud, capsys):
+    """`tpu up` printed "... on a new TPU v6e-1: $2.70 per hour" before it looked for the chip, so a second `up` (the
+    --agents --restart hint runs one) called the chip it reuses new. Only a create says "new"; a reuse names the TPU it
+    uses and that TPU's price."""
+    read = cloud(plain={Z[0]: "ok"})
+    assert up() == 0
+    first = capsys.readouterr().out
+    assert "Qwen3.8-27B on a new TPU v6e-1: $2.70 per hour while it exists" in first, first
+    assert up() == 0
+    out = capsys.readouterr().out
+    assert creates(read()) == [Z[0]]                                    # one create only
+    assert "new TPU" not in out and "Create " not in out, out
+    line = next(x for x in out.splitlines() if "already exists" in x)
+    assert "TPU v6e-1" in line and "Using it: $2.70 per hour while it exists" in line, line
+
+
+def test_up_with_another_chip_type_over_a_chip_that_exists_says_which_chip_it_uses(cloud, capsys):
+    """`up` made a v6e-1, then `up --chip v5e-4` printed "on a new TPU v5litepod-4: $4.80 per hour" and reused the
+    v6e-1. The run that reuses a chip of another type names the TPU it uses and its price, says the asked-for type is
+    not created, and never shows the asked-for type's price."""
+    read = cloud(plain={Z[0]: "ok"})
+    assert up() == 0
+    capsys.readouterr()
+    assert up("--chip", "v5e-4") == 0
+    out = capsys.readouterr().out
+    assert creates(read()) == [Z[0]]
+    assert "new TPU" not in out and "$4.80" not in out, out
+    line = next(x for x in out.splitlines() if "already exists" in x)
+    assert "TPU v6e-1" in line and "$2.70 per hour" in line, line
+    assert "not a v5e-4: nothing new is created" in out, out

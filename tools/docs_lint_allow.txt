@@ -6,6 +6,7 @@ CORE-CHANGES.md | This supersedes "not chosen yet" in the docs entry | 1 | licen
 CORE-CHANGES.md | licence not chosen yet" now says Apache-2.0 | 1 | licence history, quoted as it read (licence wording is never edited)
 CORE-CHANGES.md | says a licence is not chosen, pending or reserved | 1 | names the licence words the check fails on
 CORE-CHANGES.md | (reference: says "not chosen yet", as | 1 | licence history, quoted as it read (licence wording is never edited)
+CORE-CHANGES.md | Not tested yet | 2 | the chip status the pages print, quoted (0.1.6: tpu up --chip and the docs site build)
 docs/models/hy-nomas.md | plus the compute meter and a UTC clock | 1 | the app's on-screen clock, not a date on the page
 src/mashbox/hub.py | stamp under ~/.cache/mashbox/verified records | 1 | the name of a file the program writes
 src/mashbox/models/hy_nomas/server.py | video sent and not yet acked | 1 | the state of the video stream
@@ -27,3 +28,5 @@ hf/hy-nomas/README.md | Not tested yet | 2 | a chip status: the model has not ru
 hf/qwen3-8-27b/README.md | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
 docs/_templates/model.md | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported (Hy-Nomas v5e and v5p-8, Qwen3.8-27B v5p-8; Track2Rig is a CPU model: v5e, v5p-8 and v6e-4 not run)
 src/mashbox/tpu/__init__.py | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported (Hy-Nomas v5e and v5p-8, Qwen3.8-27B v5p-8; Track2Rig is a CPU model: v5e, v5p-8 and v6e-4 not run)
+src/mashbox/catalog.py | Not tested yet | 2 | a chip status: a GGUF file checked on CPU with no chip run says so (tpu_line docstring and its return), instead of supported or not supported
+docs/supported-models.md | Not tested yet | 9 | a chip status: a GGUF file checked on CPU with no chip run says so, instead of supported or not supported

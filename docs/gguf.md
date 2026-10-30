@@ -72,8 +72,8 @@ and warns when it is close. `mashbox inspect` prints the estimate; XLA's own wor
 | Architecture (`general.architecture`) | Models | Files in the catalog |
 |---|---|---|
 | `qwen35` | Qwen3.5, Qwen3.6, Qwen3.8 (dense) | ggml-org-qwen3-5-0-8b-q8-0, unsloth-qwen3-5-4b-q4-k-m |
-| `qwen2` | Qwen2.5 | bartowski-qwen2-5-0-5b-instruct-q4-k-m, bartowski-qwen2-5-1-5b-instruct-q4-k-m |
-| `qwen3` | Qwen3 | unsloth-qwen3-0-6b-q8-0 |
+| `qwen2` | Qwen2.5 | bartowski-qwen2-5-0-5b-instruct-q4-k-m, bartowski-qwen2-5-1-5b-instruct-q4-k-m, bartowski-qwen2-5-1-5b-instruct-q5-k-m |
+| `qwen3` | Qwen3 | unsloth-qwen3-0-6b-q8-0, unsloth-qwen3-1-7b-q4-0 |
 <!-- archs:end -->
 
 ## Tokenizer note

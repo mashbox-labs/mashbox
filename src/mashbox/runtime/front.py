@@ -17,7 +17,7 @@ When the worker fails (an error from a device call, out of memory, a call past t
   (its ERROR frame names the table), is replaced at once by workers that start without the table (MASHBOX_AOT=0) and
   compile before they say ready; the first of them is timed as a first start, and a failure in the warm-up is not
   counted as a failed start.
-- a worker that cannot get ready ends the server instead of answering 503 forever (INTERFACES §3.5): START_TRIES worker
+- a worker that cannot get ready ends the server instead of answering 503 forever: START_TRIES worker
   lives in a row that end before ready (a load that fails every time: wrong path, too small a chip), or a restart slower
   than START_SLOW_X x the first start (at least START_FLOOR_S), and the front stops serving; serve_split exits non-zero
   with the worker's own error.
@@ -187,7 +187,7 @@ class Front(Server):
             self.closed.wait(pause)
 
     def start_limit_s(self):
-        """How long a restarted worker may take to get ready (INTERFACES §3.5); None before the first worker was ready."""
+        """How long a restarted worker may take to get ready; None before the first worker was ready."""
         if self.first_ready_s is None:
             return None
         return max(P.START_SLOW_X * self.first_ready_s, self.start_floor_s)

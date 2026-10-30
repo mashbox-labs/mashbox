@@ -8,7 +8,7 @@ print the same value (a compile cache made for one list is checked against it).
 
 The watch counts every XLA backend compile in this process (jit programs and eager ops alike, by function name). After
 mark_ready() each compile is a compile after ready: it is counted and handed to the callback (the server logs it), and
-/health reports the count (null in a process that has not marked ready, never a 0 it did not count). Zero compiles after ready is the gate (spec E14 on CPU, the certified base on a chip).
+/health reports the count (null in a process that has not marked ready, never a 0 it did not count). Zero compiles after ready is the gate (a CPU test, and the certified base on a chip).
 """
 import hashlib
 import json

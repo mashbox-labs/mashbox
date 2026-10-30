@@ -26,7 +26,7 @@ If `~/.local/bin` is not on your `PATH`, it prints the `export PATH=...` line fo
 1. Prints the price per hour of the chip and its max lifetime, and asks before it creates anything:
 
    ```text
-   Qwen3.8-27B needs a TPU v6e-1: $2.70 per hour while it exists (estimate at Google's on-demand list price per chip-hour, US regions; Google bills the real price).
+   Qwen3.8-27B on a new TPU v6e-1: $2.70 per hour while it exists (estimate at Google's on-demand list price per chip-hour, US regions; Google bills the real price).
    Max lifetime: 8 h after the chip starts, then it deletes itself (--max-hours 0 turns this off).
    Create mashbox-qwen3-8-27b now? [y/N]
    ```

@@ -9,11 +9,10 @@ README.md | downloads the 26.9 GB weights file | size of Qwen3.8-27B-BQ8_R.bshj,
 README.md | single TPU v6e chip (32 GB) from a 26.94 GB weights file at 8.01 bits per weight | v6e memory per chip (Google's spec); size and bits per weight of the Qwen file (models.json files)
 README.md | Memory per chip | 32 GB | 16 GB | TPU v6e and v5e memory per chip, Google's published spec
 README.md | Memory bandwidth per chip | 1,638 GBps | 800 GiBps | TPU v6e and v5e memory bandwidth per chip, Google's published spec
-README.md | working memory fit in 16 GB | TPU v5e memory per chip, Google's published spec
+README.md | too big for one v5e chip (16 GB) | TPU v5e memory per chip, Google's published spec
 docs/chips.md | Memory per chip | 32 GB | 16 GB | TPU v6e and v5e memory per chip, Google's published spec
 docs/chips.md | Memory bandwidth per chip | 1,638 GBps | 800 GiBps | TPU v6e and v5e memory bandwidth per chip, Google's published spec
 docs/chips.md | Chip-to-chip bandwidth (ICI) | 800 GBps | 400 GBps | TPU v6e and v5e chip-to-chip bandwidth, Google's published spec
-docs/chips.md | working memory fit in 16 GB | TPU v5e memory per chip, Google's published spec
 docs/glossary.md | with 16 GB of memory per chip | TPU v5e memory per chip, Google's published spec
 docs/glossary.md | with 32 GB of memory per chip | TPU v6e memory per chip, Google's published spec
 docs/faq.md | one 26.94 GB weights file, plus an 890 MB compile cache | file sizes of the Qwen download (models.json files)

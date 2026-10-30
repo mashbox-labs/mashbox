@@ -18,7 +18,7 @@
   .chat > .mbx-panel { margin-top: 0; }   /* side by side, not stacked */
   .side, .set { position: sticky; top: 96px; max-height: calc(100vh - 112px); overflow: auto; overscroll-behavior: contain; }
   .pane-h { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .mbx-ui .pane-h h3 { margin: 0; flex: 1; font: 700 13px/1.4 var(--mbx-font); letter-spacing: 0.6px; text-transform: uppercase; color: var(--mbx-acc); }
+  .mbx-ui .pane-h h3 { margin: 0; flex: 1; font: 700 16.5px/1.3 var(--mbx-font); letter-spacing: -0.012em; color: var(--mbx-ink); }
   .pane-h .x { display: none; }
   .mbx-ui .side input[type=search] { width: 100%; }
 
@@ -28,8 +28,8 @@
   .hist .h-none { color: var(--mbx-faint); font-size: 13px; padding: 6px 2px; }
   .mbx-ui .hist .h-open { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 1px; box-shadow: none; background: none;
     border-color: transparent; padding: 6px 8px; white-space: normal; font-weight: 600; }
-  .mbx-ui .hist .h-open:hover { border-color: var(--mbx-line-2); }
-  .mbx-ui .hist li.on .h-open { border-color: var(--mbx-acc); background: color-mix(in srgb, var(--mbx-acc) 10%, var(--mbx-panel)); }
+  .mbx-ui .hist .h-open:hover { background: var(--mbx-btn-in); }
+  .mbx-ui .hist li.on .h-open { background: var(--mbx-sel); }   /* the open chat is filled (paper-3), never an edge or a tint */
   .h-t { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .h-m { font-size: 11.5px; font-weight: 400; color: var(--mbx-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mbx-ui .hist .h-del { box-shadow: none; border-color: transparent; opacity: 0.45; padding: 0 9px; font-size: 16px; }
@@ -39,7 +39,7 @@
   .conv { display: flex; flex-direction: column; min-height: calc(100vh - 230px); min-height: calc(100svh - 230px); padding-bottom: 0; }
   .conv-h { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 6px; }
   .mbx-ui .conv-h h3 { margin: 0; flex: 1 1 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font: 700 13px/1.4 var(--mbx-font); letter-spacing: 0.6px; text-transform: uppercase; color: var(--mbx-acc); }
+    font: 700 16.5px/1.3 var(--mbx-font); letter-spacing: -0.012em; color: var(--mbx-ink); }
   .ctx { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--mbx-dim); white-space: nowrap; }
   .ctx-track { width: 84px; height: 8px; border: 1px solid var(--mbx-line-2); background: var(--mbx-field); position: relative; }
   .ctx-track i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--mbx-acc); transition: width 0.3s; }
@@ -49,7 +49,7 @@
   .empty p { margin: 8px 0 0; }
   .msg { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .msg.user { align-items: flex-end; }
-  .msg.user .bubble { max-width: min(85%, 760px); background: var(--mbx-panel-2); border: 2px solid var(--mbx-line-2); padding: 9px 13px;
+  .msg.user .bubble { max-width: min(85%, 760px); background: var(--mbx-panel-2); border: 1px solid var(--mbx-line-2); padding: 9px 13px;
     white-space: pre-wrap; overflow-wrap: anywhere; }
   .msg.editing { align-items: stretch; }
   .edit-row { margin-top: 6px; }
@@ -64,9 +64,9 @@
   .stats i { font-style: normal; color: var(--mbx-faint); }
   .wait { font-size: 13px; color: var(--mbx-ok); animation: blink 1.2s ease-in-out infinite; }
   @keyframes blink { 50% { opacity: 0.35; } }
-  .err { border: 2px solid var(--mbx-down); color: var(--mbx-down); padding: 8px 11px; font-size: 13.5px; overflow-wrap: anywhere; }
-  .think { border: 2px dashed var(--mbx-line-2); background: var(--mbx-field); }
-  .think summary { cursor: pointer; padding: 7px 10px 6px; font: 400 14px/1 var(--mbx-pixel); letter-spacing: 1px; text-transform: uppercase; color: var(--mbx-ok); }
+  .err { border: 1px solid var(--mbx-down); color: var(--mbx-down); padding: 8px 11px; font-size: 13.5px; overflow-wrap: anywhere; }
+  .think { border: 0; background: var(--mbx-field); }
+  .think summary { cursor: pointer; padding: 7px 10px 6px; font: 500 13px/1.2 var(--mbx-font); color: var(--mbx-ok); }
   .think-b { padding: 2px 12px 10px; color: var(--mbx-dim); font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow-y: auto; }
 
   /* rendered Markdown */
@@ -79,8 +79,8 @@
   .md a { color: var(--mbx-up); }
   .md code { font: 0.92em var(--mbx-mono); background: var(--mbx-field); border: 1px solid var(--mbx-line-2); padding: 0 4px; }
   .md hr { border: 0; height: 2px; background: var(--mbx-line); margin: 14px 0; }
-  .md blockquote { margin: 0 0 10px; padding: 6px 12px; border: 2px solid var(--mbx-line); color: var(--mbx-dim); }
-  .cb { border: 2px solid var(--mbx-line-2); background: var(--mbx-field); margin: 0 0 12px; min-width: 0; }
+  .md blockquote { margin: 0 0 10px; padding: 6px 12px; border: 1px solid var(--mbx-line); color: var(--mbx-dim); }
+  .cb { border: 1px solid var(--mbx-line-2); background: var(--mbx-field); margin: 0 0 12px; min-width: 0; }
   .cb-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 3px 4px 3px 10px; background: var(--mbx-panel-2);
     font: 12.5px var(--mbx-mono); color: var(--mbx-faint); }
   .mbx-ui .cb-h button { box-shadow: none; padding: 1px 9px; font-size: 12px; }
@@ -103,7 +103,7 @@
   /* settings */
   .grp { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; }
   .grp + .grp { margin-top: 2px; }
-  .grp h4 { margin: 4px 0 0; font: 400 14px/1 var(--mbx-pixel); letter-spacing: 1px; text-transform: uppercase; color: var(--mbx-faint); }
+  .grp h4 { margin: 4px 0 0; font: 500 13px/1.2 var(--mbx-font); color: var(--mbx-faint); }
   .grp .mbx-seg { flex-wrap: wrap; align-self: flex-start; }
   .knob { display: flex; flex-direction: column; gap: 2px; padding: 3px 0; }
   .knob-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -118,18 +118,18 @@
   /* API screen */
   .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 16px; margin: 0; font-size: 14px; }
   .kv dt { color: var(--mbx-dim); text-transform: capitalize; } .kv dd { margin: 0; overflow-wrap: anywhere; }
-  pre.call { margin: 10px 0; padding: 12px; background: var(--mbx-field); border: 2px solid var(--mbx-line); font: 13px/1.5 var(--mbx-mono); color: var(--mbx-dim);
+  pre.call { margin: 10px 0; padding: 12px; background: var(--mbx-field); border: 1px solid var(--mbx-line); font: 13px/1.5 var(--mbx-mono); color: var(--mbx-dim);
     overflow-x: auto; white-space: pre; max-height: 60vh; }
   #tab-api { --mbx-acc: var(--mbx-ok); }
 
   /* shortcuts */
-  dialog.keys { border: 2px solid var(--mbx-line-3); background: var(--mbx-panel); color: var(--mbx-ink); box-shadow: 4px 4px 0 var(--mbx-hard); padding: 16px 18px;
+  dialog.keys { border: 0; background: var(--mbx-panel); color: var(--mbx-ink); box-shadow: 0 30px 70px -24px rgb(0 0 0 / .55); padding: 18px 18px 14px;
     width: min(92vw, 440px); }
   dialog.keys::backdrop { background: rgba(0, 0, 0, 0.5); }
-  .mbx-ui dialog.keys h3 { margin: 0 0 10px; font: 700 13px/1.4 var(--mbx-font); letter-spacing: 0.6px; text-transform: uppercase; color: var(--mbx-up); }
+  .mbx-ui dialog.keys h3 { margin: 0 0 10px; font: 700 16.5px/1.3 var(--mbx-font); letter-spacing: -0.012em; color: var(--mbx-ink); }
   .keys dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 14px; margin: 0 0 14px; font-size: 14px; }
   .keys dd { margin: 0; color: var(--mbx-dim); }
-  kbd { font: 12.5px var(--mbx-mono); border: 2px solid var(--mbx-line-2); padding: 0 5px; background: var(--mbx-field); white-space: nowrap; }
+  kbd { font: 12.5px var(--mbx-mono); border: 1px solid var(--mbx-line-2); padding: 0 5px; background: var(--mbx-field); white-space: nowrap; }
   .scrim { position: fixed; inset: 0; z-index: 35; background: rgba(0, 0, 0, 0.45); }
 
   /* narrower screens: the chat list, then the settings, become drawers */
@@ -162,6 +162,15 @@
   }
   @media (pointer: coarse) { .acts, .hist .h-del { opacity: 1; } }
   @media (prefers-reduced-motion: reduce) { .wait { animation: none; } .side, .set { transition: none; } }
+
+  /* homepage shape: fields, bubbles and code blocks are rounded; every stroke is full and 1px */
+  .msg.user .bubble, .err, .think, .cb, pre.call, .md blockquote, .mbx-ui .hist .h-open { border-radius: var(--mbx-r); }
+  .msg.user .bubble { border-color: var(--mbx-line); }
+  .cb { overflow: hidden; }
+  dialog.keys { border-radius: 24px; }
+  kbd, .md code { border-radius: 6px; }
+  .ctx-track, .ctx-track i { border-radius: var(--mbx-r-pill); }
+  .md hr { height: 1px; }
 </style>
 </head>
 <body class="mbx-ui">

@@ -12,8 +12,8 @@ MASHBOX_FAULTS="<kind>@<n>[,...]" is the short form the certification harness us
 fired at the n-th device call (admit or step, counted together) after the worker is ready, in one worker life.
 Each fault that fires logs one line {"event": "fault_injected", "kind": ..., "call": n, "where": ...} on stderr.
 MASHBOX_FAULT="force:<name>" (an entry of the same variable) makes the named fast path fail so its fallback runs, for
-the fallback tests: FORCE lists every name (the fallback table's force names, ARCHITECTURE-v1 section 3) and the fast
-path asks forced(name). A name whose fast path does not call forced() changes nothing.
+the fallback tests: FORCE lists every name and the fast path asks forced(name). A name whose fast path does not call
+forced() changes nothing.
 """
 import json
 import os
