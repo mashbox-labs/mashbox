@@ -272,8 +272,8 @@ def test_a_split_file_runs_each_test_in_exactly_one_part_and_each_script_in_one_
 
 def test_timing_tests_run_in_the_sweep_and_never_gate_a_pull_request():
     """A test that passes or fails on wall-clock time (marker timing) flakes with box speed, so PR CI's T1 deselects it
-    and the sweep (nightly, by hand, every v* tag) runs it with every other T1 test; both run the same shards
-    (--args-of). The one timing test is the "merge": false latency gate; a new one is added here on purpose."""
+    and the sweep (nightly, by hand, every v* tag) runs it with every other T1 test; both pick each job's files with
+    --args-of (the sweep's matrix gives an area at most one job per file: --whole-files). The one timing test is the "merge": false latency gate; a new one is added here on purpose."""
     import re
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     sw = (ROOT / ".github" / "workflows" / "sweep.yml").read_text()
@@ -281,7 +281,7 @@ def test_timing_tests_run_in_the_sweep_and_never_gate_a_pull_request():
     sw_m = re.findall(r'-m "([^"]+)"', sw)
     assert pr_m == ["$AREA and not t0 and not quarantine and not timing"], pr_m
     assert sw_m == ["$AREA and not t0 and not quarantine"], sw_m
-    assert "--args-of" in ci and "--args-of" in sw and "--all --github-output" in sw
+    assert "--args-of" in ci and "--args-of" in sw and "--all --whole-files --github-output" in sw
     assert "schedule:" in sw and "workflow_dispatch:" in sw and 'tags: ["v*"]' in sw and "pull_request" not in sw
     marked = sorted(q.relative_to(ROOT).as_posix() for q in (ROOT / "tests").rglob("*.py")
                     if "mark.timing" in q.read_text() and q.name != "test_ci_areas.py")
@@ -403,6 +403,46 @@ def test_tp_batched_runs_as_parts_in_pr_ci_and_whole_in_the_sweep():
         call = re.search(r"ci_select\.py --args-of [^\n]*", t1).group(0)
         assert ("--whole-files" in call) == flag, (wf, call)
 
+
+def test_the_sweep_matrix_has_no_job_without_a_test_file(tmp_path, monkeypatch, capsys):
+    """The sweep runs every test file whole (--whole-files, no SPLIT parts), so an area cannot run as more jobs than it
+    has files: with the PR shard counts, qwen3_8_27b's 2 files in 4 jobs left jobs 3/4 and 4/4 with no file, they failed
+    ("no test files for area qwen3_8_27b shard 3/4"), and every tag sweep from v0.1.9 to v0.1.12 was red. The sweep's
+    matrix (--all --whole-files --github-output) gives an area min(SHARDS, its file count) jobs; every job's
+    --args-of ... --whole-files names at least one file and exits 0, and an area's jobs run each of its files once.
+    PR CI's matrix (no --whole-files) keeps SHARDS, since its SPLIT parts are units of their own."""
+    import json
+    import re
+    areas = CS.model_areas()
+    out = tmp_path / "github_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    assert CS.main(["--all", "--whole-files", "--github-output"]) == 0
+    rows = json.loads(re.search(r"^matrix=(.*)$", out.read_text(), re.M).group(1))["include"]
+    by = {}
+    for r in rows:
+        by.setdefault(r["area"], []).append(r["shard"])
+    assert by and set(by) == set(CS.select(["pyproject.toml"], areas))
+    for area, shards in by.items():
+        files = CS.area_files(area, areas)
+        n = max(1, min(CS.SHARDS.get(area, 1), len(files)))
+        assert shards == [f"{i}/{n}" for i in range(1, n + 1)], (area, shards, len(files))
+        ran = []
+        for s in shards:
+            capsys.readouterr()
+            assert CS.main(["--args-of", area, "--shard", s, "--whole-files"]) == 0, (area, s, capsys.readouterr().err)
+            got = capsys.readouterr().out.split()
+            assert got and not [a for a in got if a.startswith("--")], (area, s, got)
+            ran += got
+        assert sorted(ran) == sorted(files), area
+    # the PR matrix is unchanged: SHARDS jobs per sharded area, its SPLIT parts filling them
+    pr = CS.jobs(CS.select(["pyproject.toml"], areas))
+    for area, k in CS.SHARDS.items():
+        if area in by:
+            assert [r["shard"] for r in pr if r["area"] == area] == [f"{i}/{k}" for i in range(1, k + 1)], area
+    # and the sweep workflow asks for the capped matrix and runs each job whole
+    sweep = (ROOT / ".github" / "workflows" / "sweep.yml").read_text()
+    assert "tools/ci_select.py --all --whole-files --github-output" in sweep
+    assert "--args-of \"$AREA\" --shard \"$SHARD\" --whole-files" in sweep
 
 def test_pr_ci_skips_the_timing_gates_runs_and_the_sweep_runs_them():
     """Deselecting a timing test does not stop its gate script from doing that gate's runs (the wall-clock gate's warm pairs

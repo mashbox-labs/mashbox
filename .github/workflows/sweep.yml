@@ -28,7 +28,7 @@ jobs:
           python-version: "3.12"
       - name: Every T1 area
         id: select
-        run: python3 tools/ci_select.py --all --github-output
+        run: python3 tools/ci_select.py --all --whole-files --github-output   # at most one job per test file of an area
 
   t1:
     needs: pick
