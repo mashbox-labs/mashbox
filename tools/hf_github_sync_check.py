@@ -315,7 +315,7 @@ GGUF_CHIP_KEYS = ("status", "accelerator", "ctx", "slots", "kernel_path", "measu
 # a quick-check chip run (record_kind "quick-check": four zero-flag `mashbox run REPO:TAG --prompt P --max-tokens 64
 # --temperature 0` runs compared with llama.cpp) measures decode tok/s at 1 user on the exact path, nothing else
 GGUF_QUICK_KEYS = ("status", "accelerator", "kernel_path", "measured", "record_kind")
-RECORD_KINDS = ("quick-check",)
+RECORD_KINDS = ("quick-check", "quick")   # "quick": the same run with 32 tokens (catalog.QUICK_TOKENS)
 QUICK_MEASURED = ("decode_tok_s_1_user",)
 UNQUANTIZED = ("F32", "F16", "BF16")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")

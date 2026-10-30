@@ -19,7 +19,10 @@ import os
 KIND_LABEL = {"llm-gguf": "LLM, GGUF", "llm-tpu": "LLM", "world": "World model", "video": "Video", "image": "Image",
               "voice": "Voice", "rig": "Rigging"}
 FORMAT_LABEL = {"bshj-build": "BSHJ build", "port": "TPU port", "own-model": "MASHBOX model"}
-LEVELS = ("MASHBOX build", "Tuned", "Tested", "Checked on CPU", "Architecture supported")
+LEVELS = ("MASHBOX build", "Tuned", "Tested", "Quick check", "Checked on CPU", "Architecture supported")
+# a QUICK chip record (record_kind "quick"): QUICK_PROMPTS zero-flag `mashbox run` greedy runs of QUICK_TOKENS tokens each,
+# compared with llama.cpp; its row says only that, with the decode speed for one request it measured
+QUICK_KIND, QUICK_PROMPTS, QUICK_TOKENS = "quick", 4, 32
 MASHBOX = "MASHBOX Labs"
 CHIPS = ("v5e", "v6e", "v5p-8", "v6e-4")
 KERNEL_PATHS = ("bundle", "exact")
@@ -155,18 +158,42 @@ def tpu_line(row):
     return "TPU: Not tested yet"
 
 
+def quick_only(row):
+    """True for a gguf[] row whose passing chip runs are all QUICK records (record_kind "quick")"""
+    runs = [r for r in ((row.get("chips") or {}).values()) if (r or {}).get("status") == "passing"]
+    return bool(runs) and all(r.get("record_kind") == QUICK_KIND for r in runs)
+
+
+def quick_line(row):
+    """What a gguf[] row's QUICK records say, and nothing more, one clause per passing QUICK chip in CHIPS order:
+    "Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.52 tok/s for one request" ("Runs on TPU
+    v6e-1 with the engine's TPU kernels: ..." when that run ran on the kernels); None when the row has none."""
+    out = []
+    for c in CHIPS:
+        r = (row.get("chips") or {}).get(c) or {}
+        if r.get("status") != "passing" or r.get("record_kind") != QUICK_KIND:
+            continue
+        on = " with the engine's TPU kernels" if r.get("kernel_path") == "bundle" else ""
+        out.append(f"Runs on TPU {r.get('accelerator') or c}{on}: short check against llama.cpp ({QUICK_PROMPTS} prompts x "
+                   f"{QUICK_TOKENS} tokens), {r['measured']['decode_tok_s_1_user']:g} tok/s for one request")
+    return "; ".join(out) or None
+
+
 def level(row, ours=False):
     """The support level of a row, computed from what the row records (never stored): every models[] row is a MASHBOX
-    build; a gguf[] row with a passing chip run is Tested, and Tuned when it also has a tuned piece; a gguf[] row with
-    no chip run whose CPU check against llama.cpp passed is Checked on CPU; any other row claims only its architecture
-    (validate() keeps such a row out of models.json)."""
+    build; a gguf[] row whose passing chip runs are all QUICK records is Quick check; a gguf[] row with another passing
+    chip run is Tested, and Tuned when it also has a tuned piece; a gguf[] row with no chip run whose CPU check against
+    llama.cpp passed is Checked on CPU; any other row claims only its architecture (validate() keeps such a row out of
+    models.json)."""
     if ours:
         return LEVELS[0]
+    if quick_only(row):
+        return LEVELS[3]
     if row.get("tuned") and chips_run(row):
         return LEVELS[1]
     if chips_run(row):
         return LEVELS[2]
-    return LEVELS[3] if cpu_checked(row) else LEVELS[4]
+    return LEVELS[4] if cpu_checked(row) else LEVELS[5]
 
 
 def ours(reg):
@@ -210,7 +237,7 @@ def gguf_rows(reg):
             "params": _params(g.get("params_b")), "arch": g["arch"], "moe": g["moe"], "types": g["types"],
             "format": "GGUF", "level": level(g), "experimental": bool(g.get("experimental")), "chips": chips_run(g),
             "tok_s_1_user": tok, "tok_s_chip": chip, "run": g["run"], "cpu": cpu_line(g),
-            "tpu": None if chips_run(g) else tpu_line(g),
+            "tpu": quick_line(g) or (None if chips_run(g) else tpu_line(g)),
             "file_url": f"https://huggingface.co/{g['repo']}/blob/{g['revision']}/{g['file']}",
             "license": g["license"], "license_link": g.get("license_link"), "base": g.get("base"),
         })

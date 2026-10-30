@@ -1066,7 +1066,7 @@ def evidence_problems(reg, ev, repo, work=None):
             if e is None:
                 out.append(f"{what}: no evidence entry")
                 continue
-            if e.get("kind") == "quick-check" or "record_kind" in r:      # a quick-check run: its own record kind
+            if e.get("kind") in QUICK_KINDS or "record_kind" in r:      # a quick-check or QUICK run: its own record kind
                 out += quick_check_problems(g, r, e, read, root, repo, git_dir, reg.get("engine_kernels") or [], chip, what,
                                       work)
                 continue
@@ -1544,12 +1544,22 @@ def run_problems(g, r, e, rec, header, man, listed, read, under, work, chip, wha
 
 # A quick-check chip run (record_kind "quick-check"): four runs of `mashbox run REPO:TAG --prompt P --max-tokens 64
 # --temperature 0` with zero engine flags on one chip, each compared with llama.cpp's greedy ids on the same templated
-# prompt ids. Its seal folder holds these files by name, besides the file/plan/card/header the evidence cites.
+# prompt ids. A QUICK chip run (record_kind "quick", catalog.QUICK_KIND) is the same check with catalog.QUICK_TOKENS
+# tokens, its compare tool sealed as cmp_q.py, and its file pin sealed from the pick (no CPU record behind it). Its seal
+# folder holds these files by name, besides the file/plan/card/header the evidence cites.
 QUICK_RUNS, QUICK_TOKENS = 4, 64
-QUICK_FILES = ("cmp.json", "cmp_p1.py", "setup.log", "freeze.txt", "accelerator-type.txt", "CODE_SHA",
+QUICK_KINDS = {"quick-check": (QUICK_TOKENS, "cmp_p1.py"), "quick": (32, "cmp_q.py")}     # catalog.QUICK_KIND, QUICK_TOKENS
+
+
+def quick_files(kind):
+    """the files a seal of this record kind holds by name"""
+    return ("cmp.json", QUICK_KINDS[kind][1], "setup.log", "freeze.txt", "accelerator-type.txt", "CODE_SHA",
             *(f"{x}{i}{y}" for i in range(QUICK_RUNS) for x, y in (
                 ("run", ".json"), ("run", ".rc"), ("run", ".stdout"), ("run", ".stderr"), ("prompt", ".txt"),
                 ("ref", ".ids"))))
+
+
+QUICK_FILES = quick_files("quick-check")
 QUICK_MEASURED = ("decode_tok_s_1_user",)
 QUICK_DEVICE_RE = re.compile(r"^\S+ \S+ \S+ (TPU .+)$", re.M)      # setup's last check: mashbox, jax, libtpu, device kind
 
@@ -1623,9 +1633,11 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
     runs 1-3; the file, plan, card and header hold for the row; the wheel was built from the evidence's code commit,
     whose code set equals this tree's (code_problems)."""
     out = []
-    if e.get("kind") != "quick-check" or r.get("record_kind") != "quick-check":
+    kind = r.get("record_kind")
+    if kind not in QUICK_KINDS or e.get("kind") != kind:
         return [f"{what}: the evidence kind is {e.get('kind')!r} (a quick-check record), and the row's record_kind is "
                 f"{r.get('record_kind')!r}"]
+    tokens, tool = QUICK_KINDS[kind]
     if g["moe"] is True:
         out.append(f"{what}: a mixture of experts passes only with its routed experts on the kernel; a quick-check run "
                    "is the exact path")
@@ -1643,7 +1655,8 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
         if key in e and listed.get(os.path.normpath(e[key]["path"])) != e[key]["sha256"]:
             out.append(f"{what}: {e[key]['path']} is not in {sums.name} with its sha256")
     files = {}
-    for n in QUICK_FILES:
+    need = quick_files(kind)
+    for n in need:
         p = sums.parent / n
         if os.path.normpath(p) not in listed:
             out.append(f"{what}: {n} is not in {sums.name}")
@@ -1655,7 +1668,7 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
     out += code_id_problems(e, listed, read, git_dir, what)
     if have["header"] is not None:
         out += _quick_header_problems(g, have["header"], work, chip, what)
-    if len(files) != len(QUICK_FILES):
+    if len(files) != len(need):
         return out
     tag, runs = f"{g['repo']}:{g['tag']}", []
     for i in range(QUICK_RUNS):
@@ -1666,9 +1679,9 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
         runs.append(run)
         argv, env = [str(x) for x in run.get("argv") or []], run.get("env")
         prompt = files[f"prompt{i}.txt"].read_text()
-        if argv != ["run", tag, "--prompt", prompt, "--max-tokens", str(QUICK_TOKENS), "--temperature", "0"]:
-            out.append(f"{what}: run{i} ran `mashbox {' '.join(argv)}`; a quick-check run is `mashbox run {tag} --prompt "
-                       f"<prompt{i}.txt> --max-tokens {QUICK_TOKENS} --temperature 0`")
+        if argv != ["run", tag, "--prompt", prompt, "--max-tokens", str(tokens), "--temperature", "0"]:
+            out.append(f"{what}: run{i} ran `mashbox {' '.join(argv)}`; a {kind} run is `mashbox run {tag} --prompt "
+                       f"<prompt{i}.txt> --max-tokens {tokens} --temperature 0`")
         if env:
             out.append(f"{what}: run{i} ran with {' '.join(f'{k}={v}' for k, v in sorted(dict(env).items()))}; a "
                        "quick-check run sets no MASHBOX_ variable")
@@ -1717,7 +1730,7 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
     if not isinstance(rows, list) or [x.get("i") for x in rows] != list(range(QUICK_RUNS)):
         out.append(f"{what}: the compare has no row per run (0-{QUICK_RUNS - 1})")
     else:
-        ok, full, near, other = 0, 0, 0, 0
+        ok, full, near, other, first = 0, 0, 0, 0, []
         for i, (x, run) in enumerate(zip(rows, runs)):
             calls = run.get("generate_calls") or [{}]
             c = calls[0] if len(calls) == 1 else {}
@@ -1728,11 +1741,13 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
                 out.append(f"{what}: compare row {i} is not run{i}'s ids")
             if rp != pid:
                 out.append(f"{what}: prompt {i}: llama.cpp ran other prompt ids than the chip")
-            k = quick_check_first_diff(ours, rg, stop)
+            k = quick_check_first_diff(ours, rg, stop, tokens)
             if x.get("first_diff") != k:
                 out.append(f"{what}: prompt {i}: the compare says first difference {x.get('first_diff')}, the sealed ids "
                            f"give {k}")
             gap = x.get("ref_gap")
+            if k == 0:
+                first.append(i)
             if k is None:
                 full += 1
             elif isinstance(gap, (int, float)) and not isinstance(gap, bool) and gap < NEAR_TIE_GAP:
@@ -1745,6 +1760,9 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
         if said != (ok, full, near, other):
             out.append(f"{what}: the compare's rows give runs {ok} / full {full} / near {near} / other {other}, its "
                        f"summary says {said[0]} / {said[1]} / {said[2]} / {said[3]}")
+        if r.get("status") == "passing" and kind == catalog.QUICK_KIND and first:
+            out.append(f"{what}: a QUICK run passes only with llama.cpp's first token on every prompt (a near tie there "
+                       f"fails); prompt {', '.join(map(str, first))} differ{'s' * (len(first) == 1)} at the first token")
         if r.get("status") == "passing" and (ok != QUICK_RUNS or other):
             out.append(f"{what}: passing needs {QUICK_RUNS}/{QUICK_RUNS} runs that load and print and 0 other divergences; "
                        f"the sealed runs give {ok} and {other} other divergence{'s' * (other != 1)}")
@@ -3504,7 +3522,7 @@ def cpu_row(**kw):
 def test_a_row_with_a_passing_cpu_check_and_no_chip_run_is_checked_on_cpu():
     row = cpu_row()
     assert problems(with_row(row)) == []
-    assert catalog.level(row) == "Checked on CPU" and catalog.LEVELS.index("Checked on CPU") == 3
+    assert catalog.level(row) == "Checked on CPU" and catalog.LEVELS.index("Checked on CPU") == 4
     text = catalog.render_text(with_row(row))
     assert ("Runs, checked against llama.cpp on CPU: same weights NMSE 4.2e-12, top-1 131/131; llama.cpp's own path "
             "top-1 128/131; greedy 4 x 16 tokens: 3 identical, 1 near tie") in text
@@ -3705,27 +3723,32 @@ QUICK_STOP = [7, 8]
 # (64 + 14 + 64) / (4.0 + 1.6 + 4.4) = 14.2
 QUICK_TIMING = [(3, 100.0), (64, 4.0), (14, 1.6), (64, 4.4)]
 QUICK_DECODE = 14.2
+# a QUICK run (record_kind "quick") is 32 tokens: (32 + 14 + 32) / (2.0 + 1.6 + 2.4) = 13.0
+QUICK_TIMING_Q = [(3, 100.0), (32, 2.0), (14, 1.6), (32, 2.4)]
+QUICK_DECODE_Q = 13.0
 
 
-def _quick_ids(i):
+def _quick_ids(i, timing=QUICK_TIMING, top=64):
     """(prompt ids, ours, llama.cpp's generated ids) of run i: run 0 and 2 stop on a stop id llama.cpp also picks; run 3
     meets llama.cpp's near tie at step 31"""
     pid = [1, 2, 3, 40 + i]
-    n = QUICK_TIMING[i][0]
-    ours = [100 + i * 100 + s for s in range(n - 1)] + [QUICK_STOP[0]] if n < 64 else [100 + i * 100 + s for s in range(64)]
-    ref = list(ours) + [9] * (64 - len(ours))
+    n = timing[i][0]
+    ours = [100 + i * 100 + s for s in range(n - 1)] + [QUICK_STOP[0]] if n < top else [100 + i * 100 + s for s in range(top)]
+    ref = list(ours) + [9] * (top - len(ours))
     if i == 3:
         ref[31] = 5
     return pid, ours, ref
 
 
-def _fake_quick_check(base, edit=None):
+def _fake_quick_check(base, edit=None, kind="quick-check"):
     """A records root under base with one quick-check chip run of the qwen3-kquant fixture: the four runs (json, exit
     code, stdout, stderr events), the compare, llama.cpp's ids, the prompts, the chip's setup log, pip freeze,
     accelerator type and code commit, the file/plan/card/header of the row, one SHA256SUMS seal, and the git repo of the
     code it ran. edit(part, value) changes a part before it is written ("run0".."run3", "rc0".., "stderr0"..,
     "cmp", "setup", "freeze", "accelerator", "code_sha", "prompt0".., "ref0".., "seal" (lines), "row", "reg", "ev")."""
     edit = edit or (lambda part, v: v)
+    top, tool = QUICK_KINDS[kind]
+    timing, decode = (QUICK_TIMING, QUICK_DECODE) if kind == "quick-check" else (QUICK_TIMING_Q, QUICK_DECODE_Q)
     root = base / "records"
     d = root / "p1row"
     d.mkdir(parents=True)
@@ -3739,19 +3762,19 @@ def _fake_quick_check(base, edit=None):
         (root / "code" / f).write_bytes(data)
     commit = _commit(root / "code")
     row = edit("row", dict(ROW, arch=fx.arch, bytes=FIXTURE.stat().st_size, types=sorted(fx.census()[0]), chips={
-        "v6e": {"status": "passing", "accelerator": "v6e-1", "kernel_path": "exact", "record_kind": "quick-check",
-                "measured": {"decode_tok_s_1_user": QUICK_DECODE}}}))
+        "v6e": {"status": "passing", "accelerator": "v6e-1", "kernel_path": "exact", "record_kind": kind,
+                "measured": {"decode_tok_s_1_user": decode}}}))
     tag = f"{row['repo']}:{row['tag']}"
     parts, rows = {}, []
     for i in range(4):
-        pid, ours, ref = _quick_ids(i)
-        n, dec = QUICK_TIMING[i]
+        pid, ours, ref = _quick_ids(i, timing, top)
+        n, dec = timing[i]
         parts[f"prompt{i}"] = QUICK_PROMPTS[i]
-        parts[f"run{i}"] = {"argv": ["run", tag, "--prompt", QUICK_PROMPTS[i], "--max-tokens", "64", "--temperature", "0"],
+        parts[f"run{i}"] = {"argv": ["run", tag, "--prompt", QUICK_PROMPTS[i], "--max-tokens", str(top), "--temperature", "0"],
                             "env": {}, "rc": None, "error": None, "wall_s": dec + 12.0, "generate_calls": [{
                                 "call_start_s": 11.0, "call_end_s": 11.0 + dec, "prompt_ids": [pid], "ids": [ours],
                                 "timing": {"prefill_s": 0.5, "decode_s": dec, "decode_calls": 9, "new_tokens": n,
-                                           "sampled": False}, "max_new": 64, "stop_ids": QUICK_STOP, "samp": None}]}
+                                           "sampled": False}, "max_new": top, "stop_ids": QUICK_STOP, "samp": None}]}
         parts[f"rc{i}"] = f"0 {dec + 12.5}\n"
         parts[f"stdout{i}"] = "some text\n"
         parts[f"stderr{i}"] = "\n".join(json.dumps(x) for x in (
@@ -3770,7 +3793,7 @@ def _fake_quick_check(base, edit=None):
                      "ref_gap": 0.21 if k is not None else None, "near_tie": k is not None,
                      "kind": "near" if k is not None else "full"})
     parts["cmp"] = {"summary": {"runs_ok": 4, "full": 3, "near": 1, "other": 0, "PASS": True},
-                    "bar": "64 greedy tokens vs llama.cpp", "rows": rows}
+                    "bar": f"{top} greedy tokens vs llama.cpp", "rows": rows}
     parts["setup"] = ("Using CPython 3.12.12\nCreating virtual environment\nsetup rc 0\n"
                       "0.1.5 0.11.2 0.0.48.1 TPU v6 lite\n")
     parts["freeze"] = "".join(f"{k}=={v}\n" for k, v in (
@@ -3778,7 +3801,7 @@ def _fake_quick_check(base, edit=None):
         ("numpy", "2.5.4"), ("tokenizers", "0.23.3"))) + "mashbox @ file:///k/wheel/mashbox-0.1.5-py3-none-any.whl\n"
     parts["accelerator"] = "v6e-1"
     parts["code_sha"] = commit + "\n"
-    parts["cmp_p1"] = "# the compare tool\n"
+    parts["cmp_tool"] = "# the compare tool\n"
     parts["card"] = {"id": row["repo"], "sha": row["revision"], "cardData": {
         "license": row["license"], "license_link": row["license_link"], "base_model": row["base"]}}
     parts["file"] = f"{row['sha256']}  {row['file']}\n{row['bytes']}\n"
@@ -3788,7 +3811,7 @@ def _fake_quick_check(base, edit=None):
         ("run", "run", ".json"), ("rc", "run", ".rc"), ("stdout", "run", ".stdout"), ("stderr", "run", ".stderr"),
         ("prompt", "prompt", ".txt"), ("ref", "ref", ".ids"))},
              "cmp": "cmp.json", "setup": "setup.log", "freeze": "freeze.txt", "accelerator": "accelerator-type.txt",
-             "code_sha": "CODE_SHA", "cmp_p1": "cmp_p1.py", "card": "card-api.json", "file": "file-row.sha256",
+             "code_sha": "CODE_SHA", "cmp_tool": tool, "card": "card-api.json", "file": "file-row.sha256",
              "plan": "plan-row.txt", "header": "header-row.gguf"}
     for k, n in names.items():
         v = edit(k, parts[k])
@@ -3803,12 +3826,26 @@ def _fake_quick_check(base, edit=None):
         return {"path": str(d / n), "sha256": _sha(d / n)}
     ev = {"records_root": str(root), "code_repo": str(root / "code"), "models": {}, "engine_kernels": {},
           "gguf": {row["id"]: {"v6e": {
-              "kind": "quick-check", "sha256sums": src("SHA256SUMS"), "compare": src("cmp.json"),
+              "kind": kind, "sha256sums": src("SHA256SUMS"), "compare": src("cmp.json"),
               "file": src("file-row.sha256"), "plan": src("plan-row.txt"), "card": src("card-api.json"),
               "header": src("header-row.gguf"), "code": {"commit": commit}}}}}
     reg = copy.deepcopy(REG)
     reg["gguf"], reg["engine_kernels"], reg["models"] = [row], [], []
     return edit("reg", reg), edit("ev", ev)
+
+
+def _quick_ref_first(v):
+    """llama.cpp's sealed ids for prompt 1 differ from ours at the first generated token"""
+    a, b = v.split("\n\n")
+    ids = b.split()
+    ids[0] = "6"
+    return a + "\n\n" + " ".join(ids) + "\n"
+
+
+def _quick_cmp_first(c):
+    """the compare says prompt 1 met a near tie at step 0 (gap 0.1); the summary agrees"""
+    c["rows"][1].update(first_diff=0, ref_gap=0.1, near_tie=True, kind="near")
+    c["summary"].update(full=2, near=2)
 
 
 def _quick_cmp_other(c):
@@ -3931,3 +3968,81 @@ def test_the_schema_holds_a_quick_check_row_to_what_it_measured():
         assert any(want in x for x in got), (name, got)
     rendered = catalog.tpu_line(dict(ROW, chips={"v6e": qc}))
     assert rendered == "Runs on: TPU v6e-1" and "ctx" not in rendered and "slot" not in rendered
+
+
+# ---------------------------------------------------------------- QUICK chip record (record_kind "quick")
+# A row's chip says "passing" from a QUICK run: four zero-flag `mashbox run REPO:TAG --prompt P --max-tokens 32
+# --temperature 0` runs compared with llama.cpp's greedy ids, its file pinned by the pick (repo, revision, file, sha256,
+# bytes, card, header) with no CPU record behind it. The row's level is its own, Quick check, and its words say only that.
+
+QUICK_Q = {"status": "passing", "accelerator": "v6e-1", "kernel_path": "exact", "record_kind": "quick",
+           "measured": {"decode_tok_s_1_user": 0.52}}
+QUICK_Q_LINE = "Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.52 tok/s for one request"
+
+
+def test_the_guard_reads_the_quick_check_the_catalog_names():
+    """the row's words come from catalog.py, the guard's bar from QUICK_KINDS: they name the same check"""
+    assert (catalog.QUICK_KIND, catalog.QUICK_PROMPTS, catalog.QUICK_TOKENS) == ("quick", QUICK_RUNS, 32)
+    assert QUICK_KINDS[catalog.QUICK_KIND][0] == catalog.QUICK_TOKENS
+
+
+def test_a_quick_row_is_quick_check_and_says_only_what_was_checked():
+    row = dict(ROW, chips={"v6e": QUICK_Q})
+    assert catalog.level(row) == "Quick check" and catalog.quick_line(row) == QUICK_Q_LINE
+    reg = with_row(row)
+    r = next(x for x in catalog.gguf_rows(reg) if x["id"] == ROW["id"])
+    assert (r["level"], r["tpu"], r["chips"], r["tok_s_1_user"]) == ("Quick check", QUICK_Q_LINE, ["TPU v6e-1"], None)
+    assert f"Quick check<br>{QUICK_Q_LINE}" in catalog.render_markdown(reg)
+    text = catalog.render_text(reg)
+    assert "Quick check" in text and QUICK_Q_LINE in text
+    # the level sits below Tested: a row with another passing chip run is Tested, the QUICK clause still shown
+    both = dict(ROW, chips={"v6e": QUICK_Q, "v5e": dict(ROW["chips"]["v6e"], accelerator="v5e-1")})
+    assert catalog.level(both) == "Tested" and catalog.quick_line(both) == QUICK_Q_LINE
+    assert catalog.LEVELS.index("Tested") < catalog.LEVELS.index("Quick check") < catalog.LEVELS.index("Checked on CPU")
+    # a failing QUICK run claims nothing
+    assert catalog.quick_line(dict(ROW, chips={"v6e": dict(QUICK_Q, status="failing")})) is None
+
+
+def test_the_schema_holds_a_quick_row_to_what_it_measured():
+    assert problems(with_row(dict(ROW, chips={"v6e": QUICK_Q}))) == []
+    bad = {
+        "ctx": (dict(QUICK_Q, ctx=2048), "records no ctx or slots"),
+        "8 users": (dict(QUICK_Q, measured={"decode_tok_s_1_user": 0.52, "decode_tok_s_8_users": 9.0}),
+                    "measures decode_tok_s_1_user only"),
+        "bundle": (dict(QUICK_Q, kernel_path="bundle"), "kernel_path exact"),
+    }
+    for name, (chip, want) in bad.items():
+        got = problems(with_row(dict(ROW, chips={"v6e": chip})))
+        assert any(want in x for x in got), (name, got)
+
+
+def test_record_guard_holds_a_quick_row(tmp_path):
+    reg, ev = _fake_quick_check(tmp_path, kind="quick")
+    assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
+
+
+QUICK_Q_BAD = {
+    "64 tokens": (_both(*(_in_place(f"run{i}", lambda v: v["argv"].__setitem__(5, "64")) for i in range(4))),
+                  "a quick run is `mashbox run someone/Tiny-Qwen3-GGUF:Q4_K_M --prompt <prompt0.txt> --max-tokens 32"),
+    "the 64-token kind's tool": (_set("seal", lambda v: [x.replace("cmp_q.py", "cmp_p1.py") for x in v]),
+                                 "cmp_q.py is not in SHA256SUMS"),
+    "kind mismatch": (_in_place("ev", lambda e: next(iter(e["gguf"].values()))["v6e"].__setitem__("kind", "quick-check")),
+                      "the evidence kind is 'quick-check'"),
+    "pin sha256": (_set("file", lambda v: "c" * 64 + v[64:]), "file-row.sha256 names another file"),
+    "pin revision": (_set("plan", lambda v: v.replace(ROW["revision"], "1" * 40)), "plan-row.txt"),
+    "seal sha256": (_set("seal", lambda v: [("0" * 64 + x[64:]) if x.endswith("cmp.json") else x for x in v]),
+                    "sha256 differs from its seal line"),
+    "decode number": (_quick_row(lambda r: r["measured"].update(decode_tok_s_1_user=14.2)),
+                      "models.json says 14.2, the sealed runs 1-3 give 13.0"),
+    "hidden divergence": (_set("ref2", _quick_ref_differs), "prompt 2: the compare says first difference None"),
+    "near tie at the first token": (_both(_set("ref1", _quick_ref_first), _in_place("cmp", _quick_cmp_first)),
+                                    "prompt 1 differs at the first token"),
+}
+
+
+@pytest.mark.parametrize("form", sorted(QUICK_Q_BAD))
+def test_record_guard_names_each_bad_quick_form(tmp_path, form):
+    edit, want = QUICK_Q_BAD[form]
+    reg, ev = _fake_quick_check(tmp_path, edit, kind="quick")
+    got = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert any(want in x for x in got), got

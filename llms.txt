@@ -26,25 +26,30 @@ GGUF files that run in our engine:
 - Llama-3.2-1B-Instruct Q4_K_M by Meta (llama, GGUF from bartowski): Tested, runs on TPU v6e-1. `mashbox run bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M`
 - Llama-3.2-3B-Instruct IQ4_XS by Meta (llama, GGUF from bartowski): Checked on CPU. `mashbox run bartowski/Llama-3.2-3B-Instruct-GGUF:IQ4_XS`
 - Mistral-7B-Instruct-v0.3 Q3_K_M by Mistral AI (llama, GGUF from bartowski): Checked on CPU. `mashbox run bartowski/Mistral-7B-Instruct-v0.3-GGUF:Q3_K_M`
-- Qwen2.5-0.5B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Tested, runs on TPU v6e-1. `mashbox run bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M`
-- Qwen2.5-1.5B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Tested, runs on TPU v6e-1. `mashbox run bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M`
+- Qwen2.5-0.5B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Quick check, runs on TPU v6e-1. `mashbox run bartowski/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M`
+- Qwen2.5-1.5B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Quick check, runs on TPU v6e-1. `mashbox run bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M`
 - Qwen2.5-1.5B-Instruct Q5_K_M by Qwen (qwen2, GGUF from bartowski): Checked on CPU. `mashbox run bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q5_K_M`
 - Qwen2.5-7B-Instruct Q4_K_M by Qwen (qwen2, GGUF from bartowski): Tested, runs on TPU v6e-1. `mashbox run bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M`
-- Qwen3.5-0.8B Q8_0 by Qwen (qwen35, GGUF from ggml-org): Tested, runs on TPU v6e-1. `mashbox run ggml-org/Qwen3.5-0.8B-GGUF:Q8_0`
+- Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from ggml-org): Quick check, runs on TPU v6e-1. `mashbox run ggml-org/Qwen3.8-27B-GGUF:Q4_K_M`
+- Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from huihui-ai): Quick check, runs on TPU v6e-1. `mashbox run huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF:Q4_K_M`
 - granite-3.3-2b-instruct Q4_K_M by IBM (granite, GGUF from ibm-granite): Checked on CPU. `mashbox run ibm-granite/granite-3.3-2b-instruct-GGUF:Q4_K_M`
 - EXAONE-3.5-2.4B-Instruct Q4_K_M by LG AI Research (exaone, GGUF from LGAI-EXAONE): Checked on CPU. `mashbox run LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct-GGUF:Q4_K_M`
 - Qwen3.5-9B Q4_K_M by Qwen (qwen35, GGUF from lmstudio-community): Tested, runs on TPU v6e-1. `mashbox run lmstudio-community/Qwen3.5-9B-GGUF:Q4_K_M`
+- Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from lmstudio-community): Quick check, runs on TPU v6e-1. `mashbox run lmstudio-community/Qwen3.8-27B-GGUF:Q4_K_M`
+- Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from peculiar-ragdoll): Quick check, runs on TPU v6e-1. `mashbox run peculiar-ragdoll/Dirk-Qwen3.8-27B-GGUF:Q4_K_M`
 - Qwen2.5-0.5B-Instruct q4_k_m by Qwen (qwen2, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen2.5-0.5B-Instruct-GGUF:q4_k_m`
 - Qwen2.5-1.5B-Instruct q4_k_m by Qwen (qwen2, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen2.5-1.5B-Instruct-GGUF:q4_k_m`
 - Qwen2.5-Coder-1.5B-Instruct q4_k_m by Qwen (qwen2, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF:q4_k_m`
 - Qwen3-14B Q4_K_M by Qwen (qwen3, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen3-14B-GGUF:Q4_K_M`
 - Qwen3-4B Q4_K_M by Qwen (qwen3, GGUF from Qwen): Tested, runs on TPU v6e-1. `mashbox run Qwen/Qwen3-4B-GGUF:Q4_K_M`
 - gemma-3-1b-it Q4_K_M by Google DeepMind (gemma3, GGUF from unsloth): Checked on CPU. `mashbox run unsloth/gemma-3-1b-it-GGUF:Q4_K_M`
-- Qwen3-0.6B Q8_0 by Qwen (qwen3, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3-0.6B-GGUF:Q8_0`
+- Qwen3-0.6B Q8_0 by Qwen (qwen3, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3-0.6B-GGUF:Q8_0`
 - Qwen3-1.7B Q4_0 by Qwen (qwen3, GGUF from unsloth): Checked on CPU. `mashbox run unsloth/Qwen3-1.7B-GGUF:Q4_0`
-- Qwen3.5-4B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-4B-GGUF:Q4_K_M`
+- Qwen3-4B-Instruct-2507 Q4_K_M by Qwen (qwen3, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M`
+- Qwen3.5-4B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-4B-GGUF:Q4_K_M`
 - Qwen3.5-9B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-9B-GGUF:Q4_K_M`
-- [Full catalog](https://mashbox.gg/docs/supported-models): 26 entries: 2 MASHBOX ports, 1 MASHBOX model and 23 GGUF files of 18 models.
+- Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.8-27B-GGUF:Q4_K_M`
+- [Full catalog](https://mashbox.gg/docs/supported-models): 31 entries: 2 MASHBOX ports, 1 MASHBOX model and 28 GGUF files of 19 models.
 <!-- models:end -->
 
 ## Optional

@@ -899,12 +899,10 @@
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-1",
-          "ctx": 2048,
-          "slots": 8,
           "kernel_path": "exact",
+          "record_kind": "quick",
           "measured": {
-            "decode_tok_s_1_user": 17.05,
-            "decode_tok_s_8_users": 154.5
+            "decode_tok_s_1_user": 14.75
           }
         }
       }
@@ -943,55 +941,10 @@
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-1",
-          "ctx": 2048,
-          "slots": 8,
           "kernel_path": "exact",
+          "record_kind": "quick",
           "measured": {
-            "decode_tok_s_1_user": 4.38,
-            "decode_tok_s_8_users": 56.6
-          }
-        }
-      }
-    },
-    {
-      "id": "ggml-org-qwen3-5-0-8b-q8-0",
-      "model": "qwen3-5-0-8b",
-      "publisher": "ggml-org",
-      "family": "Qwen3.5, Qwen3.6, Qwen3.8 (dense)",
-      "maker": "Qwen",
-      "repo": "ggml-org/Qwen3.5-0.8B-GGUF",
-      "revision": "807dfd9a6fadbf703207aac3bfb0b2b3040d077c",
-      "file": "Qwen3.5-0.8B-Q8_0.gguf",
-      "tag": "Q8_0",
-      "sha256": "37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f",
-      "bytes": 833592096,
-      "arch": "qwen35",
-      "moe": false,
-      "params_b": {
-        "total": 0.8,
-        "active": null
-      },
-      "types": [
-        "F32",
-        "Q8_0"
-      ],
-      "license": "apache-2.0",
-      "license_link": "https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/blob/807dfd9a6fadbf703207aac3bfb0b2b3040d077c/README.md",
-      "base": "Qwen/Qwen3.5-0.8B",
-      "in": "text",
-      "out": "text",
-      "run": "mashbox run ggml-org/Qwen3.5-0.8B-GGUF:Q8_0",
-      "experimental": false,
-      "chips": {
-        "v6e": {
-          "status": "passing",
-          "accelerator": "v6e-1",
-          "ctx": 2048,
-          "slots": 8,
-          "kernel_path": "exact",
-          "measured": {
-            "decode_tok_s_1_user": 14.58,
-            "decode_tok_s_8_users": 112.0
+            "decode_tok_s_1_user": 3.98
           }
         }
       }
@@ -1029,12 +982,10 @@
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-1",
-          "ctx": 2048,
-          "slots": 8,
           "kernel_path": "exact",
+          "record_kind": "quick",
           "measured": {
-            "decode_tok_s_1_user": 19.06,
-            "decode_tok_s_8_users": 142.1
+            "decode_tok_s_1_user": 16.31
           }
         }
       }
@@ -1075,12 +1026,10 @@
         "v6e": {
           "status": "passing",
           "accelerator": "v6e-1",
-          "ctx": 2048,
-          "slots": 8,
           "kernel_path": "exact",
+          "record_kind": "quick",
           "measured": {
-            "decode_tok_s_1_user": 1.64,
-            "decode_tok_s_8_users": 22.8
+            "decode_tok_s_1_user": 1.43
           }
         }
       }
@@ -1701,7 +1650,7 @@
           "kernel_path": "exact",
           "record_kind": "quick-check",
           "measured": {
-            "decode_tok_s_1_user": 14.63
+            "decode_tok_s_1_user": 15.42
           }
         }
       }
@@ -1767,7 +1716,7 @@
           "kernel_path": "exact",
           "record_kind": "quick-check",
           "measured": {
-            "decode_tok_s_1_user": 8.06
+            "decode_tok_s_1_user": 8.23
           }
         }
       }
@@ -1833,7 +1782,7 @@
           "kernel_path": "exact",
           "record_kind": "quick-check",
           "measured": {
-            "decode_tok_s_1_user": 4.08
+            "decode_tok_s_1_user": 4.15
           }
         }
       }
@@ -1899,7 +1848,7 @@
           "kernel_path": "exact",
           "record_kind": "quick-check",
           "measured": {
-            "decode_tok_s_1_user": 1.75
+            "decode_tok_s_1_user": 1.77
           }
         }
       }
@@ -2165,7 +2114,7 @@
           "kernel_path": "exact",
           "record_kind": "quick-check",
           "measured": {
-            "decode_tok_s_1_user": 4.08
+            "decode_tok_s_1_user": 4.15
           }
         }
       }
@@ -2233,6 +2182,277 @@
           "record_kind": "quick-check",
           "measured": {
             "decode_tok_s_1_user": 1.51
+          }
+        }
+      }
+    },
+    {
+      "id": "peculiar-ragdoll-qwen3-8-27b-q4-k-m",
+      "model": "qwen3-8-27b",
+      "publisher": "peculiar-ragdoll",
+      "family": "Qwen3.8-27B",
+      "maker": "Qwen",
+      "repo": "peculiar-ragdoll/Dirk-Qwen3.8-27B-GGUF",
+      "revision": "6a762d2f2bada33557f3bf98facf916c585e0ed4",
+      "file": "Dirk-Qwen3.8-27B-UD-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "74f4e33f50b8355d31daf6474a687b5aae5ca7010fa1d6a10b49d46f0693e9ff",
+      "bytes": 16464460640,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "IQ3_S",
+        "IQ4_NL",
+        "IQ4_XS",
+        "Q3_K",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/peculiar-ragdoll/Dirk-Qwen3.8-27B-GGUF/blob/6a762d2f2bada33557f3bf98facf916c585e0ed4/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run peculiar-ragdoll/Dirk-Qwen3.8-27B-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick",
+          "measured": {
+            "decode_tok_s_1_user": 0.29
+          }
+        }
+      }
+    },
+    {
+      "id": "lmstudio-community-qwen3-8-27b-q4-k-m",
+      "model": "qwen3-8-27b",
+      "publisher": "lmstudio-community",
+      "family": "Qwen_Qwen3.8",
+      "maker": "Qwen",
+      "repo": "lmstudio-community/Qwen3.8-27B-GGUF",
+      "revision": "5a7da681f60570ab5b439a587e912d2e5eddb582",
+      "file": "Qwen3.8-27B-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "e00082f779fa385cee8c68a3ec8833a75778cc87272240b942f74e0b8243e520",
+      "bytes": 16810714336,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/blob/5a7da681f60570ab5b439a587e912d2e5eddb582/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run lmstudio-community/Qwen3.8-27B-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick",
+          "measured": {
+            "decode_tok_s_1_user": 0.36
+          }
+        }
+      }
+    },
+    {
+      "id": "unsloth-qwen3-4b-instruct-2507-q4-k-m",
+      "model": "qwen3-4b-instruct-2507",
+      "publisher": "unsloth",
+      "family": "Qwen3-4B-Instruct-2507",
+      "maker": "Qwen",
+      "repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+      "revision": "a06e946bb6b655725eafa393f4a9745d460374c9",
+      "file": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597",
+      "bytes": 2497281120,
+      "arch": "qwen3",
+      "moe": false,
+      "params_b": {
+        "total": 4.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507/blob/main/LICENSE",
+      "base": "Qwen/Qwen3-4B-Instruct-2507",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick",
+          "measured": {
+            "decode_tok_s_1_user": 1.74
+          }
+        }
+      }
+    },
+    {
+      "id": "unsloth-qwen3-8-27b-q4-k-m",
+      "model": "qwen3-8-27b",
+      "publisher": "unsloth",
+      "family": "Qwen3.8-27B",
+      "maker": "Qwen",
+      "repo": "unsloth/Qwen3.8-27B-GGUF",
+      "revision": "4ca720788d1e01f1bff70c033e0d0028fd02e502",
+      "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "322e194ff79741c7baa497c240f677f54b201b0efab44ca8e50f122b39123482",
+      "bytes": 16464440224,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "IQ3_S",
+        "IQ4_NL",
+        "IQ4_XS",
+        "Q3_K",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run unsloth/Qwen3.8-27B-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick",
+          "measured": {
+            "decode_tok_s_1_user": 0.32
+          }
+        }
+      }
+    },
+    {
+      "id": "huihui-ai-qwen3-8-27b-q4-k-m",
+      "model": "qwen3-8-27b",
+      "publisher": "huihui-ai",
+      "family": "Qwen3.8-27B",
+      "maker": "Qwen",
+      "repo": "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF",
+      "revision": "1c69098e9c32db6dc06fc48f1d6cc75ad07da89e",
+      "file": "Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "0c7cfe3060493485bb9a6a51195897b0c1d347a49929206adb9a52170183ea03",
+      "bytes": 16551316384,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "IQ3_S",
+        "IQ4_NL",
+        "IQ4_XS",
+        "Q3_K",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/blob/1c69098e9c32db6dc06fc48f1d6cc75ad07da89e/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick",
+          "measured": {
+            "decode_tok_s_1_user": 0.32
+          }
+        }
+      }
+    },
+    {
+      "id": "ggml-org-qwen3-8-27b-q4-k-m",
+      "model": "qwen3-8-27b",
+      "publisher": "ggml-org",
+      "family": "Qwen3.8-27B",
+      "maker": "Qwen",
+      "repo": "ggml-org/Qwen3.8-27B-GGUF",
+      "revision": "a316ea527fde32c12487be7574e2db5ac2ad2a7e",
+      "file": "Qwen3.8-27B-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "c600de0300ae8a0eb3a6c0b8b5561b8b96f16bd2c863c2a66c42de29d391a747",
+      "bytes": 18973870528,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/blob/a316ea527fde32c12487be7574e2db5ac2ad2a7e/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run ggml-org/Qwen3.8-27B-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-1",
+          "kernel_path": "exact",
+          "record_kind": "quick",
+          "measured": {
+            "decode_tok_s_1_user": 0.38
           }
         }
       }

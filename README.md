@@ -43,7 +43,7 @@ The chip bills from create to delete: one TPU v6e chip is $2.70 an hour at Googl
 ## Models
 
 <!-- models:start -->
-**26 models and files run in mashbox: 3 MASHBOX builds and 23 GGUF files of 18 models.**
+**31 models and files run in mashbox: 3 MASHBOX builds and 28 GGUF files of 19 models.**
 
 **MASHBOX builds**
 
@@ -68,18 +68,26 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 | **Llama-3.2-1B-Instruct**<br>by Meta | [Llama-3.2-1B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/blob/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.81 GB | `llama` | Q4_K_M | Tested<br>Runs, checked against llama.cpp on CPU: same weights NMSE 4.2e-12, top-1 133/133; llama.cpp's own path top-1 130/133; greedy 4 x 16 tokens: 3 identical, 1 near tie | TPU v6e-1 |
 | **Llama-3.2-3B-Instruct**<br>by Meta | [Llama-3.2-3B-Instruct-IQ4_XS.gguf](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/blob/5ab33fa94d1d04e903623ae72c95d1696f09f9e8/Llama-3.2-3B-Instruct-IQ4_XS.gguf)<br>from bartowski, 1.83 GB | `llama` | IQ4_XS | Checked on CPU<br>Runs, checked against llama.cpp on CPU: same weights NMSE 3e-12, top-1 133/133; llama.cpp's own path top-1 128/133; greedy 4 x 16 tokens: 4 identical, 0 near tie<br>TPU: Not tested yet | n/a |
 | **Mistral-7B-Instruct-v0.3**<br>by Mistral AI | [Mistral-7B-Instruct-v0.3-Q3_K_M.gguf](https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/blob/61fd4167fff3ab01ee1cfe0da183fa27a944db48/Mistral-7B-Instruct-v0.3-Q3_K_M.gguf)<br>from bartowski, 3.52 GB | `llama` | Q3_K_M | Checked on CPU<br>Runs, checked against llama.cpp on CPU: same weights NMSE 4.4e-12, top-1 150/150; llama.cpp's own path top-1 143/150; greedy 4 x 16 tokens: 3 identical, 1 near tie<br>TPU: Not tested yet | n/a |
-| **Qwen2.5-0.5B-Instruct**<br>by Qwen | [Qwen2.5-0.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/blob/41ba88dbac95fed2528c92514c131d73eb5a174b/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.4 GB | `qwen2` | Q4_K_M | Tested | TPU v6e-1 |
-| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [Qwen2.5-1.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/9eadc66189c7641e1ddd226b8267a9119b2ce2d4/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.99 GB | `qwen2` | Q4_K_M | Tested | TPU v6e-1 |
+| **Qwen2.5-0.5B-Instruct**<br>by Qwen | [Qwen2.5-0.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/blob/41ba88dbac95fed2528c92514c131d73eb5a174b/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.4 GB | `qwen2` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 14.75 tok/s for one request | TPU v6e-1 |
+| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [Qwen2.5-1.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/9eadc66189c7641e1ddd226b8267a9119b2ce2d4/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.99 GB | `qwen2` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 3.98 tok/s for one request | TPU v6e-1 |
 | **Qwen2.5-1.5B-Instruct**<br>by Qwen | [Qwen2.5-1.5B-Instruct-Q5_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/9eadc66189c7641e1ddd226b8267a9119b2ce2d4/Qwen2.5-1.5B-Instruct-Q5_K_M.gguf)<br>from bartowski, 1.13 GB | `qwen2` | Q5_K_M | Checked on CPU<br>Runs, checked against llama.cpp on CPU: same weights NMSE 1.2e-11, top-1 131/131; llama.cpp's own path top-1 129/131; greedy 4 x 16 tokens: 4 identical, 0 near tie<br>TPU: Not tested yet | n/a |
 | **Qwen2.5-7B-Instruct**<br>by Qwen | [Qwen2.5-7B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/blob/8911e8a47f92bac19d6f5c64a2e2095bd2f7d031/Qwen2.5-7B-Instruct-Q4_K_M.gguf)<br>from bartowski, 4.68 GB | `qwen2` | Q4_K_M | Tested<br>Runs, checked against llama.cpp on CPU: same weights NMSE 1.1e-11, top-1 131/131; llama.cpp's own path top-1 124/131; greedy 4 x 16 tokens: 3 identical, 1 near tie | TPU v6e-1 |
 
 </details>
 
-<details><summary><b>ggml-org</b> (1 file): Qwen3.5-0.8B</summary>
+<details><summary><b>ggml-org</b> (1 file): Qwen3.8-27B</summary>
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on |
 |---|---|---|---|---|---|
-| **Qwen3.5-0.8B**<br>by Qwen | [Qwen3.5-0.8B-Q8_0.gguf](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/blob/807dfd9a6fadbf703207aac3bfb0b2b3040d077c/Qwen3.5-0.8B-Q8_0.gguf)<br>from ggml-org, 0.83 GB | `qwen35` | Q8_0 | Tested | TPU v6e-1 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Q4_K_M.gguf](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/blob/a316ea527fde32c12487be7574e2db5ac2ad2a7e/Qwen3.8-27B-Q4_K_M.gguf)<br>from ggml-org, 18.97 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.38 tok/s for one request | TPU v6e-1 |
+
+</details>
+
+<details><summary><b>huihui-ai</b> (1 file): Qwen3.8-27B</summary>
+
+| Model | GGUF file | Architecture | Quant | Level | Runs on |
+|---|---|---|---|---|---|
+| **Qwen3.8-27B**<br>by Qwen | [Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/blob/1c69098e9c32db6dc06fc48f1d6cc75ad07da89e/Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf)<br>from huihui-ai, 16.55 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.32 tok/s for one request | TPU v6e-1 |
 
 </details>
 
@@ -99,11 +107,20 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 </details>
 
-<details><summary><b>lmstudio-community</b> (1 file): Qwen3.5-9B</summary>
+<details><summary><b>lmstudio-community</b> (2 files): Qwen3.5-9B, Qwen3.8-27B</summary>
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on |
 |---|---|---|---|---|---|
 | **Qwen3.5-9B**<br>by Qwen | [Qwen3.5-9B-Q4_K_M.gguf](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/blob/1379f25c6b505a3fc737bd7818cb09389cf807c1/Qwen3.5-9B-Q4_K_M.gguf)<br>from lmstudio-community, 5.63 GB | `qwen35` | Q4_K_M | Tested<br>Runs, checked against llama.cpp on CPU: same weights NMSE 1.5e-12, top-1 135/135; llama.cpp's own path top-1 134/135; greedy 4 x 16 tokens: 4 identical, 0 near tie | TPU v6e-1 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Q4_K_M.gguf](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/blob/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf)<br>from lmstudio-community, 16.81 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.36 tok/s for one request | TPU v6e-1 |
+
+</details>
+
+<details><summary><b>peculiar-ragdoll</b> (1 file): Qwen3.8-27B</summary>
+
+| Model | GGUF file | Architecture | Quant | Level | Runs on |
+|---|---|---|---|---|---|
+| **Qwen3.8-27B**<br>by Qwen | [Dirk-Qwen3.8-27B-UD-Q4_K_M.gguf](https://huggingface.co/peculiar-ragdoll/Dirk-Qwen3.8-27B-GGUF/blob/6a762d2f2bada33557f3bf98facf916c585e0ed4/Dirk-Qwen3.8-27B-UD-Q4_K_M.gguf)<br>from peculiar-ragdoll, 16.46 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.29 tok/s for one request | TPU v6e-1 |
 
 </details>
 
@@ -119,15 +136,17 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 </details>
 
-<details><summary><b>unsloth</b> (5 files): gemma-3-1b-it, Qwen3-0.6B, Qwen3-1.7B, Qwen3.5-4B, Qwen3.5-9B</summary>
+<details><summary><b>unsloth</b> (7 files): gemma-3-1b-it, Qwen3-0.6B, Qwen3-1.7B, Qwen3-4B-Instruct-2507, Qwen3.5-4B, Qwen3.5-9B, Qwen3.8-27B</summary>
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on |
 |---|---|---|---|---|---|
 | **gemma-3-1b-it**<br>by Google DeepMind | [gemma-3-1b-it-Q4_K_M.gguf](https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/blob/f0b45be0aac41bd6a100a4b5734cad5f67255bfb/gemma-3-1b-it-Q4_K_M.gguf)<br>from unsloth, 0.81 GB | `gemma3` | Q4_K_M | Checked on CPU<br>Runs, checked against llama.cpp on CPU: same weights NMSE 2.4e-07, top-1 142/142; llama.cpp's own path top-1 138/142; greedy 4 x 16 tokens: 3 identical, 1 near tie<br>TPU: Not tested yet | n/a |
-| **Qwen3-0.6B**<br>by Qwen | [Qwen3-0.6B-Q8_0.gguf](https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/blob/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q8_0.gguf)<br>from unsloth, 0.64 GB | `qwen3` | Q8_0 | Tested | TPU v6e-1 |
+| **Qwen3-0.6B**<br>by Qwen | [Qwen3-0.6B-Q8_0.gguf](https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/blob/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q8_0.gguf)<br>from unsloth, 0.64 GB | `qwen3` | Q8_0 | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 16.31 tok/s for one request | TPU v6e-1 |
 | **Qwen3-1.7B**<br>by Qwen | [Qwen3-1.7B-Q4_0.gguf](https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/blob/d7f544eead698dbd1f15126ef60b45a1e1933222/Qwen3-1.7B-Q4_0.gguf)<br>from unsloth, 1.06 GB | `qwen3` | Q4_0 | Checked on CPU<br>Runs, checked against llama.cpp on CPU: same weights NMSE 6.6e-12, top-1 131/131; llama.cpp's own path top-1 124/131; greedy 4 x 16 tokens: 2 identical, 2 near tie<br>TPU: Not tested yet | n/a |
-| **Qwen3.5-4B**<br>by Qwen | [Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/blob/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf)<br>from unsloth, 2.74 GB | `qwen35` | Q4_K_M | Tested | TPU v6e-1 |
+| **Qwen3-4B-Instruct-2507**<br>by Qwen | [Qwen3-4B-Instruct-2507-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/blob/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf)<br>from unsloth, 2.5 GB | `qwen3` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 1.74 tok/s for one request | TPU v6e-1 |
+| **Qwen3.5-4B**<br>by Qwen | [Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/blob/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf)<br>from unsloth, 2.74 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 1.43 tok/s for one request | TPU v6e-1 |
 | **Qwen3.5-9B**<br>by Qwen | [Qwen3.5-9B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/blob/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf)<br>from unsloth, 5.68 GB | `qwen35` | Q4_K_M | Tested<br>Runs, checked against llama.cpp on CPU: same weights NMSE 2e-12, top-1 135/135; llama.cpp's own path top-1 134/135; greedy 4 x 16 tokens: 3 identical, 1 near tie | TPU v6e-1 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-UD-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_M.gguf)<br>from unsloth, 16.46 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.32 tok/s for one request | TPU v6e-1 |
 
 </details>
 
