@@ -2,11 +2,17 @@
 manifest.json, and no code. `Bundle(path)` gives the surface `load_kernels` reads from a kernel package. The routed-expert
 (MoE) half: EXPERT_KERNEL, EXPERT_ACTS, EXPERT_TYPES, expert_ffn, expert_ffn_scratch, nb_types, nb_bytes, repack_nb_host,
 nb_dequant. The dense half (the kq payloads of 'payloads'): TYPES, kq_covers, plane_bytes, repack_host, repack, matmul,
-dequant. A dense weight runs on kq only when the manifest lists its exact (type, rows, cols) with a cpu repack, a dequant
-and a matmul for EVERY row class on the running platform (kq_covers; ops.weight_path asks it), else the exact path.
+dequant. A dense weight runs on kq when the manifest lists its exact (type, rows, cols) with a cpu repack, a dequant
+and a matmul for EVERY row class on the running platform (an override), else, in a format-2 manifest (rule
+"shape-class"), when a shape class of its type covers it (`Classes`: the default net under the overrides), else it takes
+the exact path (kq_covers; ops.weight_path asks it; kq_route says which key won).
 
-Every call is an exact-shape lookup in the manifest. A shape the manifest does not list raises KeyError, and the callers'
-existing fallbacks put that weight or call on the exact path with their warning. Each payload's bytes are checked
+A format-1 manifest (no "format" key) is read as before: every call is an exact-shape lookup. A format-2 class is data
+only: atoms over format and hardware constants (bs, tk, n_pad, tn, n_max, k_max) and its matmul's row classes; its
+payloads are exported with symbolic rows / cols, the raw blocks are zero-padded to the class's (Np, Kp), x's columns to
+Kp, and the outputs cut back. A shape neither key covers raises KeyError, and the callers' existing fallbacks put that
+weight or call on the exact path with their warning. A format, rule, roles map or version this reader cannot vouch for
+is refused (ValueError). Each payload's bytes are checked
 against the manifest's sha256 before it is deserialized. The bundle is refused (ValueError) when its JAX version is not
 the running one, or when the running chip family is not one of its chips (off TPU, cpu payloads may still run).
 
@@ -140,6 +146,87 @@ def _wheel_version(z):
     return None
 
 
+FORMATS = (1, 2)
+ROLES_2 = {"kq_classes": "default", "payloads": "override", "moe_payloads": "exact-only"}
+
+
+def _up(n, m):
+    return -(-int(n) // int(m)) * int(m)
+
+
+class Classes:
+    """a format-2 manifest's kq_classes as an index (no payload is read here). Entry: id, op (repack | dequant | matmul),
+    type (repack / dequant) or config + types (matmul), atoms {bs (repack / dequant), tk, n_pad, n_max, k_max[, tn]},
+    rows (matmul: the row classes its x takes), platform, args / outs, file, sha256, impl, kernel_version. A matmul
+    class takes planes, so one config serves types of different block sizes and its atoms state none. A repack /
+    dequant class whose bs is not its type's block size is never picked; two classes of one type that state different
+    domains make the manifest unreadable."""
+
+    def __init__(self, entries):
+        self.entry, self.rep, self.deq, self.mm, self.dom = {}, {}, {}, {}, {}
+        for e in entries or ():
+            a, name = e["atoms"], str(e["id"])
+            self.entry[name] = e
+            types = [int(v) for v in e["types"]] if e["op"] == "matmul" else [int(e["type"])]
+            for t in types:
+                if t not in R.TYPES or (e["op"] != "matmul" and int(a["bs"]) != R.TYPES[t][1]):
+                    continue
+                dom = (R.TYPES[t][1], int(a["n_pad"]), int(a["n_max"]), int(a["k_max"]))
+                if self.dom.setdefault(t, dom) != dom:
+                    raise ValueError(f"kernel bundle kq_classes: type {t} states two domains {self.dom[t]} and {dom}")
+                tk = int(a["tk"])
+                if e["op"] == "repack":
+                    self.rep[(t, tk, e["platform"])] = name
+                elif e["op"] == "dequant":
+                    self.deq[(t, tk, e["platform"])] = name
+                elif e["op"] == "matmul":
+                    for rc in e["rows"]:
+                        self.mm[(t, tk, int(a["tn"]), int(rc), e["platform"])] = name
+        self._ladder = {}
+        for (t, tk, tn, rc, p) in self.mm:
+            self._ladder.setdefault((t, p), set()).add(rc)
+        self._picks = {}
+
+    def types(self, platform):
+        return frozenset(t for t in self.dom if any(self._tns(t, tk, platform) for tk in self._tks(t, platform)))
+
+    def rows(self, t, tk, tn, platform):
+        return tuple(sorted(self._ladder.get((t, platform), ())))
+
+    def _tks(self, t, platform):
+        """K tiles with a cpu repack and a dequant on the platform, largest first"""
+        return sorted({tk for (t_, tk, p) in self.rep if t_ == t and p == "cpu" and (t, tk, platform) in self.deq},
+                      reverse=True)
+
+    def _tns(self, t, tk, platform):
+        """N tiles with a matmul for every row class of the type on the platform, largest first"""
+        lad = self._ladder.get((t, platform), ())
+        tns = {tn for (t_, tk_, tn, rc, p) in self.mm if (t_, tk_, p) == (t, tk, platform)}
+        return sorted((tn for tn in tns if lad and all((t, tk, tn, rc, platform) in self.mm for rc in lad)), reverse=True)
+
+    def pick(self, t, n, k, platform):
+        """-> (tk, tn, Kp, Np) of the class that covers a (rows n, cols k) weight of type t, or None: tk = the largest
+        whole class tk that divides k, else the smallest whole one with k zero-padded to it (then the next); Np = n
+        rounded up to n_pad; tn = the largest whole class tn that divides Np"""
+        key = (int(t), int(n), int(k), platform)
+        if key not in self._picks:
+            self._picks[key] = self._pick(*key)
+        return self._picks[key]
+
+    def _pick(self, t, n, k, platform):
+        if t not in self.dom:
+            return None
+        bs, n_pad, n_max, k_max = self.dom[t]
+        if not (0 < n <= n_max and 0 < k <= k_max and k % bs == 0):
+            return None
+        Np, tks = _up(n, n_pad), self._tks(t, platform)
+        for tk in [c for c in tks if k % c == 0] + sorted(c for c in tks if k % c):
+            tn = next((c for c in self._tns(t, tk, platform) if Np % c == 0), None)
+            if tn is not None:
+                return tk, tn, _up(k, tk), Np
+        return None
+
+
 class Bundle:
     def __init__(self, path, row=None):
         """row: the catalog's engine_kernels row this wheel must be (None: the row whose sha256 is the wheel's)"""
@@ -157,8 +244,18 @@ class Bundle:
         fam = K.chip_family()
         if fam is not None and fam not in man.get("chips", ()):
             raise ValueError(f"kernel bundle is for {man.get('chips')}, this chip is {fam}")
-        self._man, self._exp = man, {}
+        self._man, self._exp, self._cexp = man, {}, {}
         self.version = _wheel_version(self._z) or man.get("version")
+        self.format = int(man.get("format", 1))
+        if self.format not in FORMATS:
+            raise ValueError(f"kernel bundle manifest format {self.format}: this reader reads formats {FORMATS}")
+        if self.format == 2:
+            if man.get("rule") != "shape-class" or man.get("roles") != ROLES_2:
+                raise ValueError(f"kernel bundle format 2: rule {man.get('rule')!r} / roles {man.get('roles')} are not "
+                                 f"'shape-class' / {ROLES_2}")
+            if man.get("version") != self.version:
+                raise ValueError(f"kernel bundle manifest version {man.get('version')} is not the wheel's {self.version}")
+        self._cls = Classes(man.get("kq_classes") if self.format == 2 else ())
         self._ffn, self._rep, self._deq = {}, {}, {}
         for name, e in man.get("moe_payloads", {}).items():
             if e["op"] == "expert_ffn":
@@ -179,7 +276,8 @@ class Bundle:
             tn, rows_, cols_ = k.split(":")
             if tn in ids:
                 self._kq_pb[(ids[tn], int(rows_), int(cols_))] = int(v)
-        self.TYPES = frozenset(t for (op, t, n, k, *_rest) in self._kq if op == "repack" and self.kq_covers(t, (n, k)))
+        self.TYPES = (frozenset(t for (op, t, n, k, *_rest) in self._kq if op == "repack" and self._exact(t, n, k))
+                      | self._cls.types(_platform()))
         self.EXPERT_TYPES = frozenset(int(t) for t in man.get("expert_types", ()))
         self.EXPERT_ACTS = tuple(acts)
         impl = man.get("moe_impl", {})
@@ -241,21 +339,54 @@ class Bundle:
         return best[1] if best else int(P) * 6 * int(D)
 
     # ---------------------------------------------------------------------------------------- the dense half (kq)
-    def kq_covers(self, t, shape):
-        """True when the manifest lists this exact (type, rows, cols) with a cpu repack, a dequant and a matmul for every
-        row class on the running platform: only then does a dense weight of that shape run on kq"""
-        n, k, t, p = int(shape[-2]), int(shape[-1]), int(t), _platform()
+    def _exact(self, t, n, k):
+        """the manifest lists this exact (type, rows, cols) with a cpu repack, a dequant and a matmul for every row class
+        on the running platform (an override)"""
+        t, n, k, p = int(t), int(n), int(k), _platform()
         return (bool(self.ROW_CLASSES) and ("repack", t, n, k, "cpu") in self._kq and ("dequant", t, n, k, p) in self._kq
                 and all(("matmul", t, n, k, p, rc) in self._kq for rc in self.ROW_CLASSES))
 
-    def plane_bytes(self, t, shape):
-        """device bytes of one (rows, cols) tensor's kq planes (manifest), else the file's own bytes (the exact path
-        holds the blocks as stored)"""
+    def _pick(self, t, n, k):
+        return self._cls.pick(int(t), int(n), int(k), _platform())
+
+    def kq_route(self, t, shape):
+        """-> "exact" (an override lists the shape), "class" (a shape class covers it) or None (the exact path)"""
         n, k = int(shape[-2]), int(shape[-1])
-        if self.kq_covers(t, (n, k)) and (int(t), n, k) in self._kq_pb:
-            return self._kq_pb[(int(t), n, k)]
+        if self._exact(t, n, k):
+            return "exact"
+        return "class" if self._pick(t, n, k) is not None else None
+
+    def kq_covers(self, t, shape):
+        """True when a dense weight of this (type, rows, cols) runs on kq: an exact entry or a shape class covers it"""
+        return self.kq_route(t, shape) is not None
+
+    def plane_bytes(self, t, shape):
+        """device bytes of one (rows, cols) tensor's kq planes: an override's from the manifest, a class's from its cpu
+        repack's output shapes at the padded (Np, Kp); else the file's own bytes (the exact path holds the blocks as
+        stored)"""
+        n, k = int(shape[-2]), int(shape[-1])
         _, bs, ts = R.TYPES[int(t)]
+        route = self.kq_route(t, (n, k))
+        if route == "exact" and (int(t), n, k) in self._kq_pb:
+            return self._kq_pb[(int(t), n, k)]
+        if route == "class":
+            tk, tn, Kp, Np = self._pick(t, n, k)
+            try:
+                _, exp = self._cls_payload(self._cls.rep[(int(t), tk, "cpu")])
+                outs = jax.eval_shape(exp.call, jax.ShapeDtypeStruct((Np, Kp // bs * ts), np.uint8))
+                return sum(int(np.prod(o.shape)) * np.dtype(o.dtype).itemsize for o in jax.tree_util.tree_leaves(outs))
+            except Exception:                   # a class the loader cannot repack loads on the exact path: its bytes
+                pass
         return n * (k // bs) * ts
+
+    def _cls_payload(self, name):
+        if name not in self._cexp:
+            e = self._cls.entry[name]
+            b = self._z.read(f"{PKG}/{e['file']}")
+            if hashlib.sha256(b).hexdigest() != e["sha256"]:
+                raise ValueError(f"kernel bundle class payload {name}: sha256 does not match the manifest")
+            self._cexp[name] = jax.export.deserialize(bytearray(b))
+        return self._cls.entry[name], self._cexp[name]
 
     def _entry(self, key):
         name = self._kq[key]                     # KeyError: a shape the manifest does not list (callers fall back)
@@ -279,11 +410,11 @@ class Bundle:
         cpu repack payload, one tensor of a stack at a time (the payload takes one (rows, row_bytes) tensor)"""
         raw = np.asarray(raw)
         n, k = int(shape[-2]), int(shape[-1])
-        if not self.kq_covers(t, (n, k)):
-            raise KeyError(f"kernel bundle has no kq payloads for {R.TYPES[int(t)][0]} ({n}, {k})")
-        e, exp = self._entry(("repack", int(t), n, k, "cpu"))
+        e, exp, pad = self._repack_entry(t, n, k, "cpu")
         lead = raw.shape[:-2]
         flat = raw.reshape((-1,) + raw.shape[-2:])
+        if pad is not None:                     # a class: zero blocks to (Np, Kp); zero blocks are zero weights
+            flat = np.pad(flat, ((0, 0), (0, pad[0] - n), (0, pad[1] - flat.shape[-1])))
         with jax.default_device(jax.devices("cpu")[0]):
             parts = [{a: np.asarray(v) for a, v in self._outs(e, exp.call(r)).items()} for r in flat]
         planes = {a: np.stack([q[a] for q in parts]).reshape(lead + parts[0][a].shape) for a in e["outs"]}
@@ -292,43 +423,68 @@ class Bundle:
     def repack(self, t, raw, shape):
         """traced form of repack_host for one (rows, row_bytes) device array (the running platform's repack payload)"""
         n, k = int(shape[-2]), int(shape[-1])
-        if not self.kq_covers(t, (n, k)):
-            raise KeyError(f"kernel bundle has no kq payloads for {R.TYPES[int(t)][0]} ({n}, {k})")
-        e, exp = self._entry(("repack", int(t), n, k, _platform()))
+        e, exp, pad = self._repack_entry(t, n, k, _platform())
+        if pad is not None:
+            raw = jax.numpy.pad(raw, ((0, pad[0] - n), (0, pad[1] - raw.shape[-1])))
         return Planes({a: v for a, v in self._outs(e, exp.call(raw)).items()}, t, n, k)
 
-    def _row_class(self, m):
-        return next(r for r in self.ROW_CLASSES if r >= m)
+    def _repack_entry(self, t, n, k, platform):
+        """-> (entry, payload, None) for an override, (entry, payload, (Np, padded row bytes)) for a class; KeyError
+        when neither covers the shape"""
+        route = self.kq_route(t, (n, k))
+        if route == "exact":
+            return self._entry(("repack", int(t), n, k, platform)) + (None,)
+        if route == "class":
+            tk, tn, Kp, Np = self._pick(t, n, k)
+            _, bs, ts = R.TYPES[int(t)]
+            return self._cls_payload(self._cls.rep[(int(t), tk, platform)]) + ((Np, Kp // bs * ts),)
+        raise KeyError(f"kernel bundle has no kq payloads for {R.TYPES[int(t)][0]} ({n}, {k})")
 
     def matmul(self, x, p):
         """x (..., cols) @ W.T -> float32 (..., rows) through the matmul payload of each chunk's row class: the rows of x
         cast to bfloat16, cut into chunks of at most the largest row class, each zero-padded to its row class and cut
         back after the call"""
-        n, k, t = p.N, p.K, p.t
+        n, k, t, plat = p.N, p.K, p.t, _platform()
         lead = tuple(x.shape[:-1])
         m = 1
         for v in lead:
             m *= int(v)
         if m == 0:                                  # no rows: no payload call (its row classes start at one row)
             return jax.numpy.zeros(lead + (n,), jax.numpy.float32)
+        route = self.kq_route(t, (n, k))
+        if route is None:
+            raise KeyError(f"kernel bundle has no kq payloads for {R.TYPES[int(t)][0]} ({n}, {k})")
         x2 = x.reshape(m, k).astype(jax.numpy.bfloat16)
-        top, ys = self.ROW_CLASSES[-1], []
+        if route == "class":                        # x's columns zero-padded to Kp (the planes' padded K)
+            tk, tn, Kp, Np = self._pick(t, n, k)
+            ladder = self._cls.rows(t, tk, tn, plat)
+            x2 = jax.numpy.pad(x2, ((0, 0), (0, Kp - k))) if Kp > k else x2
+        else:
+            ladder = self.ROW_CLASSES
+        top, ys = ladder[-1], []
         for a in range(0, m, top):
             xm = x2[a:a + top]
-            rc = self._row_class(xm.shape[0])
-            e, exp = self._entry(("matmul", t, n, k, _platform(), rc))
+            rc = next(r for r in ladder if r >= xm.shape[0])
+            e, exp = (self._entry(("matmul", t, n, k, plat, rc)) if route == "exact"
+                      else self._cls_payload(self._cls.mm[(t, tk, tn, rc, plat)]))
             args = [p.planes[name] for name in e["args"][1:]]
-            ys.append(exp.call(jax.numpy.pad(xm, ((0, rc - xm.shape[0]), (0, 0))), *args)[:xm.shape[0]])
+            ys.append(exp.call(jax.numpy.pad(xm, ((0, rc - xm.shape[0]), (0, 0))), *args)[:xm.shape[0], :n])
         y = ys[0] if len(ys) == 1 else jax.numpy.concatenate(ys, axis=0)
         return y.reshape(lead + (n,))
 
     def dequant(self, p):
         """kq planes -> float32 (lead..., rows, cols), through the running platform's dequant payload"""
-        e, exp = self._entry(("dequant", p.t, p.N, p.K, _platform()))
+        route = self.kq_route(p.t, (p.N, p.K))
+        if route == "class":                        # the class payload gives the padded (Np, Kp): cut to (N, K)
+            tk = self._pick(p.t, p.N, p.K)[0]
+            e, exp = self._cls_payload(self._cls.deq[(p.t, tk, _platform())])
+        else:
+            e, exp = self._entry(("dequant", p.t, p.N, p.K, _platform()))
+        call = lambda *a: exp.call(*a)[:p.N, :p.K]
         args = [p.planes[name] for name in e["args"]]
         lead = tuple(args[0].shape[:-2])
         if not lead:
-            return exp.call(*args)
+            return call(*args)
         flat = [a.reshape((-1,) + a.shape[len(lead):]) for a in args]
-        out = jax.numpy.stack([exp.call(*[a[i] for a in flat]) for i in range(flat[0].shape[0])])
+        out = jax.numpy.stack([call(*[a[i] for a in flat]) for i in range(flat[0].shape[0])])
         return out.reshape(lead + out.shape[1:])
