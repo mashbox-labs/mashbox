@@ -1,6 +1,7 @@
 """Test markers for CI (CI.md), added from file names so no test file has to move.
 
 - `<area>`: the model id with underscores when the file name carries it (test_hy_nomas_port.py -> hy_nomas), else `core`.
+- `gguf_rows`: also on the tests of the rows leg (tools/ci_select.py rows_files), which a gguf-rows change runs.
 - `t0`: tests/cpu/test_core.py, the static and registry checks that need nothing installed but pytest.
 Markers a test can set itself:
 - `slow`: over 10 s on the CI runner; the docstring says why.
@@ -28,6 +29,7 @@ _spec = importlib.util.spec_from_file_location("ci_select", pathlib.Path(__file_
 CS = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(CS)
 AREAS = CS.model_areas()
+ROWS_FILES = {str(pathlib.Path(__file__).resolve().parents[1] / f) for f in CS.area_files(CS.ROWS, AREAS)}
 STANDARDS = pathlib.Path(__file__).resolve().parent / "standards"
 
 
@@ -36,7 +38,8 @@ def pytest_configure(config):
               "slow: over 10 s on the CI runner, reason in the docstring", "cpu_only: skipped on the chip tier",
               "quarantine(reason, until): flaky; deselected in CI until fixed or deleted",
               "standards: the CPU standards tier (tools/standards_cpu.sh); a skip inside it is a FAIL",
-              "standards_slow: standards rows run only when speculation code changes"] + [f"{a}: tests of model {a}" for a in AREAS]:
+              "standards_slow: standards rows run only when speculation code changes"] + [f"{a}: tests of model {a}" for a in AREAS] \
+            + [f"{CS.ROWS}: tests outside gguf that read the gguf rows of models.json (tools/ci_select.py rows_files)"]:
         config.addinivalue_line("markers", m)
 
 
@@ -46,6 +49,8 @@ def pytest_collection_modifyitems(config, items):
     on_chip = os.environ.get("JAX_PLATFORMS", "").split(",")[0] == "tpu"
     for it in items:
         it.add_marker(CS.test_area(it.path.name, AREAS))
+        if str(it.path) in ROWS_FILES:
+            it.add_marker(CS.ROWS)
         if it.path.name in CS.T0_TESTS:
             it.add_marker("t0")
         q = it.get_closest_marker("quarantine")

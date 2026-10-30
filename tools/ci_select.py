@@ -12,6 +12,8 @@ kernels, fixtures and test_gguf_*.py) plus `core`:
 - core (the shared package, pyproject.toml, test config, workflows, tools) runs every area, because it touches every model
 - docs, licences, cards and templates run T0 only; a tests/tpu file runs T0 plus the area of any CPU test that reads it
 - a models.json row runs its model and the core tests (the CLI and `mashbox tpu` tests read the rows)
+- the gguf[] rows of models.json run the gguf area and the gguf_rows leg: the T1 tests outside gguf that read the rows
+  (rows_files), unless the rest of the change already runs them; a rows-only change does not wait on every model
 - a path nothing above claims runs every area, so a new kind of file is never silently untested
 tests/conftest.py uses test_area() to mark each test with its area, so the same rule picks the tests.
 An area in SHARDS runs as that many T1 jobs: its test files are split by their time on a CI runner (SECONDS), longest
@@ -22,6 +24,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -30,7 +33,8 @@ T0_TESTS = {"test_core.py"}                     # the T0 suite: static and regis
 EXTRA = {"hy_nomas": "imageio-ffmpeg", "track2rig": "scipy"}          # pip packages an area's tests need beyond .[dev] (the app server test)
 T0_ONLY_DIRS = ("docs/", "licenses/", "hf/", "templates/", ".github/ISSUE_TEMPLATE/")
 CORE_TESTS = "+core"                            # run the core T1 job without expanding to every model
-T0_ONLY_FILES = {"llms.txt", "LICENSE", "LICENSE-KERNELS", ".github/pull_request_template.md", "tests/cpu/test_core.py"}
+T0_ONLY_FILES = {"llms.txt", "LICENSE", "LICENSE-KERNELS", ".github/pull_request_template.md", "tests/cpu/test_core.py",
+                 "tools/docs_lint_allow.txt"}  # the docs-lint allow counts: only tools/docs_lint.py reads them, in T0
 CORE_DIRS = ("src/mashbox/runtime/", ".github/workflows/", "tools/")
 CORE_FILES = {"pyproject.toml", "tests/conftest.py"}
 SHARDS = {"core": 4}                            # T1 jobs per area (default 1); core is 55 test files, about 870 tests
@@ -95,6 +99,15 @@ GGUF_DIRS = ("src/mashbox/gguf/", "src/mashbox/ops/", "tools/gguf_fixtures/", "t
 GGUF_FILES = {"tools/gguf_check.py"}
 # cli.main imports these two on every run (is_gguf_request, the GGUF dispatch), so a change to them runs every area
 GGUF_CORE_FILES = {"src/mashbox/gguf/__init__.py", "src/mashbox/gguf/resolve.py"}
+ROWS = "gguf_rows"                              # the T1 leg of the tests outside gguf that read models.json gguf[] rows
+# How a test reaches the gguf[] rows: the rows themselves, the catalog module and its readers, the `models` command, the
+# model lists, card and docs sync and GGUF row tools, the speculation records of a GGUF file, the MoE hold of an
+# architecture. A test file that names one of these, or imports a tests/cpu helper that does, is in the rows leg.
+READS_ROWS = re.compile(r"""\[["']gguf["']\]|get\(["']gguf["']|mashbox\.catalog\b|from mashbox import [^\n]*\bcatalog\b"""
+                        r"""|\bcatalog\.(?:registry|entries|render_text|gguf_rows|arch_rows|arch_models|moe_arch)\b"""
+                        r"""|(?<![\w)\]])\[["']models["'][,\]]|\bmodel_lists\b|\bhf_github_sync_check\b|\bgguf_rows\b"""
+                        r"""|\bcatalog_records\b|drafters\.select\b|drafters import [^\n]*\bselect\b"""
+                        r"""|archs\.held\b|archs import [^\n]*\bheld\b""")
 
 
 def model_areas(text=None):
@@ -113,17 +126,22 @@ def test_area(file_name, areas):
 
 
 def registry_areas(base, head):
-    """Areas whose models.json rows differ between two commits; top-level fields only feed the views (T0)."""
-    def rows(rev):
+    """Areas whose models.json rows differ between two commits: a models[] row runs its model and the core tests, the
+    gguf[] rows run the gguf area and the rows leg; the other top-level fields only feed the views (T0)."""
+    def load(rev):
         r = subprocess.run(["git", "-C", str(ROOT), "show", f"{rev}:models.json"], capture_output=True, text=True)
-        return {m["id"]: m for m in json.loads(r.stdout)["models"]} if r.returncode == 0 else None
-    old, new = rows(base), rows(head) if head else {m["id"]: m for m in json.loads((ROOT / "models.json").read_text())["models"]}
+        return json.loads(r.stdout) if r.returncode == 0 else None
+    old, new = load(base), load(head) if head else json.loads((ROOT / "models.json").read_text())
     if old is None or new is None:
         return {"core"}
-    changed = {i for i in old.keys() | new.keys() if old.get(i) != new.get(i)}
-    if changed - new.keys():
+    om, nm = ({m["id"]: m for m in reg["models"]} for reg in (old, new))
+    changed = {i for i in om.keys() | nm.keys() if om.get(i) != nm.get(i)}
+    if changed - nm.keys():
         return {"core"}
-    return {i.replace("-", "_") for i in changed} | ({CORE_TESTS} if changed else set())
+    picked = {i.replace("-", "_") for i in changed} | ({CORE_TESTS} if changed else set())
+    if old.get("gguf") != new.get("gguf"):
+        picked |= {"gguf", ROWS}
+    return picked
 
 
 def tpu_file_users(path, areas):
@@ -172,11 +190,29 @@ def select(files, areas, base=None, head=None):
         picked = (picked - {CORE_TESTS}) | {"core"}
     if "core" in picked and not core_has_t1_tests(areas):
         picked.discard("core")
+    if ROWS in picked and {test_area(f.rsplit("/", 1)[-1], areas) for f in area_files(ROWS, areas)} <= picked:
+        picked.discard(ROWS)                    # the picked areas already run every test of the rows leg
     return sorted(picked)
 
 
+def rows_files(areas, root=ROOT):
+    """The rows leg: T1 test files outside the gguf area (its own leg runs those) that read the gguf[] rows (READS_ROWS),
+    themselves or through a tests/cpu helper module they import; name order, like area_files"""
+    cpu = root / "tests" / "cpu"
+    helpers = [p.stem for p in cpu.rglob("*.py") if not p.name.startswith("test_") and p.name not in ("__init__.py", "conftest.py")
+               and READS_ROWS.search(p.read_text())]
+    def reads(text):
+        return READS_ROWS.search(text) or any(re.search(rf"\b{h}\b", text) for h in helpers)
+    return sorted((p.relative_to(root).as_posix() for p in cpu.rglob("test_*.py")
+                   if p.name not in T0_TESTS and test_area(p.name, areas) != "gguf" and reads(p.read_text())),
+                  key=lambda f: (f.rsplit("/", 1)[-1], f))
+
+
 def area_files(area, areas, root=ROOT):
-    """The T1 test files of one area: tests/cpu/**/test_*.py whose name gives that area (T0 files excluded), name order"""
+    """The T1 test files of one area: tests/cpu/**/test_*.py whose name gives that area (T0 files excluded), name order;
+    for the rows leg, rows_files"""
+    if area == ROWS:
+        return rows_files(areas, root)
     cpu = root / "tests" / "cpu"
     return sorted((p.relative_to(root).as_posix() for p in cpu.rglob("test_*.py")
                    if p.name not in T0_TESTS and test_area(p.name, areas) == area), key=lambda f: (f.rsplit("/", 1)[-1], f))
@@ -200,8 +236,16 @@ def shard_files(files, shard, seconds=None):
 
 def jobs(picked):
     """the T1 matrix rows: one per area, or SHARDS[area] rows for a sharded area"""
-    return [{"area": x, "extra": EXTRA.get(x, ""), "shard": f"{i}/{SHARDS.get(x, 1)}"}
+    return [{"area": x, "extra": extra(x), "shard": f"{i}/{SHARDS.get(x, 1)}"}
             for x in picked for i in range(1, SHARDS.get(x, 1) + 1)]
+
+
+def extra(area):
+    """the pip packages an area's T1 job installs beyond .[dev]; the rows leg takes those of the areas its files belong to"""
+    if area != ROWS:
+        return EXTRA.get(area, "")
+    areas = model_areas()
+    return " ".join(sorted({EXTRA[a] for a in {test_area(f.rsplit("/", 1)[-1], areas) for f in rows_files(areas)} if a in EXTRA}))
 
 
 def changed_files(base, head):

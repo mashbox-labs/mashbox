@@ -128,3 +128,99 @@ def test_t1_gate_is_green_only_when_every_picked_leg_passed(tmp_path):
     assert gate("failure", "", "skipped") != 0               # red T0 (no pick)
     assert gate("success", "", "skipped") != 0               # T0 passed but gave no pick
     assert gate("cancelled", "true", "cancelled") != 0
+
+
+def _registry_commits(tmp_path):
+    """A git repo holding models.json at five commits: the real registry, then a change to one gguf[] row, to one
+    models[] row, to both, and to a top-level field only."""
+    import copy
+    import json
+    import subprocess
+    reg = json.loads((ROOT / "models.json").read_text())
+    assert reg["gguf"] and reg["models"]
+
+    def edit(rows=False, model=False, top=False):
+        r = copy.deepcopy(reg)
+        if rows:
+            r["gguf"][0]["bytes"] = r["gguf"][0]["bytes"] + 1
+            r["gguf"].append(dict(r["gguf"][0], id=r["gguf"][0]["id"] + "-x"))
+        if model:
+            r["models"][0]["summary"] = r["models"][0]["summary"] + " x"
+        if top:
+            r["version"] = r["version"] + ".1"
+        return r
+
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+    subprocess.run(git[:3] + ["init", "-q"], check=True)
+    shas = {}
+    for name, r in (("base", reg), ("rows", edit(rows=True)), ("model", edit(model=True)),
+                    ("both", edit(rows=True, model=True)), ("top", edit(top=True))):
+        (tmp_path / "models.json").write_text(json.dumps(r, indent=1) + "\n")
+        subprocess.run(git + ["add", "models.json"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", name], check=True)
+        shas[name] = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    return shas
+
+
+def test_a_change_to_gguf_rows_only_runs_the_gguf_tests_and_the_tests_that_read_the_rows(tmp_path, monkeypatch):
+    """A diff that changes only gguf[] rows (models.json and its package copy, plus the views rendered from them and the
+    docs-lint allow counts) runs T0, the gguf area and one leg of the tests that read the rows (the catalog, model lists,
+    docs and card sync, the speculation records); it does not wait on every model's tests. Any other change keeps the
+    pick it has: a models[] row runs that model and core, a code file runs every area. Before this rule a gguf-row change
+    ran T0 alone (the rows were read as top-level fields) and the allow counts under tools/ ran every area."""
+    areas = CS.model_areas()
+    shas = _registry_commits(tmp_path)
+    (tmp_path / "tests").symlink_to(ROOT / "tests")                # the rules read the real tests; models.json is the repo's
+    monkeypatch.setattr(CS, "ROOT", tmp_path)
+    every = sorted(set(areas) | {"core"})
+    reg = ["models.json", "src/mashbox/models.json"]
+    views = ["README.md", "docs/supported-models.md", "docs/gguf.md", "llms.txt", "tools/docs_lint_allow.txt"]
+    pick = lambda files, head: CS.select(files, areas, shas["base"], shas[head])
+    assert pick(reg, "rows") == ["gguf", "gguf_rows"]
+    assert pick(reg + views, "rows") == ["gguf", "gguf_rows"]
+    model = CS.model_areas()[0]                                    # models[0] is the row the "model" commit changed
+    assert pick(reg, "model") == sorted({model, "core"})           # a models[] row: that model plus core, as before
+    assert pick(reg + views, "model") == sorted({model, "core"})
+    both = pick(reg, "both")                                       # core runs every rows reader, so no extra leg
+    assert set(both) == {model, "core", "gguf"}, both
+    assert pick(reg, "top") == []                                  # top-level fields feed the views only (T0)
+    for code in ("src/mashbox/cli.py", "src/mashbox/catalog.py", "tools/gguf_rows.py", "tools/hf_github_sync_check.py",
+                 "tests/cpu/test_catalog.py", "some/new/kind/of/file.cfg"):
+        assert pick(reg + views + [code], "rows") == every, code   # rows plus any other file: the full pick
+    assert CS.select(["tools/docs_lint_allow.txt"], areas) == []    # only T0's docs lint reads the allow counts
+
+
+def test_the_rows_leg_holds_every_test_that_reads_the_gguf_rows():
+    """The gguf_rows leg runs the T1 tests outside the gguf area that read gguf[] rows: directly, through the catalog,
+    model lists, card and docs sync, the GGUF row tool, the speculation records, the `models` command or a helper that
+    does; each file once, none from the gguf area (its own leg runs those), and fast enough to finish before the gguf
+    leg does on a CI runner."""
+    import re
+    areas = CS.model_areas()
+    files = CS.area_files("gguf_rows", areas)
+    assert files == sorted(set(files), key=lambda f: (f.rsplit("/", 1)[-1], f))
+    t1 = {p.relative_to(ROOT).as_posix() for p in (ROOT / "tests" / "cpu").rglob("test_*.py") if p.name not in CS.T0_TESTS}
+    assert set(files) <= t1
+    assert not [f for f in files if CS.test_area(f.rsplit("/", 1)[-1], areas) == "gguf"]
+    for f in ("test_catalog.py", "test_model_lists.py", "test_docs_supported_models.py", "test_org_card.py",
+              "test_ci_areas.py", "test_port_plan.py", "test_spec_page.py", "test_drafter_gate.py", "test_drafters.py"):
+        assert f"tests/cpu/{f}" in files, f
+    for f in t1 - set(files):                                      # a file that reads the rows directly is in the leg
+        if CS.test_area(f.rsplit("/", 1)[-1], areas) != "gguf":
+            assert not re.search(r"""\[["']gguf["']\]|get\(["']gguf["']""", (ROOT / f).read_text()), f
+    assert sum(CS.SECONDS.get(f, CS.SECONDS_DEFAULT) for f in files) <= 300
+    assert CS.jobs(["gguf", "gguf_rows"]) == [{"area": "gguf", "extra": "", "shard": "1/1"},
+                                              {"area": "gguf_rows", "extra": "", "shard": "1/1"}]
+
+
+def test_conftest_marks_the_rows_leg_tests():
+    """The leg runs `pytest <its files> -m "gguf_rows and not t0 ..."`, so conftest gives each of its tests the
+    gguf_rows mark (beside the area mark) and no other test; a file outside the leg collects nothing under that mark."""
+    import subprocess
+    import sys
+    run = lambda f: subprocess.run([sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider",
+                                    "-m", "gguf_rows and not t0", f], cwd=ROOT, capture_output=True, text=True)
+    r = run("tests/cpu/test_ci_areas.py")
+    assert r.returncode == 0 and "test_the_rows_leg_holds_every_test_that_reads_the_gguf_rows" in r.stdout, r.stdout[-800:]
+    r = run("tests/cpu/test_sampler.py")
+    assert "test_" not in r.stdout.split("deselected")[0].split("no tests ran")[0] or r.returncode == 5, r.stdout[-800:]

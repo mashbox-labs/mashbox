@@ -14,10 +14,11 @@ Three tiers. Each change runs only what it can break, and every test has to earn
 
 | Change | T0 | T1 |
 |---|---|---|
-| docs, `*.md`, `licenses/`, `hf/`, `templates/`, issue forms | yes | none |
+| docs, `*.md`, `licenses/`, `hf/`, `templates/`, issue forms, the docs-lint allow counts (`tools/docs_lint_allow.txt`) | yes | none |
 | a `tests/tpu/` file | yes | the area of any CPU test that reads it (the kernel check's CPU stand-in test), else none |
 | `models.json` top-level fields (views only) | yes | none |
 | a model's `models.json` row | yes | that model, plus core tests (the CLI and `mashbox tpu` tests read the rows) |
+| `gguf` rows in `models.json` | yes | `gguf`, plus the `gguf_rows` job: the CPU tests outside `gguf` that read the rows (catalog, model lists, card and docs sync, speculation records) |
 | `src/mashbox/models/<id>/`, `apps/<id>/`, `tests/cpu/test_<id>*.py` | yes | that model |
 | core: `src/mashbox/*.py`, `src/mashbox/runtime/`, `pyproject.toml`, `tests/conftest.py`, `.github/workflows/`, `tools/` | yes | every model, plus core tests |
 | any path not listed here | yes | every model (a new kind of file is never silently untested) |
