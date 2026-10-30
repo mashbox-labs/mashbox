@@ -4,6 +4,25 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 
 ## 0.1.12
 
+### The org card claims our TPU kernels only as far as the rows ship them
+
+1. **`tools/hf_github_sync_check.py`:** `repos_text`, the org card's rendered repos paragraph, renders the "TPU models" sentence from each row's `kernels[]`. When every row of that collection ships kernels, it says we tune them with our own TPU kernels. When only some do, it says some of them also use our own TPU kernels. When none do, it says nothing about kernels.
+2. **`tests/cpu/test_org_card.py`:** the three cases, with today's rows as the "some" case.
+
+Why: the sentence said every repo of the collection is tuned with our own TPU kernels, and TRELLIS.2-TPU runs on plain JAX with no compiled kernels.
+
+How existing models keep working: no row, card or file of `src/mashbox` changes; `views_sync` re-renders the Hugging Face org card from this after the merge.
+
+### Decode calls on a kernel class run on a wider N tile when that at least halves the modelled cost
+
+1. **`ops/bundle.py` (`Classes.pick`, `Classes.tn_for`, `Classes.form`, `Classes.atoms`, `Classes.config`, `Classes.layer_ok`, `Bundle.matmul`; `STEP_COLS`, `STEP_ERR`, `WIDE`, `WIDE_GAIN`):** a weight on a shape class used to run every call on the largest N tile that divides its row count rounded up to 128. A row count with few small factors therefore ran on many narrow tiles: 9728 rows (128 x 76) on 512-wide tiles, a 151936-row output head (128 x 1187, and 1187 is prime) on 128-wide tiles, and every tile step has a fixed cost. Now the row classes whose kernel entry states the exact form (up to 8 rows: the decode calls) may run on a wider tile of the same matmul config. The reader takes the wider tile only when a cost model says it costs at most half as much (`WIDE_GAIN`) and is cheaper by more than the model's own error. The model has two inputs per matmul config, measured once on synthetic 10240 x 5120 weights: the cost of one tile step in plane columns (`STEP_COLS`) and the fit's largest relative error (`STEP_ERR`); a bundle's matmul entry can state its own. One rule covers every row count, with no table of shapes. The weight keeps one copy of its planes, laid out as before, and every call reads it: a decode call's wider tile runs over the same planes, with its last step partial. The reader takes a wider tile only when that tile's exact-form payloads state `n_mult`, the width multiple their planes may have; a bundle without it keeps the 0.1.11 pick. Tile-form row classes (16 rows and up) keep their tile. `WIDE = False` gives the 0.1.11 pick.
+2. **`models.json` (both copies):** the `engine_kernels` row names `mashbox_engine_kernels` 0.1.12. Its exact-form matmul payloads take planes of any width that is a multiple of 128 and state `n_mult` 128. Every other payload is byte-equal to 0.1.11's.
+3. **`tests/cpu/test_bundle_classes.py`:** the wider tile keeps the planes and at least halves the modelled cost; a smaller gain, a gain inside the model's error, a config with no step cost, entries that state no form and payloads that state no `n_mult` keep the 0.1.11 pick; a step cost the bundle states wins over the reader's table; through the reader, the exact form on the wide tile and the tile form on the old tile give the same values, plain and through the layer form.
+
+Why: on one TPU v6e chip, one input row, per call: a 9728 x 2560 Q4_K weight takes 31.4 us instead of 86.8 us, and a 151936 x 2560 Q6_K head takes 541 us instead of 1471 us.
+
+How existing models keep working: every output value is unchanged, and so are the planes and every call over 8 rows. At 1 to 8 input rows, the wider tile's outputs equal the 0.1.11 tile's bit for bit. Peak memory is up by under 3.1 MB on the files measured, and their time to the first token is within 0.02% of 0.1.11's.
+
 ### The GGUF file pick is `gguf/pick.py`
 
 1. **`src/mashbox/gguf/resolve.py` is now `src/mashbox/gguf/pick.py`**, with the same code. The one resolver (`src/mashbox/resolve.py`) and `src/mashbox/gguf/__init__.py` import it by the new name. `mashbox.gguf` no longer re-exports the `pick` function, so the package name `pick` is the module; the function is `mashbox.gguf.pick.pick`.
