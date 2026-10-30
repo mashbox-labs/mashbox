@@ -4,6 +4,15 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 
 ## 0.1.12
 
+### The GGUF file pick is `gguf/pick.py`
+
+1. **`src/mashbox/gguf/resolve.py` is now `src/mashbox/gguf/pick.py`**, with the same code. The one resolver (`src/mashbox/resolve.py`) and `src/mashbox/gguf/__init__.py` import it by the new name. `mashbox.gguf` no longer re-exports the `pick` function, so the package name `pick` is the module; the function is `mashbox.gguf.pick.pick`.
+2. **`src/mashbox/cli.py`:** a docstring names the new path. **`tools/ci_select.py`:** the GGUF core files name it.
+
+Why: one thing in the package is called resolve, the resolver every `mashbox run` goes through.
+
+How existing models keep working: the code inside the module is unchanged, and every other name `mashbox.gguf` re-exports is the same. Code that imported `mashbox.gguf.resolve` imports `mashbox.gguf.pick`.
+
 ### Decode updates the linear-attention state in place (qwen35)
 
 1. **`gguf/archs/qwen35.py`:** decode and speculation verify run on contiguous rows (slots 0..B-1). Each layer group now reads its rows of the recurrent state (float32) and of the conv tail with one `dynamic_slice`, and writes them back with `dynamic_update_slice`. Before, it gathered its rows from the whole slot pool and scattered them back, once per layer group. Prefill rows (any slots) keep the slot-indexed path, as the Qwen3.8-27B build does.

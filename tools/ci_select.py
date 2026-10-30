@@ -127,7 +127,7 @@ AREAS_EXTRA = ("gguf", CLIENTS)                 # areas that are not a models.js
 GGUF_DIRS = ("src/mashbox/gguf/", "src/mashbox/ops/", "tools/gguf_fixtures/", "tests/fixtures/gguf/")
 GGUF_FILES = {"tools/gguf_check.py"}
 # cli.main imports these two on every run (is_gguf_request, the GGUF dispatch), so a change to them runs every area
-GGUF_CORE_FILES = {"src/mashbox/gguf/__init__.py", "src/mashbox/gguf/resolve.py"}
+GGUF_CORE_FILES = {"src/mashbox/gguf/__init__.py", "src/mashbox/gguf/pick.py"}
 ROWS = "gguf_rows"                              # the T1 leg of the tests outside gguf that read models.json gguf[] rows
 # How a test reaches the gguf[] rows: the rows themselves, the catalog module and its readers, the `models` command, the
 # model lists, card and docs sync and GGUF row tools, the speculation records of a GGUF file, the MoE hold of an

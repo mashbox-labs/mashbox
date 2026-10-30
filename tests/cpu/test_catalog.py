@@ -588,7 +588,7 @@ def test_run_strings_pick_exactly_the_file():
     """each row's command parses as `mashbox run REPO:TAG [flags]`, and llama.cpp's pick rule on that repo's file list
     (the row's file among others) chooses exactly the row's file"""
     from mashbox import cli
-    from mashbox.gguf import resolve as GR
+    from mashbox.gguf import pick as GR
     for g in REG["gguf"] + [ROW]:
         argv = g["run"].split()[1:]
         a = cli.build_parser().parse_args(argv)
@@ -629,7 +629,7 @@ ARCHS_SRC = "src/mashbox/gguf/archs/__init__.py"
 CODE_SET_VERSION = 1
 CODE_SET = {
     "entry": ("src/mashbox/__main__.py", "src/mashbox/__init__.py", "src/mashbox/cli.py"),
-    "resolver and loader": ("src/mashbox/gguf/resolve.py", "src/mashbox/gguf/reader.py", "src/mashbox/gguf/tokenizer.py",
+    "resolver and loader": ("src/mashbox/gguf/pick.py", "src/mashbox/gguf/reader.py", "src/mashbox/gguf/tokenizer.py",
                             "src/mashbox/hub.py"),
     "fit": ("src/mashbox/gguf/__init__.py",),
     "architectures": ("src/mashbox/gguf/archs/__init__.py",),
@@ -2907,7 +2907,7 @@ BAD_FORMS = {
 # code set v1 as reviewed: the entry path by role
 REVIEWED_CODE_SET_V1 = (
     "src/mashbox/__main__.py", "src/mashbox/__init__.py", "src/mashbox/cli.py",
-    "src/mashbox/gguf/resolve.py", "src/mashbox/gguf/reader.py", "src/mashbox/gguf/tokenizer.py", "src/mashbox/hub.py",
+    "src/mashbox/gguf/pick.py", "src/mashbox/gguf/reader.py", "src/mashbox/gguf/tokenizer.py", "src/mashbox/hub.py",
     "src/mashbox/gguf/__init__.py", "src/mashbox/gguf/archs/__init__.py",
     "src/mashbox/ops/__init__.py", "src/mashbox/ops/reference.py",
     "src/mashbox/runtime/engine.py", "src/mashbox/runtime/programs.py", "src/mashbox/runtime/compile_key.py",

@@ -77,7 +77,7 @@ def test_catalog_refusal_on_the_run_path(contract, monkeypatch, tmp_path, arch):
     c = contract("path/run")
     from mashbox import catalog
     from mashbox.gguf import archs as GA
-    from mashbox.gguf.resolve import identity
+    from mashbox.gguf.pick import identity
     reg = catalog.registry()
     moe = bool(catalog.moe_arch(arch, catalog.arch_models().get(arch)))
     c.record(json.dumps([arch, moe]))

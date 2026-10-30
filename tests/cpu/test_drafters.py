@@ -783,7 +783,7 @@ def test_server_loop_ngram_equals_plain(fams, tmp_path, monkeypatch):
     """one GGUF request through the real server (cli.load_gguf, Server.complete and its scheduler thread) with
     --speculation ngram: the same text and token count as the plain server, and speculation rounds ran"""
     from mashbox import cli
-    from mashbox.gguf import resolve as GR
+    from mashbox.gguf import pick as GR
     from mashbox.runtime.server import Server
     monkeypatch.setenv("MASHBOX_CACHE", str(tmp_path / "cache"))
     monkeypatch.setenv("MASHBOX_GGUF_KERNELS", "off")
@@ -962,7 +962,7 @@ def test_gguf_load_turns_ngram_on_with_no_flag_only_from_a_sealed_catalog_record
     sealed n-gram record for this deployment's component set -> n-gram on with the record's k_table; the same row with
     the record unsealed, or no row -> plain decoding with a why line. (The chip key is set; the engine runs on CPU.)"""
     from mashbox import cli, hub
-    from mashbox.gguf import resolve as GR
+    from mashbox.gguf import pick as GR
     monkeypatch.setenv("MASHBOX_CACHE", str(tmp_path / "cache"))
     monkeypatch.setenv("MASHBOX_GGUF_KERNELS", "off")
     monkeypatch.setattr(DR, "chip_key", lambda: "v6e-1")
@@ -1030,7 +1030,7 @@ def test_spec_health_reason_through_load_gguf(fams, tmp_path, monkeypatch):
     """through cli.load_gguf with no flag and no catalog row: plain decoding, and Engine.spec_health's reason is the load's
     speculation why line"""
     from mashbox import cli, hub
-    from mashbox.gguf import resolve as GR
+    from mashbox.gguf import pick as GR
     monkeypatch.setenv("MASHBOX_CACHE", str(tmp_path / "cache"))
     monkeypatch.setenv("MASHBOX_GGUF_KERNELS", "off")
     monkeypatch.setattr(DR, "chip_key", lambda: "v6e-1")

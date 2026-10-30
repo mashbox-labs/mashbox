@@ -239,7 +239,7 @@ def engine(family, kind="bigram", S=4, K=4, CTX=256, prefix_cache=False, cache_r
         chat = IdChat()
         info = dict(file=os.path.basename(p))
     else:
-        from mashbox.gguf import resolve as GR
+        from mashbox.gguf import pick as GR
         p = weights(family, kind)
         argv = ["run", p, "--no-kernels", "--ctx", str(CTX), "--slots", str(S), "--steps", str(K),
                 "--cache-dir", os.path.join(_outdir(), "xla"), "--cache-ram", str(cache_ram_mib)]

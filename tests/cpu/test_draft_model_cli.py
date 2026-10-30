@@ -55,7 +55,7 @@ def env(tmp_path, monkeypatch):
 
 
 def args(tmp_path, target, *extra):
-    from mashbox.gguf import resolve as GR
+    from mashbox.gguf import pick as GR
     a = cli.build_parser().parse_args(["run", target, "--prompt", "hi", "--no-kernels", "--slots", "4", "--ctx", "256",
                                        "--cache-dir", str(tmp_path / "xla"), *extra])
     a.gguf = GR.resolve(target, log=cli.log)
@@ -118,7 +118,7 @@ def test_no_speculation_compiles_after_warm(files, env, tmp_path):
 
 
 def test_draft_without_a_draft_model_stops_before_the_file_is_fetched(monkeypatch, env):
-    from mashbox.gguf import resolve as GR
+    from mashbox.gguf import pick as GR
     seen = []
     monkeypatch.setattr(GR, "resolve", lambda *a, **k: seen.append("resolve"))
     a = SimpleNamespace(cmd="run", model="x.gguf", weights=None, mtp=None, mtp_file=None, speculation="draft",
@@ -186,7 +186,7 @@ def test_draft_model_help():
 def test_cmd_gguf_with_a_draft_model_resolves_both_files_and_runs(monkeypatch, env):
     """a GGUF run with --draft-model passes the refusal, resolves the model and then the draft file, and reaches cmd_run
     with both (a.gguf, a.draft_gguf); download fetches both and stops"""
-    from mashbox.gguf import resolve as GR
+    from mashbox.gguf import pick as GR
     got = []
     monkeypatch.setattr(GR, "resolve", lambda m, log=None, download=True: dict(path=m, repo=None, tag=None, file=m))
     monkeypatch.setattr(cli, "cmd_run", lambda a, argv=None: got.append((a.gguf["path"], a.draft_gguf["path"])) or 0)

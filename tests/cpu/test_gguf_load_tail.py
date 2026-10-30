@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("jax")
 
 from mashbox import cli  # noqa: E402
-from mashbox.gguf import resolve as GR  # noqa: E402
+from mashbox.gguf import pick as GR  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _spec = importlib.util.spec_from_file_location("gguf_fixtures", os.path.join(ROOT, "tools", "gguf_fixtures", "fixtures.py"))

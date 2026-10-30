@@ -14,7 +14,7 @@ import pytest
 
 import mashbox.models as MM
 from mashbox import cli, hub, resolve as R
-from mashbox.gguf import resolve as GR
+from mashbox.gguf import pick as GR
 
 REAL = hub.registry()
 

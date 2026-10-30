@@ -8,7 +8,7 @@ needs its models.json row (or files in a format below), never an edit of this fi
                                                                     command line when it defines main(cmd, argv), else the
                                                                     engine with the package's model definition
   a models.json gguf[] row's id                        catalog      the GGUF file the row pins (revision + sha256)
-  a .gguf file, or a repo with GGUF files              gguf         llama.cpp's -hf file pick (gguf/resolve.py)
+  a .gguf file, or a repo with GGUF files              gguf         llama.cpp's -hf file pick (gguf/pick.py)
   a .bshj file, or a repo of BSHJ files with no row    bshj         refused in one line: BSHJ weights run as a catalog model
   a model folder, or a repo with config.json and       safetensors  mashbox.hf (the same architectures and engine)
   safetensors weights
@@ -120,7 +120,7 @@ def is_file_target(target):
     """True when a target names files (a path on disk, a GGUF row's id, or anything shaped like a Hugging Face repo),
     so the flags of a GGUF file apply to it, False for a models.json model or any other name. Local: no network."""
     from . import hub
-    from .gguf import resolve as GR
+    from .gguf import pick as GR
     if os.path.exists(target):
         return True
     if hub.find_row(target)[0] is not None:
@@ -193,7 +193,7 @@ def pinned(target, g, ctx):
     refuses the pinned run in one line naming the unpinned run (`mashbox run repo:tag`, the repo's current file). When
     the Hub cannot be reached the check waits for the bytes."""
     import json
-    from .gguf import resolve as GR
+    from .gguf import pick as GR
     from .runtime import faults
     repo, tag, rev, file, sha = (g.get(k) for k in ("repo", "tag", "revision", "file", "sha256"))
     if not (repo and tag and rev and file and sha):
@@ -238,7 +238,7 @@ def pinned(target, g, ctx):
 
 def gguf_probe(target, ctx):
     """a .gguf file (any file that is not a .bshj), or a Hugging Face repo with GGUF files (owner/name[:quant tag])"""
-    from .gguf import resolve as GR
+    from .gguf import pick as GR
     if os.path.isdir(target) or target.lower().endswith(".bshj") or not GR.is_gguf_request(target):
         return None
     try:
@@ -331,7 +331,7 @@ def fetch(plan, log=print):
         from huggingface_hub import hf_hub_download
         local = [hf_hub_download(s["repo"], p, revision=s["revision"]) for p in s["files"]]
         if s.get("sha256"):                         # a pinned row: the bytes must be the file the row names
-            from .gguf import resolve as GR
+            from .gguf import pick as GR
             have = GR.identity(local[0])[0]
             if have != s["sha256"]:
                 g = plan.row or {}
