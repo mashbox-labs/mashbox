@@ -74,7 +74,32 @@ def test_rows_tool_writes_every_key_a_gguf_row_needs(tmp_path, monkeypatch):
     assert (g["in"], g["out"]) == ("text", "text")
     reg = json.load(open(os.path.join(ROOT, "src", "mashbox", "models.json")))
     have = [list(x) for x in reg["gguf"] if "cpu_check" in x]
+    if not have:    # the catalog lists no CPU-checked row: a row's key order, with cpu_check where such a row holds it
+        have = [o[:o.index("chips")] + ["cpu_check"] + o[o.index("chips"):] for o in map(list, reg["gguf"]) if "chips" in o]
     assert have and list(g) in have, list(g)
+
+
+# a CPU check of the shape a sealed record copies to a row (cpu_check), for a not-run row the catalog may not list
+CPU_CHECK = dict(status="passing", reference="llama.cpp a37cc46 CPU", identical_weights=dict(nmse=4.2e-12, top1="131/131"),
+                 block_path=dict(top1="128/131", kl=0.0021), greedy=dict(prompts=4, tokens=16, full=3, near_tie=1, other=0),
+                 tokenizer=dict(texts=8, equal=8, explained=0))
+
+
+def pending_row(reg):
+    """the catalog's first row whose v6e chip is pending (not run), else one added to reg: a copy of a passing row under
+    its own id, file and sha256, its v6e chip pending with its reason and a passing CPU check (a CPU-only row)"""
+    got = next((g for g in reg["gguf"] if ((g.get("chips") or {}).get("v6e") or {}).get("status") == "pending"), None)
+    if got is not None:
+        return got
+    import copy
+    g = copy.deepcopy(next(x for x in reg["gguf"] if ((x.get("chips") or {}).get("v6e") or {}).get("status") == "passing"))
+    g.update(id=g["id"] + "-not-run", file="Not-Run-" + g["file"], sha256="3" * 64,
+             chips={"v6e": {"status": "pending", "not_run_reason": "no chip run of this file"}})
+    g.pop("speculation", None)
+    keys = list(g)
+    g = {k: g[k] for k in keys[:keys.index("chips")]} | {"cpu_check": copy.deepcopy(CPU_CHECK)} | {"chips": g["chips"]}
+    reg["gguf"].append(g)
+    return g
 
 
 def _sync_check():
@@ -130,7 +155,7 @@ def test_sync_check_refuses_a_smoke_on_a_not_run_chip():
         return list(p)
 
     src = next(g for g in reg["gguf"] if ((g.get("chips") or {}).get("v6e") or {}).get("status") == "passing")
-    pend = next(g for g in reg["gguf"] if ((g.get("chips") or {}).get("v6e") or {}).get("status") == "pending")
+    pend = pending_row(reg)
     base = problems(copy.deepcopy(reg))
     bad = copy.deepcopy(reg)
     g = next(x for x in bad["gguf"] if x["id"] == pend["id"])
