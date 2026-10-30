@@ -71,7 +71,7 @@
         ]
       },
       "hf_repo": "mashbox-labs/Hy-Nomas-TPU",
-      "hf_revision": "d6bf490704a2dad3a81e6ba15743ccb8285a5baa",
+      "hf_revision": "ed20bf7e8bc3f502365449591f4ad2de33dd45ad",
       "card_release": "0.1.5",
       "base_model_relation": "quantized",
       "pipeline_tag": null,
@@ -239,7 +239,7 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "4cf19d0b3df34b8f26682cb70fab6c530f5ff8c6",
+      "hf_revision": "392a8fe6a025627276c11c2c918c9794e8f9079b",
       "card_release": "0.1.5",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
@@ -631,9 +631,9 @@
           "format": "XLA compile cache (tar)",
           "default": false,
           "variant": false,
-          "bytes": 890122240,
-          "sha256": "73b27780742830c4699c776070f4d3b3936ebedc11656639674ffba325606f2e",
-          "gb": 0.89,
+          "bytes": 681113600,
+          "sha256": "86b841a0a4ce252927aaa7144f99c86c4a245c4233f36d9c1b6556b2efc4536f",
+          "gb": 0.68,
           "chips": [
             "v6e"
           ],
@@ -642,7 +642,7 @@
           "libtpu": "0.0.48.1",
           "quality": "n/a (compiled programs, not weights)",
           "speed": "first start on TPU v6e-1, weights on disk: ready in 69.6 s with it, 326.6 s without it",
-          "date": "2026-10-28"
+          "date": "2026-10-30"
         }
       ],
       "kernels": [
