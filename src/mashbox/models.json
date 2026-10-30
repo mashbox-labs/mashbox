@@ -73,6 +73,7 @@
       "hf_repo": "mashbox-labs/Hy-Nomas-TPU",
       "hf_revision": "d6bf490704a2dad3a81e6ba15743ccb8285a5baa",
       "card_release": "0.1.5",
+      "base_model_relation": "quantized",
       "pipeline_tag": null,
       "chips": {
         "v6e": {
