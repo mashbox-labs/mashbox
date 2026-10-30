@@ -1,0 +1,41 @@
+{
+ "name": "llama-linear-f32",
+ "arch": "llama",
+ "made_by": "gguf-py",
+ "gguf_sha256": "48cd1c3035f650e13f38123985efbb9ce237dd6672866970651cad26ad872616",
+ "gguf_bytes": 7908192,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "7ddfc79d27a0b2691c10a26ab04467ee518318e51460c3b8b32114b3157411d7",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "llama",
+  "seed": 43,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": null,
+  "rope": {
+   "type": "linear",
+   "factor": 4.0
+  }
+ }
+}

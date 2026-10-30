@@ -1,0 +1,40 @@
+{
+ "name": "llama-tied-f32",
+ "arch": "llama",
+ "made_by": "gguf-py",
+ "gguf_sha256": "39dd5a4c1eb7d8d1565488768dd4d6aff701c3321102292205e1767244c48082",
+ "gguf_bytes": 7637728,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "8d125db341d2ea69afb4b08bc6c4d6b254ac0d79c55b2c5865642eccb37791be",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "llama",
+  "seed": 40,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": null,
+  "hp": {
+   "tie": true
+  }
+ }
+}

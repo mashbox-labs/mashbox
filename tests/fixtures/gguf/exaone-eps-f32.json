@@ -1,0 +1,40 @@
+{
+ "name": "exaone-eps-f32",
+ "arch": "exaone",
+ "made_by": "gguf-py",
+ "gguf_sha256": "c8b6e0058b2deca96b3f964c21d201bc3ccb29425fe508bf7d6eb70bb954395d",
+ "gguf_bytes": 7897088,
+ "tokens": [
+  262,
+  72,
+  101,
+  256,
+  258,
+  32,
+  107,
+  263,
+  10,
+  262,
+  97,
+  259,
+  260,
+  33,
+  46,
+  120
+ ],
+ "n_vocab": 264,
+ "logits": "f32 row-major (n_tokens, n_vocab)",
+ "logits_sha256": "624ecf8a4dfc4a62e32c8584fa5a8a1ea4000d6dd2a469467a780b90dcc74d1c",
+ "llama_cpp_commit": "a37cc46",
+ "llama_cpp_backend": "CPU, float32 K/V cache, flash attention off",
+ "fixture": {
+  "arch": "exaone",
+  "seed": 51,
+  "layers": 4,
+  "make": "gguf-py",
+  "quant": null,
+  "hp": {
+   "eps": 0.25
+  }
+ }
+}
