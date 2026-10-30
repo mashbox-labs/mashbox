@@ -145,3 +145,42 @@ def test_sync_check_refuses_a_smoke_on_a_not_run_chip():
     added = [x for x in problems(bad) if x not in problems(covered)]
     assert len(added) == 1 and "chips.v6e: a pending chip holds its status and not_run_reason" in added[0], added
     assert "no smoke" in added[0], added
+
+
+# Makers added for the next-20 files, each named as upstream writes it on its own Hugging Face org page or card
+# (sources and revisions in the item notes): (org, maker, a base of that org).
+NEW_MAKERS = (("naver-hyperclovax", "HyperCLOVA X", "naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B"),
+              ("janhq", "Jan", "janhq/Jan-v3-4B-base-instruct"),
+              ("prism-ml", "Prism ML", "prism-ml/Ternary-Bonsai-8B-unpacked"),
+              ("superwhisper", "Superwhisper", "superwhisper/s1-mini"),
+              ("ornith-ai", "Ornith", "ornith-ai/Ornith-1.5-9B"),
+              ("openbmb", "OpenBMB", "openbmb/MiniCPM5-2B"),
+              ("defog", "Defog, Inc", "defog/sqlcoder-7b-2"),
+              # a personal account: the name its cards publish under, never the account page's full name
+              ("DavidAU", "DavidAU", "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP"))
+
+
+@pytest.mark.parametrize("org,maker,base", NEW_MAKERS)
+def test_a_new_maker_name_maps_only_from_its_own_org(org, maker, base):
+    R = rows_tool()
+    assert R.MAKER_NAMES[org] == maker
+    assert R.upstream("someone/X-GGUF", base) == (base, maker)
+    # the same model name under an org with no maker entry is refused: the name never travels with the model name
+    with pytest.raises(ValueError, match="no maker name"):
+        R.upstream("someone/X-GGUF", "no-such-org/" + base.split("/")[1])
+    # the publisher's org never stands in for a base the card does not state
+    with pytest.raises(ValueError, match="names no base model"):
+        R.upstream(f"{org}/Some-Other-Model-GGUF", None)
+
+
+def test_a_card_with_no_base_model_lists_only_the_original_its_own_text_states():
+    R = rows_tool()
+    # the card says the publisher made the model and links that original at the pinned revision
+    assert R.upstream("ornith-ai/Ornith-1.5-9B-GGUF", None) == ("ornith-ai/Ornith-1.5-9B", "Ornith")
+    assert R.upstream("openbmb/MiniCPM5-2B-GGUF", None) == ("openbmb/MiniCPM5-2B", "OpenBMB")
+    # the repo is the original itself ("Developed by: Defog, Inc")
+    assert R.upstream("defog/sqlcoder-7b-2", None) == ("defog/sqlcoder-7b-2", "Defog, Inc")
+    # a card that states no maker or base, or links another org's original, still refuses
+    for repo in ("ornith-ai/Ornith-1.0-9B-GGUF", "someone/Unknown-GGUF", "openbmb/Other-GGUF"):
+        with pytest.raises(ValueError, match="names no base model"):
+            R.upstream(repo, None)
