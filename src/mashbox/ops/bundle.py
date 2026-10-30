@@ -40,10 +40,11 @@ NAMES = {2: "Q4_0", 8: "Q8_0", 12: "Q4_K", 13: "Q5_K", 14: "Q6_K"}
 
 @jax.tree_util.register_pytree_node_class
 class Planes:
-    """native block planes of one weight or stack: {name: uint32 array (lead + plane shape)}, ggml type t, (N, K)"""
+    """native block planes of one weight or stack: {name: uint32 array (lead + plane shape)}, ggml type t, (N, K), and
+    the kq key they were packed for (route: "exact" or "class"; None = whatever kq_route says for (t, N, K))"""
 
-    def __init__(self, planes, t, N, K):
-        self.planes, self.t, self.N, self.K = dict(planes), int(t), int(N), int(K)
+    def __init__(self, planes, t, N, K, route=None):
+        self.planes, self.t, self.N, self.K, self.route = dict(planes), int(t), int(N), int(K), route
 
     @property
     def lead(self):
@@ -53,12 +54,12 @@ class Planes:
 
     def tree_flatten(self):
         keys = tuple(sorted(self.planes))
-        return tuple(self.planes[k] for k in keys), (keys, self.t, self.N, self.K)
+        return tuple(self.planes[k] for k in keys), (keys, self.t, self.N, self.K, self.route)
 
     @classmethod
     def tree_unflatten(cls, aux, ch):
-        keys, t, N, K = aux
-        return cls(dict(zip(keys, ch)), t, N, K)
+        keys, t, N, K, route = aux
+        return cls(dict(zip(keys, ch)), t, N, K, route)
 
 
 def _platform():
@@ -164,10 +165,13 @@ class Classes:
     rows (matmul: the row classes its x takes), platform, args / outs, file, sha256, impl, kernel_version. A matmul
     class takes planes, so one config serves types of different block sizes and its atoms state none. A repack /
     dequant class whose bs is not its type's block size is never picked; two classes of one type that state different
-    domains make the manifest unreadable."""
+    domains make the manifest unreadable.
+    A matmul entry with "layer": true is the layer form of the plain class with the same keys: fn(x, layer, *planes)
+    with one leading stack axis on every plane (at most l_max layers); it reads plane block `layer` in place, so a layer
+    scan never slices (copies) the planes. It is indexed apart (mml) and never picked for a plain call."""
 
     def __init__(self, entries):
-        self.entry, self.rep, self.deq, self.mm, self.dom = {}, {}, {}, {}, {}
+        self.entry, self.rep, self.deq, self.mm, self.dom, self.mml = {}, {}, {}, {}, {}, {}
         for e in entries or ():
             a, name = e["atoms"], str(e["id"])
             self.entry[name] = e
@@ -185,7 +189,7 @@ class Classes:
                     self.deq[(t, tk, e["platform"])] = name
                 elif e["op"] == "matmul":
                     for rc in e["rows"]:
-                        self.mm[(t, tk, int(a["tn"]), int(rc), e["platform"])] = name
+                        (self.mml if e.get("layer") else self.mm)[(t, tk, int(a["tn"]), int(rc), e["platform"])] = name
         self._ladder = {}
         for (t, tk, tn, rc, p) in self.mm:
             self._ladder.setdefault((t, p), set()).add(rc)
@@ -207,6 +211,15 @@ class Classes:
         lad = self._ladder.get((t, platform), ())
         tns = {tn for (t_, tk_, tn, rc, p) in self.mm if (t_, tk_, p) == (t, tk, platform)}
         return sorted((tn for tn in tns if lad and all((t, tk, tn, rc, platform) in self.mm for rc in lad)), reverse=True)
+
+    def layer_ok(self, t, n, k, platform):
+        """True when the class pick of this (type, rows, cols) has a layer form for every row class of its ladder"""
+        got = self.pick(t, n, k, platform)
+        if got is None:
+            return False
+        tk, tn = got[0], got[1]
+        lad = self.rows(t, tk, tn, platform)
+        return bool(lad) and all((int(t), tk, tn, rc, platform) in self.mml for rc in lad)
 
     def pick(self, t, n, k, platform):
         """-> (tk, tn, Kp, Np) of the class that covers a (rows n, cols k) weight of type t, or None: tk = the largest
@@ -360,6 +373,19 @@ class Bundle:
             return "exact"
         return "class" if self._pick(t, n, k) is not None else None
 
+    @property
+    def picks_layer(self):
+        """True when this bundle has layer forms of its class matmuls (ops.kernel_picks_layer reads it): then a stack of
+        one (rows, cols) weight per layer is multiplied at its layer in place (matmul's layer=), never sliced"""
+        return bool(self._cls.mml)
+
+    def _route(self, t, n, k, stacked):
+        """the kq key a weight is packed for: a stack whose class has layer forms takes the class (an override has no
+        layer form, so a layer scan would copy its planes at every layer); else kq_route"""
+        if stacked and self._cls.layer_ok(int(t), int(n), int(k), _platform()):
+            return "class"
+        return self.kq_route(t, (n, k))
+
     def kq_covers(self, t, shape):
         """True when a dense weight of this (type, rows, cols) runs on kq: an exact entry or a shape class covers it"""
         return self.kq_route(t, shape) is not None
@@ -367,13 +393,19 @@ class Bundle:
     def plane_bytes(self, t, shape):
         """device bytes of one (rows, cols) tensor's kq planes: an override's from the manifest, a class's from its cpu
         repack's output shapes at the padded (Np, Kp); else the file's own bytes (the exact path holds the blocks as
-        stored)"""
+        stored). When the class under an override has layer forms, the larger of the two: a layer stack of this shape
+        is packed for the class (_route), a lone tensor for the override, and the caller does not say which it is"""
         n, k = int(shape[-2]), int(shape[-1])
-        _, bs, ts = R.TYPES[int(t)]
         route = self.kq_route(t, (n, k))
         if route == "exact" and (int(t), n, k) in self._kq_pb:
-            return self._kq_pb[(int(t), n, k)]
-        if route == "class":
+            over = self._kq_pb[(int(t), n, k)]
+            return max(over, self._class_bytes(t, n, k)) if self._cls.layer_ok(int(t), n, k, _platform()) else over
+        return self._class_bytes(t, n, k, fallback_only=route != "class")
+
+    def _class_bytes(self, t, n, k, fallback_only=False):
+        """device bytes of one (rows, cols) tensor's class planes (the file's own bytes when no class repack runs)"""
+        _, bs, ts = R.TYPES[int(t)]
+        if not fallback_only and self._pick(t, n, k) is not None:
             tk, tn, Kp, Np = self._pick(t, n, k)
             try:
                 _, exp = self._cls_payload(self._cls.rep[(int(t), tk, "cpu")])
@@ -414,28 +446,31 @@ class Bundle:
         cpu repack payload, one tensor of a stack at a time (the payload takes one (rows, row_bytes) tensor)"""
         raw = np.asarray(raw)
         n, k = int(shape[-2]), int(shape[-1])
-        e, exp, pad = self._repack_entry(t, n, k, "cpu")
         lead = raw.shape[:-2]
+        route = self._route(t, n, k, bool(lead))
+        e, exp, pad = self._repack_entry(t, n, k, "cpu", route)
         flat = raw.reshape((-1,) + raw.shape[-2:])
         if pad is not None:                     # a class: zero blocks to (Np, Kp); zero blocks are zero weights
             flat = np.pad(flat, ((0, 0), (0, pad[0] - n), (0, pad[1] - flat.shape[-1])))
         with jax.default_device(jax.devices("cpu")[0]):
             parts = [{a: np.asarray(v) for a, v in self._outs(e, exp.call(r)).items()} for r in flat]
         planes = {a: np.stack([q[a] for q in parts]).reshape(lead + parts[0][a].shape) for a in e["outs"]}
-        return Planes(planes, t, n, k)
+        return Planes(planes, t, n, k, route)
 
-    def repack(self, t, raw, shape):
-        """traced form of repack_host for one (rows, row_bytes) device array (the running platform's repack payload)"""
+    def repack(self, t, raw, shape, stacked=False):
+        """traced form of repack_host for one (rows, row_bytes) device array (the running platform's repack payload);
+        stacked: the tensor is one layer of a stack (the caller maps this over the stack)"""
         n, k = int(shape[-2]), int(shape[-1])
-        e, exp, pad = self._repack_entry(t, n, k, _platform())
+        route = self._route(t, n, k, stacked)
+        e, exp, pad = self._repack_entry(t, n, k, _platform(), route)
         if pad is not None:
             raw = jax.numpy.pad(raw, ((0, pad[0] - n), (0, pad[1] - raw.shape[-1])))
-        return Planes({a: v for a, v in self._outs(e, exp.call(raw)).items()}, t, n, k)
+        return Planes({a: v for a, v in self._outs(e, exp.call(raw)).items()}, t, n, k, route)
 
-    def _repack_entry(self, t, n, k, platform):
+    def _repack_entry(self, t, n, k, platform, route=None):
         """-> (entry, payload, None) for an override, (entry, payload, (Np, padded row bytes)) for a class; KeyError
         when neither covers the shape"""
-        route = self.kq_route(t, (n, k))
+        route = self.kq_route(t, (n, k)) if route is None else route
         if route == "exact":
             return self._entry(("repack", int(t), n, k, platform)) + (None,)
         if route == "class":
@@ -444,10 +479,11 @@ class Bundle:
             return self._cls_payload(self._cls.rep[(int(t), tk, platform)]) + ((Np, Kp // bs * ts),)
         raise KeyError(f"kernel bundle has no kq payloads for {R.TYPES[int(t)][0]} ({n}, {k})")
 
-    def matmul(self, x, p):
+    def matmul(self, x, p, layer=None):
         """x (..., cols) @ W.T -> float32 (..., rows) through the matmul payload of each chunk's row class: the rows of x
         cast to bfloat16, cut into chunks of at most the largest row class, each zero-padded to its row class and cut
-        back after the call"""
+        back after the call. layer (an int32 scalar, traced or not): p is a stack of one weight per layer packed for its
+        class, and the class's layer form multiplies by layer `layer` in place (KeyError when there is none)"""
         n, k, t, plat = p.N, p.K, p.t, _platform()
         lead = tuple(x.shape[:-1])
         m = 1
@@ -455,9 +491,10 @@ class Bundle:
             m *= int(v)
         if m == 0:                                  # no rows: no payload call (its row classes start at one row)
             return jax.numpy.zeros(lead + (n,), jax.numpy.float32)
-        route = self.kq_route(t, (n, k))
-        if route is None:
-            raise KeyError(f"kernel bundle has no kq payloads for {R.TYPES[int(t)][0]} ({n}, {k})")
+        route = p.route or self.kq_route(t, (n, k))
+        if route is None or (layer is not None and (route != "class" or not self._cls.layer_ok(t, n, k, plat))):
+            raise KeyError(f"kernel bundle has no kq payloads for {R.TYPES[int(t)][0]} ({n}, {k})"
+                           + (" with layer=" if layer is not None else ""))
         x2 = x.reshape(m, k).astype(jax.numpy.bfloat16)
         if route == "class":                        # x's columns zero-padded to Kp (the planes' padded K)
             tk, tn, Kp, Np = self._pick(t, n, k)
@@ -469,16 +506,22 @@ class Bundle:
         for a in range(0, m, top):
             xm = x2[a:a + top]
             rc = next(r for r in ladder if r >= xm.shape[0])
+            xp = jax.numpy.pad(xm, ((0, rc - xm.shape[0]), (0, 0)))
+            if layer is not None:
+                e, exp = self._cls_payload(self._cls.mml[(t, tk, tn, rc, plat)])
+                args = [p.planes[name] for name in e["args"][2:]]
+                ys.append(exp.call(xp, jax.numpy.asarray(layer, jax.numpy.int32), *args)[:xm.shape[0], :n])
+                continue
             e, exp = (self._entry(("matmul", t, n, k, plat, rc)) if route == "exact"
                       else self._cls_payload(self._cls.mm[(t, tk, tn, rc, plat)]))
             args = [p.planes[name] for name in e["args"][1:]]
-            ys.append(exp.call(jax.numpy.pad(xm, ((0, rc - xm.shape[0]), (0, 0))), *args)[:xm.shape[0], :n])
+            ys.append(exp.call(xp, *args)[:xm.shape[0], :n])
         y = ys[0] if len(ys) == 1 else jax.numpy.concatenate(ys, axis=0)
         return y.reshape(lead + (n,))
 
     def dequant(self, p):
         """kq planes -> float32 (lead..., rows, cols), through the running platform's dequant payload"""
-        route = self.kq_route(p.t, (p.N, p.K))
+        route = p.route or self.kq_route(p.t, (p.N, p.K))
         if route == "class":                        # the class payload gives the padded (Np, Kp): cut to (N, K)
             tk = self._pick(p.t, p.N, p.K)[0]
             e, exp = self._cls_payload(self._cls.deq[(p.t, tk, _platform())])

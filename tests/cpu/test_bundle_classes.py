@@ -69,9 +69,15 @@ def _sym(expr, constraints=()):
     return jax.export.symbolic_shape(expr, constraints=constraints)
 
 
-def _classes(drop=None, n_max=NMAX, k_max=KMAX, a_max=None, bad_sha=None, t=Q8_0):
+def _mm_layer(x, layer, v, s):
+    """stand-in layer form: the plain matmul on block `layer` of stacked planes"""
+    return _mm(x, v[layer], s[layer])
+
+
+def _classes(drop=None, n_max=NMAX, k_max=KMAX, a_max=None, bad_sha=None, t=Q8_0, layer=False, drop_layer=None):
     """-> [(exported, entry)]: repack + dequant per tk, matmul per (tk, tn) and row class; drop = {(tk, tn, rc)} left out;
-    a_max: the repack's own symbolic constraint on Np / NPAD (to call it outside its constraints)"""
+    a_max: the repack's own symbolic constraint on Np / NPAD (to call it outside its constraints); layer: each matmul
+    also gets its layer form (id + "_layer"), except the (tk, tn, rc) in drop_layer"""
     out = []
     atoms = {"bs": BS, "n_pad": NPAD, "n_max": n_max, "k_max": k_max}
     lab = {"impl": "0" * 64, "kernel_version": "0.0.1"}
@@ -97,6 +103,17 @@ def _classes(drop=None, n_max=NMAX, k_max=KMAX, a_max=None, bad_sha=None, t=Q8_0
                 out.append((mm, dict(lab, id=f"mm.c8.tk{tk}.tn{tn}.r{rows[0]}", op="matmul", config="C8", types=[t],
                                      atoms=dict(atoms, tk=tk, tn=tn), rows=list(rows), platform="cpu",
                                      args=["x", "v", "s"])))
+                if layer and not any((tk, tn, r) in (drop_layer or ()) for r in rows):
+                    if len(rows) > 1:                # one symbolic scope per export: g with the plain symbols
+                        a, b, c, g = _sym("a, b, c, g", ["c >= 2", "c <= 3", "g <= 256"])
+                        xr = 8 * c
+                    else:
+                        (a, b, g), xr = _sym("a, b, g", ["g <= 256"]), rows[0]
+                    ml = _export(_mm_layer, spec((xr, tk * b), bf16), spec((), jnp.int32), spec((g, tk * b, tn * a), f32),
+                                 spec((g, 1, tn * a), f32))
+                    out.append((ml, dict(lab, id=f"mm.c8.tk{tk}.tn{tn}.r{rows[0]}_layer", op="matmul", config="C8",
+                                         types=[t], atoms=dict(atoms, tk=tk, tn=tn), rows=list(rows), platform="cpu",
+                                         layer=True, l_max=256, args=["x", "layer", "v", "s"])))
     if bad_sha is not None:
         out = [(exp, dict(e, sha256="0" * 64) if e["id"] == bad_sha else e) for exp, e in out]
     return out
@@ -366,3 +383,80 @@ def test_one_matmul_class_serves_types_of_different_block_sizes():
     assert idx.pick(2, 200, 2560, "tpu") == (512, 256, 2560, 256)
     assert idx.pick(2, 200, 2592, "tpu") == (512, 256, 3072, 256)            # K = 81 Q4_0 blocks: padded to tk 512
     assert idx.pick(Q4_K, 200, 2592, "tpu") is None                         # not a whole number of Q4_K blocks
+
+
+# ------------------------------------------------------------------------------------------------- layer forms (layer=)
+def _stack(L, n, k, seed=0):
+    return np.stack([_raw(n, k, seed=seed + i) for i in range(L)])
+
+
+def _warns(monkeypatch):
+    got = []
+    monkeypatch.setattr(ops, "warn", got.append)
+    return got
+
+
+@pytest.mark.parametrize("shape", [(37, 96), (64, 256)])
+def test_layer_forms_multiply_a_stack_at_its_layer_without_slicing_it(tmp_path, shape, monkeypatch):
+    w = _warns(monkeypatch)
+    ops.load_kernels(module=str(_build(tmp_path, classes=_classes(layer=True))))
+    assert ops.kernel_picks_layer() and ops._KERNELS["module"].picks_layer
+    raw = _stack(3, *shape, seed=sum(shape))
+    h = ops.prepare(raw, Q8_0, shape)
+    assert isinstance(h, ops.Packed) and h.packed.route == "class" and h.packed.lead == (3,)
+    assert ops._KQ_LAYER[(Q8_0, shape)] is True and w == []          # the layer= preflight ran, no warning
+    held, xs = ops.scan_split({"w": h})
+    assert isinstance(held["w"], ops.Packed) and xs["w"] is None       # held whole: the scan never slices the planes
+    x = jax.random.normal(jax.random.PRNGKey(2), (5, shape[1])).astype(bf16)
+
+    def body(c, l):
+        return c, ops.qmatmul(x, ops.scan_join(held, xs, l)["w"])
+    _, ys = jax.lax.scan(body, 0, jnp.arange(3, dtype=jnp.int32))
+    for l in range(3):
+        sliced = ops.Packed(jax.tree_util.tree_map(lambda a: a[l], h.packed), Q8_0, shape)
+        np.testing.assert_array_equal(np.asarray(ys[l], np.float32), np.asarray(ops.qmatmul(x, sliced), np.float32))
+        np.testing.assert_allclose(np.asarray(ys[l], np.float32), np.asarray(_want(x, raw[l], shape[1]), np.float32),
+                                   rtol=2e-2, atol=1e-2)
+
+
+def test_a_stack_of_an_override_shape_takes_its_class_when_the_class_has_layer_forms(tmp_path, monkeypatch):
+    _warns(monkeypatch)
+    ops.load_kernels(module=str(_build(tmp_path, classes=_classes(layer=True), exact=True)))
+    one = ops.prepare(_raw(*EXACT), Q8_0, EXACT)
+    stack = ops.prepare(_stack(2, *EXACT), Q8_0, EXACT)
+    assert one.packed.route == "exact"                  # an unstacked weight keeps its override
+    assert stack.packed.route == "class"                # a stack takes the class (the override has no layer form)
+    assert ops._KQ_LAYER[(Q8_0, EXACT)] is True
+    bd = ops._KERNELS["module"]
+    over, cls = bd._kq_pb[(Q8_0,) + EXACT], bd._class_bytes(Q8_0, *EXACT)
+    assert bd.plane_bytes(Q8_0, EXACT) == max(over, cls)      # the estimate covers the stack's class planes too
+    assert sum(a.nbytes for a in stack.packed.planes.values()) == 2 * cls
+    x = jax.random.normal(jax.random.PRNGKey(3), (4, EXACT[1])).astype(bf16)
+    y = ops.qmatmul(x, ops.At(stack.packed, jnp.int32(1), Q8_0, EXACT))
+    np.testing.assert_allclose(np.asarray(y, np.float32), np.asarray(_want(x, _raw(*EXACT, seed=1), EXACT[1]), np.float32),
+                               rtol=2e-2, atol=1e-2)
+    np.testing.assert_array_equal(np.asarray(ops.dequant(stack)[1]), np.asarray(ops.dequant(
+        ops.prepare(_raw(*EXACT, seed=1), Q8_0, EXACT))))       # the class planes dequantize to the override's values
+
+
+def test_without_layer_forms_a_stack_is_sliced_as_before(tmp_path, monkeypatch):
+    w = _warns(monkeypatch)
+    ops.load_kernels(module=str(_build(tmp_path, exact=True)))
+    assert not ops._KERNELS["module"].picks_layer and not ops.kernel_picks_layer()
+    bd = ops._KERNELS["module"]
+    assert bd.plane_bytes(Q8_0, EXACT) == bd._kq_pb[(Q8_0,) + EXACT]          # no layer forms: the override's bytes
+    assert ops.prepare(_stack(2, *EXACT), Q8_0, EXACT).packed.route == "exact"
+    h = ops.prepare(_stack(2, 37, 96), Q8_0, (37, 96))
+    assert (Q8_0, (37, 96)) not in ops._KQ_LAYER and w == []
+    assert ops.scan_split({"w": h}) == (None, {"w": h})
+
+
+def test_a_class_missing_one_layer_form_slices_its_stacks_with_one_warning(tmp_path, monkeypatch):
+    w = _warns(monkeypatch)
+    ops.load_kernels(module=str(_build(tmp_path, classes=_classes(layer=True, drop_layer={(64, 16, 8)}))))
+    shape = (37, 96)                                    # picks tk 64, tn 16: its row class 8 has no layer form
+    h = ops.prepare(_stack(2, *shape), Q8_0, shape)
+    assert h.packed.route == "class" and ops._KQ_LAYER[(Q8_0, shape)] is not True
+    assert len(w) == 1 and "layer=" in w[0] and "sliced per layer" in w[0], w
+    held, xs = ops.scan_split({"w": h})
+    assert held is None and xs == {"w": h}
