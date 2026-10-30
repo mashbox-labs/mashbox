@@ -296,10 +296,12 @@ def shard_files(files, shard, seconds=None):
     return [f for k, f in enumerate(files) if k in mine]
 
 
-def jobs(picked):
-    """the T1 matrix rows: one per area, or SHARDS[area] rows for a sharded area"""
-    return [{"area": x, "extra": extra(x), "shard": f"{i}/{SHARDS.get(x, 1)}"}
-            for x in picked for i in range(1, SHARDS.get(x, 1) + 1)]
+def jobs(picked, whole=False):
+    """the T1 matrix rows: one per area, or SHARDS[area] rows for a sharded area. whole (the sweep: every file whole, no
+    SPLIT parts): at most one row per test file of the area, so no row is left with no file to run"""
+    areas = model_areas() if whole else None
+    count = {x: max(1, min(SHARDS.get(x, 1), len(area_files(x, areas)))) if whole else SHARDS.get(x, 1) for x in picked}
+    return [{"area": x, "extra": extra(x), "shard": f"{i}/{count[x]}"} for x in picked for i in range(1, count[x] + 1)]
 
 
 def extra(area):
@@ -385,7 +387,8 @@ def main(argv=None):
     ap.add_argument("--files-of", metavar="AREA", help="print the test files of AREA's T1 job --shard (default 1/1)")
     ap.add_argument("--args-of", metavar="AREA", help="print the pytest arguments of AREA's T1 job --shard, SPLIT files as parts")
     ap.add_argument("--shard", default="1/1")
-    ap.add_argument("--whole-files", action="store_true", help="with --args-of: every file whole, no SPLIT parts (the sweep)")
+    ap.add_argument("--whole-files", action="store_true", help="every file whole, no SPLIT parts (the sweep): with --args-of, "
+                    "the arguments of one job; with --github-output, an area runs as at most one job per test file")
     ap.add_argument("--contracts-summary", metavar="CONTRACTS_JSON", help="print contracts.json as a table, failures first")
     ap.add_argument("--file-seconds", metavar="JUNIT_XML", help="print the seconds of each test file in a pytest junit file")
     ap.add_argument("--upstream-files", metavar="DIR", help=f"fetch the pinned {UPSTREAM_MODEL} tokenizer files into DIR")
@@ -424,7 +427,7 @@ def main(argv=None):
             print(f"  {f}: {' '.join(sorted(classify(f, areas, a.base, a.head))) or 'T0 only'}")
     print("T1 areas:", " ".join(picked) or "none (T0 only)")
     if a.github_output:
-        include = jobs(picked)
+        include = jobs(picked, whole=a.whole_files)
         with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
             fh.write(f"matrix={json.dumps({'include': include})}\nany={'true' if picked else 'false'}\n")
     return 0
