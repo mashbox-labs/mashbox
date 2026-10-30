@@ -27,7 +27,8 @@ MERGES = ["Ġ t", "h e", "Ġt he", "i n", "Ġ a", "1 2", "12 3", "o r", "l d", "
 WHOLE = ["Ġhello", "Server"]          # in the vocabulary, not reachable by the merges
 CASES = [("deepseek-r1-qwen", "after"), ("falcon3", "first"), ("dbrx", "mixed"), ("tekken", "first"), ("smollm", "first"),
          ("qwen2", "after"), ("llama-bpe", "after"), ("tekken", "mixed"), ("refact", "first"), ("exaone", "first"),
-         ("qwen35", "after"), ("gemma4", "gemma4"), ("llama-bpe", "digits")]
+         ("qwen35", "after"), ("gemma4", "gemma4"), ("llama-bpe", "digits"), ("minicpm5", "after"),
+         ("granite-docling", "after")]
 # layout "digits": the "after" vocabulary plus merges that build whole digit runs, so a split that cuts digit runs
 # differently (1-3 digits, one digit, any length) gives different ids (llama.cpp's LLAMA3 split cuts every 3)
 DIGIT_MERGES = ["123 4", "1234 5", "4 5", "45 6", "456 7", "5 6", "56 7", "3 4", "3 .", "3. 1", "3.1 4"]

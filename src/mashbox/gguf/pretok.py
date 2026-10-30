@@ -13,6 +13,9 @@ regexes), written in Hugging Face `tokenizers` form:
                     files), whole-word lookup, BOS on when the file does not say.
   smollm            llama.cpp's SMOLLM type: two splits in order, every digit alone, then llama.cpp's GPT2 split.
   refact, exaone    llama.cpp's REFACT and EXAONE types: the same two splits as smollm (granite and EXAONE 3.5 files).
+  minicpm5          llama.cpp's MINICPM5 type: two splits in order, digits in runs of up to 3, then the qwen2 split with
+                    digit runs of any length; a word that is one vocabulary entry taken whole (MiniCPM5 files).
+  granite-docling   llama.cpp's GRANITE_DOCLING type: llama.cpp's GPT2 split alone (granite-4.2 files).
 
 Vocabulary layout: llama.cpp keeps every token at its file id. Hugging Face `tokenizers` numbers added tokens after the
 BPE vocabulary, so tokenizer.py reads a file whose control, user-defined and unused tokens all come after the normal
@@ -27,7 +30,10 @@ CONTROL, USER_DEFINED, UNUSED = 3, 4, 5
 TEKKEN_RE = (r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+|"
              r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n/]*|"
              r"\s*[\r\n]+|\s+(?!\S)|\s+")
-SMOLLM_RES = [r"\p{N}", r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)"]
+GPT2_RE = r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)"
+SMOLLM_RES = [r"\p{N}", GPT2_RE]
+MINICPM5_RES = [r"\p{N}{1,3}", r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}+| ?[^\s\p{L}\p{N}]+[\r\n]*|"
+                                r"\s*[\r\n]+|\s+(?!\S)|\s+"]
 ADD_BOS = ("falcon3", "tekken")       # llama.cpp turns BOS on for these pre types unless tokenizer.ggml.add_bos_token says
 BPE_BOS_ID = 11                       # llama.cpp's BOS id for a BPE vocabulary whose file names none
 
@@ -36,7 +42,8 @@ def table(qwen2_re, llama3_re):
     """-> {name: (normalizer or None, split regex or a list of regexes applied in order, ignore_merges)}"""
     return {"deepseek-r1-qwen": ("NFC", qwen2_re, False), "falcon3": (None, llama3_re, True),
             "dbrx": (None, llama3_re, False), "tekken": (None, TEKKEN_RE, True), "smollm": (None, SMOLLM_RES, False),
-            "refact": (None, SMOLLM_RES, False), "exaone": (None, SMOLLM_RES, False)}
+            "refact": (None, SMOLLM_RES, False), "exaone": (None, SMOLLM_RES, False),
+            "minicpm5": (None, MINICPM5_RES, True), "granite-docling": (None, GPT2_RE, False)}
 
 
 def splits(regex):
