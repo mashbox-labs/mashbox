@@ -1,10 +1,11 @@
 """Every model list and count on a public page is rendered from models.json, and a page that types one fails.
 
-The README, the org profile and the docs catalog print the same rows and the same count line, from
-tools/model_lists.py, which reads mashbox/catalog.py and never changes it (catalog.py is in the code set of every GGUF
-chip record). A new gguf[] row reaches all of them with render --write and no other step. Outside the rendered blocks
-a page types no count of models, the org profile's prose names no model, and every printed count line adds up to
-models.json's total.
+The README, llms.txt and the docs catalog print every row and the same count line, from tools/model_lists.py, which
+reads mashbox/catalog.py and never changes it (catalog.py is in the code set of every GGUF chip record); `mashbox
+models` prints every row from catalog.py itself. A new gguf[] row reaches all of them with render --write and no other
+step. The GitHub org profile and the Hugging Face org card are overviews: no models block, no model named, no count, and
+a family line that names exactly the families models.json has. Outside the rendered blocks a page types no count of
+models, and every printed count line adds up to models.json's total.
 """
 import ast
 import copy
@@ -37,8 +38,9 @@ NEW_INTRO = ("We port open models to Google Cloud TPU, and anyone can run them. 
 INSTALL = "```bash\n~/.local/bin/mashbox run qwen3-8-27b --prompt \"Write a haiku about the sea.\"\n```\n"
 
 
-def profile(intro, reg=REG):
-    return f"{intro}\n\n{INSTALL}\n{SC.MARK_START}\n{SC.profile_block(reg)}\n{SC.MARK_END}\n"
+def overview(intro, reg=REG):
+    """An org overview page (GitHub profile, Hugging Face org card): the company line, prose, the install lines."""
+    return f"{reg['company_line']}\n\n{intro}\n\n{INSTALL}"
 
 
 def block(text):
@@ -60,10 +62,10 @@ def with_new_row(reg):
 
 
 def test_profile_prose_names_no_model():
-    old = [m for _, m in SC.list_problems(REG, profile(OLD_INTRO), "profile", names=True)]
+    old = [m for _, m in SC.list_problems(REG, overview(OLD_INTRO), "profile", names=True)]
     assert any("Hy-Nomas" in m for m in old), old
     assert any("'27B'" in m for m in old), old          # a size as people write it names the model too
-    assert SC.list_problems(REG, profile(NEW_INTRO), "profile", names=True) == []
+    assert SC.list_problems(REG, overview(NEW_INTRO), "profile", names=True) == []
 
 
 def test_typed_count_outside_a_block_fails():
@@ -88,19 +90,19 @@ def test_count_line_adds_up():
 def test_new_row_reaches_every_list():
     reg = with_new_row(REG)
     n = ML.counts(REG)["entries"]
-    views = {"README": SC.readme_block(reg), "profile": SC.profile_block(reg), "docs": ML.render_markdown(reg),
+    views = {"README": SC.readme_block(reg), "llms.txt": SC.llms_block(reg), "docs": ML.render_markdown(reg),
              "mashbox models": catalog.render_text(reg)}
     assert "NewModel-9B" in views.pop("mashbox models")   # the CLI lists every row; its count line comes after 0.1.6
     for name, text in views.items():
         assert "NewModel-9B" in text, name
-        head = "entries: " if name == "docs" else "models and files run in mashbox: "   # count line / lead line
+        head = "models and files run in mashbox: " if name == "README" else "entries: "   # lead line / count line
         assert f"{n + 1} {head}" in text, name
         assert f"{n} {head}" not in text, name
 
 
 def test_docs_catalog_is_one_page_in_two_tiers():
     """MASHBOX builds first (every models[] row, its measured lines), then GGUF files that run in our engine, one
-    section per family with maker, architecture and quant; the README, the profile and llms.txt carry the same tiers"""
+    section per family with maker, architecture and quant; the README and llms.txt carry the same tiers"""
     md = ML.render_markdown(REG)
     heads = [line for line in md.splitlines() if line.startswith("## ")]
     assert heads == [f"## {ML.BUILDS}", f"## {ML.GGUF}"]
@@ -116,7 +118,7 @@ def test_docs_catalog_is_one_page_in_two_tiers():
     for r in catalog.gguf_rows(REG):
         assert r["file_url"] in gguf and f"`{r['arch']}`" in gguf and r["maker"] in gguf
         assert r["file_url"] not in builds
-    for text in (SC.readme_block(REG), SC.profile_block(REG), SC.llms_block(REG)):
+    for text in (SC.readme_block(REG), SC.llms_block(REG)):
         assert text.index(ML.BUILDS) < text.index(ML.GGUF)
     q = next(m for m in REG["models"] if m["id"] == "qwen3-8-27b")
     spec = next(h for h in q["headline"] if q["results"][h["results"][0]]["short"]["ours"] == h["big"] == "74.84 tok/s")
@@ -194,8 +196,7 @@ def test_a_chip_with_its_own_brackets_prints_once_bracketed():
     number on every list, never "(CPU (AMD EPYC 7502P))"; a plain chip keeps "(TPU v6e-1)" """
     chips = {r["chip"] for m in REG["models"] for r in m.get("results") or [] if " (" in r["chip"]}
     assert chips, "models.json has no chip with its own brackets: the case this test covers"
-    views = {"README": SC.readme_block(REG), "profile": SC.profile_block(REG), "org card": SC.org_card_block(REG),
-             "docs catalog": ML.render_markdown(REG)}
+    views = {"README": SC.readme_block(REG), "llms.txt": SC.llms_block(REG), "docs catalog": ML.render_markdown(REG)}
     for name, text in views.items():
         for c in chips:
             assert f"({c})" not in text, (name, c)
@@ -203,19 +204,9 @@ def test_a_chip_with_its_own_brackets_prints_once_bracketed():
     assert "(TPU v6e-1)" in views["README"]
 
 
-def test_profile_row_carries_every_readme_headline():
-    """The org profile's row for a model prints every headline number the README prints for it, not only the first."""
-    rows = SC.profile_table(REG).splitlines()
-    for m in REG["models"]:
-        hl = [h for h in m.get("headline") or [] if h.get("readme")]
-        row = next(r for r in rows if f"[{m['name']}]" in r)
-        missing = [h["big"] for h in hl if f"**{h['big']}**" not in row]
-        assert not missing, (m["id"], missing)
-
-
 def overviews(reg):
-    """Every overview a reader lands on first: the README, the GitHub org profile and the Hugging Face org card."""
-    return {"README": SC.readme_block(reg), "profile": SC.profile_block(reg), "org card": SC.org_card_block(reg)}
+    """The overview that lists the catalog: the README (the org profile and the Hugging Face org card list none)."""
+    return {"README": SC.readme_block(reg)}
 
 
 def many_rows(reg, n=30):
@@ -256,6 +247,107 @@ def test_every_overview_leads_with_the_catalog_size_and_lists_every_row():
                 k = sum(len(m["rows"]) for m in p["models"])
                 assert f"<summary><b>{p['name']}</b> ({k} {'file' if k == 1 else 'files'}): " in text, (name, p["name"])
         assert ML.lead_line(reg) == lead
-    wrong = SC.profile_block(REG).replace(ML.lead_line(REG), ML.lead_line(REG).replace(
+    wrong = SC.readme_block(REG).replace(ML.lead_line(REG), ML.lead_line(REG).replace(
         f"{ML.counts(REG)['files']} GGUF files", "2 GGUF files", 1), 1)
-    assert any("lead line" in m for _, m in SC.list_problems(REG, block(wrong), "profile")), "a wrong lead count passes"
+    assert any("lead line" in m for _, m in SC.list_problems(REG, block(wrong), "README")), "a wrong lead count passes"
+
+
+def test_llms_txt_lists_every_row():
+    """llms.txt names every gguf[] row once, publisher by publisher in the overviews' order, each with its catalog level
+    and the chips it passed on (no "runs on" for a row without a chip test), then the count line; the file on disk is
+    that render."""
+    for reg in (REG, with_new_row(REG), many_rows(REG)):
+        text, rows = SC.llms_block(reg), catalog.gguf_rows(reg)
+        gguf = text.split(f"{ML.GGUF}:", 1)[1]
+        lines = [x for x in gguf.splitlines() if x.startswith("- ") and "[Full catalog]" not in x]
+        assert len(lines) == len(rows) == len(reg["gguf"]), (len(lines), len(rows))
+        got = []
+        for x in lines:
+            hit = [r for r in rows if x.endswith(f"`{r['run']}`")]
+            assert len(hit) == 1, x
+            r = hit[0]
+            got.append(r["id"])
+            assert f": {r['level']}" in x and f"GGUF from {r['publisher']}" in x and f"by {r['maker']}" in x, x
+            assert (f"runs on {', '.join(r['chips'])}." in x) if r["chips"] else ("runs on" not in x), x
+        assert got == [r["id"] for _, _, rs in ML.by_publisher(reg) for r in rs]
+        assert gguf.rstrip().endswith(f"{ML.count_line(reg)}.")
+        assert SC.list_problems(reg, block(text), "llms.txt") == []
+    disk = (ROOT / "llms.txt").read_text()
+    assert disk.split(SC.MARK_START, 1)[1].split(SC.MARK_END, 1)[0].strip() == SC.llms_block(REG).strip()
+
+
+def inside(text, start, end):
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def test_every_catalog_page_matches_models_json():
+    """The pages on disk that carry the catalog list every models.json row once and print models.json's counts: README
+    (lead line), the docs catalog and llms.txt (count line), and `mashbox models` (every row; its count line comes with
+    the release that carries it). The Hugging Face model cards are about one model each: no catalog count, no GGUF row."""
+    rows, live = catalog.gguf_rows(REG), catalog.live(REG)
+    pages = {"README.md": inside((ROOT / "README.md").read_text(), SC.MARK_START, SC.MARK_END),
+             "docs/supported-models.md": inside((ROOT / "docs" / "supported-models.md").read_text(),
+                                                "<!-- catalog:start -->", "<!-- catalog:end -->"),
+             "llms.txt": inside((ROOT / "llms.txt").read_text(), SC.MARK_START, SC.MARK_END)}
+    for name, text in pages.items():
+        for r in rows:
+            key = f"`{r['run']}`" if name == "llms.txt" else f"]({r['file_url']})"
+            assert text.count(key) == 1, (name, r["id"], text.count(key))
+        for m in live:
+            assert m["name"] in text, (name, m["id"])
+        want = f"**{ML.lead_line(REG)}.**" if name == "README.md" else f"{ML.count_line(REG)}."
+        assert want in text, (name, want)
+        assert SC.list_problems(REG, block(text), name) == [], name
+    cli = catalog.render_text(REG)
+    for r in rows:
+        assert r["run"] in cli, r["id"]
+    for m in live:
+        assert f"[{m['id']}]" in cli, m["id"]
+    for card in sorted((ROOT / "hf").glob("*/README.md")):
+        text = card.read_text()
+        assert not SC.LEAD_RE.search(text) and not SC.ENTRIES_RE.search(text), card
+        assert SC.list_problems(REG, text, str(card)) == [], card
+        assert not any(r["file_url"] in text for r in rows), card
+
+
+OVERVIEW = ("We make open models run faster and cheaper on Google Cloud TPU. mashbox runs GGUF files from the community "
+            "as they are. Families covered so far: {fams}. Every file is on "
+            "[Supported models](https://mashbox.gg/docs/supported-models).")
+
+
+def with_new_family(reg):
+    """reg plus one passing GGUF file of a family models.json does not have yet (Phi)."""
+    reg = copy.deepcopy(reg)
+    g = copy.deepcopy(passing_row(reg))
+    g.update(id="someone-phi-4-mini-q4-k-m", model="phi-4-mini", publisher="someone", repo="someone/Phi-4-mini-GGUF",
+             file="Phi-4-mini-Q4_K_M.gguf", base=f"{g['base'].split('/')[0]}/Phi-4-mini",
+             run="mashbox run someone/Phi-4-mini-GGUF:Q4_K_M")
+    reg["gguf"].append(g)
+    return reg
+
+
+def test_org_overviews_carry_no_model_list():
+    """The GitHub org profile and the Hugging Face org card are overviews: no models block, no model
+    named, no lead line, count line or typed count. A family line names exactly models.json's GGUF families, in any
+    order, so a new family shows as drift on both pages the day its first file lands."""
+    fams = ML.gguf_families(REG)
+    assert fams == sorted({ML.family(r) for r in catalog.gguf_rows(REG)}, key=str.casefold) and len(fams) >= 2
+    line = ", ".join(fams[:-1]) + " and " + fams[-1]
+    page = overview(OVERVIEW.format(fams=line))
+    shuffled = overview(OVERVIEW.format(fams=", ".join(fams[:0:-1]) + " and " + fams[0]))
+    for where in ("profile", "hf org card"):
+        assert SC.overview_problems(REG, page, where) == [], where
+        assert SC.overview_problems(REG, shuffled, where) == [], where
+    bad = {"a models block": page + "\n" + block(SC.readme_block(REG)),
+           "a model named": overview(OLD_INTRO + " " + OVERVIEW.format(fams=line)),
+           "the lead line": page + f"\n**{ML.lead_line(REG)}.**\n",
+           "the count line": page + f"\n{ML.count_line(REG)}.\n",
+           "a typed count": page + "\nWe test 14 GGUF files.\n",
+           "a family left out": overview(OVERVIEW.format(fams=line.replace(fams[1] + ", ", "", 1))),
+           "a family models.json lacks": overview(OVERVIEW.format(fams="Phi, " + line)),
+           "no company line": f"{OVERVIEW.format(fams=line)}\n\n{INSTALL}"}
+    for what, text in bad.items():
+        assert SC.overview_problems(REG, text, "profile"), what
+    assert any("famil" in m for _, m in SC.overview_problems(with_new_family(REG), page, "profile")), \
+        "a new family in models.json leaves the overview's family line as it was"
+    assert SC.overview_problems(with_new_family(REG), overview(OVERVIEW.format(fams="Phi, " + line)), "profile") == []

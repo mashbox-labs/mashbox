@@ -1,7 +1,8 @@
-"""The Hugging Face org card and the "TPU models" collection are views of models.json, checked online like the profile.
+"""The Hugging Face org card and the "TPU models" collection, checked online against models.json like the profile.
 
-The org card is the org's static README Space. Its models block is rendered by org_card_block (never typed on Hugging
-Face), its prose names no model and no count, and the "TPU models" collection holds every live TPU port.
+The org card is the org's static README Space, an overview like the GitHub org profile: no models
+block, no model named, no count, and a family line with exactly models.json's GGUF families (overview_problems). The
+"TPU models" collection holds every live TPU port.
 """
 import importlib.util
 import json
@@ -24,7 +25,9 @@ INSTALL = "```bash\n~/.local/bin/mashbox run qwen3-8-27b\n```\n"
 
 
 def new_card(reg=REG):
-    return (f"**{reg['company_line']}**\n\n{SC.MARK_START}\n{SC.org_card_block(reg)}\n{SC.MARK_END}\n\n{INSTALL}\n"
+    fams = SC._lists().gguf_families(reg)
+    return (f"**{reg['company_line']}**\n\nOur engine runs GGUF files from the community as they are. Families covered "
+            f"so far: {', '.join(fams[:-1])} and {fams[-1]}.\n\n{INSTALL}\n"
             "Repo names: `<Model>-TPU` runs on Google Cloud TPU with the `mashbox` package.\n")
 
 
@@ -50,27 +53,27 @@ def org_problems(card, coll):
 
 def test_the_old_org_card_and_collection_fail_online():
     got = org_problems(OLD_CARD, collections([f"{ORG}/Qwen3.8-27B-TPU"]))
-    assert any("models:start" in p for p in got), got            # no rendered block: the table was typed
     assert any("Hy-Nomas" in p for p in got), got                # "Coming soon: Hy-Nomas" names a model in prose
     assert any("lacks" in p and "Hy-Nomas-TPU" in p for p in got), got
 
 
-def test_the_rendered_org_card_and_full_collection_pass_online():
+def test_the_overview_org_card_and_full_collection_pass_online():
     assert org_problems(new_card(), collections(sorted(SC.tpu_ports(REG)) + ["tencent/Hy-Nomas"])) == []
 
 
-def test_a_typed_number_inside_the_block_fails():
-    card = new_card().replace("326.6 vs 1,606.7 s", "130.1 vs 1,606.7 s")
-    assert "130.1" in card
-    assert any("differs" in p for p in org_problems(card, collections(sorted(SC.tpu_ports(REG)))))
+def test_a_models_block_or_a_count_on_the_card_fails():
+    full = collections(sorted(SC.tpu_ports(REG)))
+    with_block = new_card() + f"\n{SC.MARK_START}\n{SC.readme_block(REG)}\n{SC.MARK_END}\n"
+    assert any("block" in p for p in org_problems(with_block, full)), "a models block on the overview passes"
+    counted = new_card() + f"\n**{SC._lists().lead_line(REG)}.**\n"
+    assert any("lead line" in p for p in org_problems(counted, full)), "a lead line on the overview passes"
 
 
-def test_a_new_tpu_port_reaches_the_card_and_the_collection():
+def test_a_new_tpu_port_reaches_the_collection_and_leaves_the_card_as_it_is():
     reg = json.loads(json.dumps(REG))
     m = json.loads(json.dumps(next(x for x in reg["models"] if x["id"] == "qwen3-8-27b")))
     m.update(id="newmodel-9b", name="NewModel-9B", hf_repo=f"{ORG}/NewModel-9B-TPU")
     reg["models"].append(m)
-    assert f"https://huggingface.co/{ORG}/NewModel-9B-TPU" in SC.org_card_block(reg)
     got = SC.collection_problems(reg, collections(sorted(SC.tpu_ports(REG))), "c")
     assert got == [("c", f"'TPU models' lacks {ORG}/NewModel-9B-TPU")], got
-    assert SC.org_card_problems(reg, new_card(REG), "card")      # yesterday's block is out of date for the new row
+    assert SC.overview_problems(reg, new_card(REG), "card") == []   # the overview names no model: nothing to update

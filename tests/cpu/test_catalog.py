@@ -3684,23 +3684,6 @@ def test_a_passing_chip_prints_its_measured_speed():
     assert seen >= 3
 
 
-def test_the_org_profile_chips_cell_names_the_cpu_first_for_a_model_that_runs_on_it():
-    """The org profile's Chips cell listed passing TPU rows only, so Track2Rig (cpu row passing) read "TPU v6e" there
-    while llms.txt, the README, supported-models.md and `mashbox models` say "CPU, TPU v6e". Every live model with a
-    passing cpu row has CPU first in its profile Chips cell; a model without one never says CPU."""
-    lines = SC.profile_table(REG).splitlines()
-    seen = 0
-    for m in SC.live(REG):
-        row = next(x for x in lines if x.startswith(f"| **[{m['name']}]("))
-        chips = row.rstrip(" |").rsplit(" | ", 1)[1]
-        if (m["chips"].get("cpu") or {}).get("status") == "passing":
-            seen += 1
-            assert chips.split(", ")[0] == "CPU", row
-        else:
-            assert "CPU" not in chips.split(", "), row
-    assert seen
-
-
 # ---------------------------------------------------------------- quick-check chip record (record_kind "quick-check")
 # A row's chip says "passing" from a quick-check run: four `mashbox run REPO:TAG --prompt P --max-tokens 64
 # --temperature 0` runs with zero engine flags, each compared with llama.cpp's greedy ids on the same templated prompt.
