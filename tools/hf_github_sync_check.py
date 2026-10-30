@@ -1159,8 +1159,13 @@ def repos_text(reg):
     for title in sorted(tiers, key=lambda t: (t is None, t or "")):
         names = " or ".join(f"`<Model>{x}`" for x in sorted(tiers[title]))
         where = f' in the "{title}" collection' if title else ""
-        what = (" are open models we port and tune with our own TPU kernels, and they run on Google Cloud TPU with the "
-                "`mashbox` package." if title == TPU_COLLECTION else " run with the `mashbox` package.")
+        what = " run with the `mashbox` package."
+        if title == TPU_COLLECTION:   # our own kernels are claimed only as far as the rows ship them (kernels[])
+            kern = [bool(m.get("kernels")) for m in rows if KINDS[m["kind"]].get("collection") == title]
+            what = (" are open models we port and tune with our own TPU kernels, and they run on Google Cloud TPU with "
+                    "the `mashbox` package." if all(kern) else
+                    " are open models we port to Google Cloud TPU, and they run there with the `mashbox` package"
+                    + ("; some of them also use our own TPU kernels." if any(kern) else "."))
         out.append(f"{names} repos{where}{what}")
     for dev, info in DEVICE_INFO.items():
         repos = [e["hf_repo"] for e in listed if e["device"] == dev]
