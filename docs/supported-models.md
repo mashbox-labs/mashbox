@@ -102,3 +102,13 @@ GGUF architectures with a passing chip test (`general.architecture`): `qwen35` (
 | Checked on CPU | A file that passed its check against llama.cpp on CPU, with no passing chip test in this version of mashbox. The row prints the numbers from that CPU check. |
 
 A GGUF file with no row here can still run: `mashbox inspect FILE` says whether it runs here, and why not, before anything loads. [GGUF files](gguf.md#what-runs) says what runs.
+
+## Hugging Face safetensors
+
+Some Hugging Face repos with safetensors weights, or a folder that holds one, run too. `mashbox inspect OWNER/NAME` reads the repo's config and file headers and says whether and how the model would run on each chip, before any weights download.
+
+```bash
+mashbox run Qwen/Qwen3-4B --prompt "What is the capital of Australia, and why is it not Sydney?"
+```
+
+This path reads dense text models of the llama, Mistral, Qwen2, Qwen3 and Qwen3.5 architectures, on one chip. Other architectures, routed experts, quantized weights and a model that fits no chip stop with a one-line reason. The command above ran on TPU v6e-1 with this version, with Qwen3-4B's bfloat16 weights as published; it is the one model this path has run on a TPU chip with this version. The other architectures are checked on CPU against transformers on small test models.

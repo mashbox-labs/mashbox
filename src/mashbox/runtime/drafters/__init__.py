@@ -61,7 +61,9 @@ class Drafter:
         return D.at[:B].set(Dc)
 
     def draft(self, W, DW, ck, Dc, tok, pos, Tc, K, sp, st):
-        """-> (d (B, K) i32 drafts, found (B,) i32 drafts per row or None, ck)"""
+        """-> (d (B, K) i32 drafts, found (B,) i32 drafts per row or None, ck), or the same plus its carry Dc when drafting
+        changed it (the step then hands that Dc to after_commit). No state passes through the object: the engine traces its
+        programs in several threads at once (warm), so a value kept on self in one trace can reach another."""
         raise NotImplementedError
 
     def after_commit(self, Dc, r, emit, n, go, tok, pos, K1):
@@ -82,6 +84,14 @@ class Drafter:
     def programs(self, eng):
         """its own host-called programs, compiled by the warm-up: [(name, function, args after its state, kwargs)]"""
         return []
+
+    def on_swap(self, eng, a, b):
+        """the engine exchanged the whole state of slots a and b (a request moved to a lower slot): a drafter whose state
+        belongs to the conversation in a slot exchanges its rows a and b too"""
+
+    def on_restore(self, eng, s):
+        """slot s now holds a conversation restored from host memory, which holds the target's state only: a drafter whose
+        state belongs to the conversation in a slot forgets slot s's old one"""
 
     def found(self, eng, r, K):
         """how many drafts row r would get now (the call-level plain choice of a plain_ok drafter)"""

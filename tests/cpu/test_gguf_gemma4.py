@@ -120,11 +120,11 @@ def test_window_is_crossed_and_layers_differ(tmp_path):
     assert {"Q4_K", "Q8_0"} <= names, names
 
 
-def _header_only(path, extra):
+def _header_only(path, extra, ff=16):
     w = gguf.GGUFWriter(str(path), "gemma4")
     w.add_block_count(1)
     w.add_embedding_length(8)
-    w.add_feed_forward_length(16)
+    w.add_feed_forward_length(ff)
     w.add_head_count(2)
     w.add_key_length(4)
     w.add_value_length(4)
@@ -150,6 +150,20 @@ def _header_only(path, extra):
     ([("tensor:blk.0.ffn_gate_inp.weight", 0)], "routed experts")])
 def test_refusals_are_one_line(extra, words, tmp_path):
     p = _header_only(tmp_path / "m.gguf", extra)
+    with pytest.raises(GGUFError) as e:
+        open_model(p)
+    msg = str(e.value)
+    assert words in msg and "mashbox: gemma4 file with" in msg and "\n" not in msg, msg
+
+
+@pytest.mark.parametrize("extra,words", [
+    ([("embedding_length_per_layer_input", 256)], "per-layer token embeddings"),
+    ([], "per-layer feed-forward lengths")])
+def test_a_per_layer_ffn_list_is_refused_in_one_line(extra, words, tmp_path):
+    """feed_forward_length stored as one value per layer (an array, as in unsloth's gemma-4-E2B mobile files) gets the
+    one-line refusal of any other unsupported gemma4 file, never a traceback; with per-layer token embeddings too (the
+    E2B file's case) the message names those first, as it does for an E4B file"""
+    p = _header_only(tmp_path / "m.gguf", extra, ff=[16])
     with pytest.raises(GGUFError) as e:
         open_model(p)
     msg = str(e.value)

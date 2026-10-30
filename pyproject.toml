@@ -38,4 +38,5 @@ where = ["src"]
 mashbox = ["models.json", "models/*/*.json", "models/*/*.html", "tpu/*.sh", "tpu/*.sha256",
            "ui/shell/*.css", "ui/shell/*.js", "ui/shell/*.svg", "ui/shell/*.html", "ui/shell/*.md", "ui/shell/fonts/*",
            "ui/chat/*.html", "ui/chat/*.js",
-           "ui/app/*.html", "ui/app/*.js", "ui/app/*.css", "ui/app/window/*.html", "ui/app/window/*.js"]
+           "ui/app/*.html", "ui/app/*.js", "ui/app/*.css", "ui/app/window/*.html", "ui/app/window/*.js",
+           "runtime/drafters/LICENSE-dflash"]

@@ -47,6 +47,7 @@ request's path (a slot of its own tenant is saved first, as before). The host ca
 over its cap, the least recently saved entry of a tenant above its floor (cap / tenants present) goes first, so another
 tenant's traffic never evicts a tenant that stays inside its floor. Without scopes everything is one owner, as before.
 """
+import inspect
 import os
 import time
 import traceback
@@ -161,6 +162,7 @@ class Engine:
     drafter = dpf = dstate = sstep = spec_why = None
     spec_off = False
     _dhid = False
+    _dtaps, _dkey = (), "hid"
 
     def __init__(self, cfg, W, model, CTX=2048, S=8, K=8, decode_kernels=None, chunk=512, tokens_per_call=2048,
                  prefix_cache=False, attn_bytes=2e9, cache_ram=8 << 30, ckpts=8, ckpt_step=8192, budget_busy=128,
@@ -214,10 +216,19 @@ class Engine:
             self.spec_why = (f"speculation off: the {getattr(self.drafter, 'kind', None)} drafter needs every committed "
                              f"token, so it cannot run a row bucket at k = 0 (k_table {self.k_table}): plain decoding")
             self.drafter, self.DK, self.k_table = None, 0, {}
+        # a drafter that reads the target's layer outputs needs a forward that returns them (taps=); the tensor-parallel
+        # forward does not: plain decoding, and spec_why says why
+        if self.DK and self.drafter.verify_kw.get("taps") and "taps" not in inspect.signature(fwd).parameters:
+            self.spec_why = (f"speculation off: the {getattr(self.drafter, 'kind', None)} drafter reads the target's layer "
+                             f"outputs, which this model's forward does not return (tensor parallel): plain decoding")
+            self.drafter, self.DK, self.k_table = None, 0, {}
         self.spec_stats = dict(rounds=0, tokens=0, hist=[0] * (self.DK + 2), plain_calls=0, backoffs=0)
         self.hlast = {}
         self.dpf = self.sstep = None
         self._dhid = bool(self.DK) and self.drafter.needs_hidden
+        # a drafter that reads the target's layer outputs (a block drafter: DFlash) asks the forward for them by layer id
+        self._dtaps = tuple(self.drafter.verify_kw.get("taps", ())) if self.DK else ()
+        self._dkey = getattr(self.drafter, "hidden_key", "hid") if self.DK else "hid"
         if self.DK:
             from . import spec_step as SS
             from . import drafters as DRS
@@ -301,7 +312,8 @@ class Engine:
                             greedy_tok=jnp.where(SPm.no_penalty(spr), nxt, jnp.argmax(x, -1).astype(jnp.int32)))
             return tok, cnt.at[rows, tok].add(1.0, mode="drop"), seen.at[rows, tok].set(True, mode="drop")
 
-        self.fwd = jax.jit(fwd, static_argnames=("Tc", "contig", "all_logits", "verify", "hidden"), donate_argnums=(1, 2))
+        self.fwd = jax.jit(fwd, static_argnames=("Tc", "contig", "all_logits", "verify", "hidden") + (("taps",) if self._dtaps else ()),
+                           donate_argnums=(1, 2))
         self.first_rows = jax.jit(first_rows, donate_argnums=(3, 4))
         self.dec = jax.jit(dec, static_argnames=("Tc", "K", "trace"), donate_argnums=(1, 2))
         self.decs = jax.jit(decs, static_argnames=("Tc", "K", "trace"), donate_argnums=(1, 2))
@@ -447,7 +459,7 @@ class Engine:
                 toks[b, :len(ch)], p0[b], lens[b], sl[b] = ch, s0, len(ch), slot
             Tc = 0 if p0.max() == 0 else min(self.CTX, bucket(int(p0.max()), 128))
             r = self.fwd(self.W, ck, cv, jnp.asarray(toks), jnp.asarray(p0), jnp.asarray(lens), jnp.asarray(sl), Tc=Tc,
-                         hidden=self._dhid)
+                         hidden=self._dhid, **self._tapkw())
             ck, cv = r["ck"], r["cv"]
             self._note("prefill", B, T, Tc)
             done = [b for b, w in enumerate(grp) if w[2] + int(lens[b]) >= len(w[1])]
@@ -458,7 +470,7 @@ class Engine:
                     tn[b, :m_], lm[b] = ids[s0 + 1:s0 + 1 + m_], m_
                 for b in done:
                     hrow[b], hidx[b] = grp[b][0], int(lens[b]) - 1
-                self.dstate, ck, cv = self.dpf(self.W, ck, cv, self.drafter.W, self.dstate, jnp.asarray(tn), r["hid"], jnp.asarray(p0),
+                self.dstate, ck, cv = self.dpf(self.W, ck, cv, self.drafter.W, self.dstate, jnp.asarray(tn), r[self._dkey], jnp.asarray(p0),
                                               jnp.asarray(lm), jnp.asarray(sl), jnp.asarray(hrow), jnp.asarray(hidx), Tc=Tc)
             if done:
                 nx, lg = np.asarray(r["nxt"]), r["lg"]
@@ -627,7 +639,7 @@ class Engine:
         calls = []
         for B, T, Tc in self.prefill_shapes():
             calls.append(("prefill", self.fwd, (a(np.zeros((B, T), i32)), a(np.zeros(B, i32)), a(np.ones(B, i32)),
-                                                  a(np.arange(B, dtype=i32))), dict(Tc=Tc, hidden=self._dhid)))
+                                                  a(np.arange(B, dtype=i32))), dict(Tc=Tc, hidden=self._dhid, **self._tapkw())))
         n_pre = len(calls)
         sp = SP.to_device(SP.pack([dict(temperature=0.7, top_p=0.9, top_k=20, presence_penalty=1.0, seed=1)] * S, S))
         cnt, seen = self._committed(jnp.zeros((S, V), jnp.float32)), self._committed(jnp.zeros((S, V), bool))
@@ -866,6 +878,8 @@ class Engine:
             if t is not None and t < slot[i] and max(cur, self._rows(t + 1, S)) < max(cur, self._rows(slot[i] + 1, S)):
                 a_ = slot[i]
                 state = self.swap(state[0], state[1], np.int32(a_), np.int32(t))
+                if self.DK:     # a drafter's per-slot state follows its conversation the same way
+                    self.drafter.on_swap(self, a_, t)
                 self.snaps[a_], self.snaps[t] = self.snaps[t], self.snaps[a_]
                 self.used[a_], self.used[t] = self.used[t], self.used[a_]
                 slot[i] = t
@@ -894,6 +908,8 @@ class Engine:
                                  and x.get("scope") == sc[i] and x["ids"] == tuple(prompts[i][:len(x["ids"])])]
                 if ent[i] is not None:
                     state = self._restore(state, s_, ent[i])
+                    if self.DK:     # the host copy holds the target's state only: a drafter forgets the slot's old one
+                        self.drafter.on_restore(self, s_)
                 if snap[i] is not None:
                     state = (state[0], self.put(state[1], s_, snap[i]["r"], snap[i]["c"]))
             for i, m in enumerate(marks):
@@ -1191,6 +1207,10 @@ class Engine:
                 bo["miss"], bo["wait"], bo["span"] = 0, bo["span"], min(self.BO_MAX, bo["span"] * 2)
                 self.spec_stats["backoffs"] += 1
 
+    def _tapkw(self):
+        """the forward's taps argument for prefill: {} unless the drafter reads the target's layer outputs"""
+        return {"taps": self._dtaps} if self._dtaps else {}
+
     def _spec_rows(self, live):
         """the row bucket of a decode call over these live rows (the speculation and the plain program use the same)"""
         sampled = any(self.rows[s_]["sampled"] for s_ in live)
@@ -1323,7 +1343,7 @@ class Engine:
         calls = []
         if self.dpf is not None:
             for B, T, Tc in self.prefill_shapes():
-                hid = self._committed(jnp.zeros((B, T, D), jnp.bfloat16))
+                hid = self._committed(jnp.zeros((B, T, D * max(1, len(self._dtaps))), jnp.bfloat16))
                 calls.append(("spec", self.dpf, (dr.W, self.dstate, a(np.zeros((B, T), i32)), hid, a(np.zeros(B, i32)),
                                                  a(np.zeros(B, i32)), a(np.arange(B, dtype=i32)), a(np.full(B, S, i32)),
                                                  a(np.zeros(B, i32))), dict(Tc=Tc)))

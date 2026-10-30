@@ -108,12 +108,30 @@ def softplus(x):   # torch softplus(beta=1, threshold=20)
     return jnp.where(x > 20.0, x, jnp.log1p(jnp.exp(jnp.minimum(x, 20.0))))
 
 
+EMBED_TILE = 32         # rows of an int8 (32, 128) TPU tile
+EMBED_TILE_MAX_ROWS = 8  # lookups of at most this many rows read whole tiles (see int8_rows)
+
+
+def int8_rows(q, toks):
+    """q[toks] for an int8 (N, D) table, exactly. For a few rows (decode), each row is read from its whole (32, D) tile:
+    q viewed as (N / 32, 32, D) (the same bytes in the TPU's int8 tiling), the tile of each token gathered, its row
+    picked by a one-hot sum in int32 (exact). A plain gather of one row makes XLA relayout the whole table from
+    T(32,128) to T(8,128) on every call (v6e-1 int8 served path, B=1: 2.12 ms/step; 26.45 -> 24.24 ms/step with this form,
+    logits bit-equal). Larger lookups (prefill) keep the plain gather, which needs no relayout there and reads 32x fewer
+    bytes."""
+    N, D = q.shape
+    if q.dtype != jnp.int8 or N % EMBED_TILE or toks.size > EMBED_TILE_MAX_ROWS:
+        return q[toks]
+    t = q.reshape(N // EMBED_TILE, EMBED_TILE, D)[toks // EMBED_TILE]
+    m = lax.broadcasted_iota(jnp.int32, t.shape, t.ndim - 2) == (toks % EMBED_TILE)[..., None, None]
+    return jnp.where(m, t, jnp.int8(0)).astype(jnp.int32).sum(-2).astype(jnp.int8)
+
+
 def embed(E, toks, pj=None):
     """Embedding rows of toks. pj (activation edits only): a function on the rows in f32 before the rounding."""
     if isinstance(E, dict):
-        if pj is None:
-            return (E["q"][toks].astype(f32) * E["s"][toks][..., None]).astype(bf16)
-        return pj(E["q"][toks].astype(f32) * E["s"][toks][..., None]).astype(bf16)
+        x = int8_rows(E["q"], toks).astype(f32) * E["s"][toks][..., None]
+        return (x if pj is None else pj(x)).astype(bf16)
     if pj is None:
         return E[toks]
     return pj(E[toks].astype(f32)).astype(bf16)
@@ -121,6 +139,14 @@ def embed(E, toks, pj=None):
 
 # Activation edits (mashbox.runtime.activation_edits, the engine interface): the sites this model runs.
 ACTIVATION_EDIT_SITES = AE.SITES
+# Drafter layer taps: forward(taps=) returns the residual stream after the named decoder layers, for a drafter that
+# reads the target's layer outputs (DFlash 2). One chip only: the tensor-parallel forward has none.
+# The DFlash 2 drafter published for this model (runtime/drafters/dflash.py; it reads layers 5, 19, 33, 47, 61):
+# z-lab/Qwen3.8-27B-DFlash2 @ 50307d4c4cde6860d4eee73e2547cd786fe8e8a4 (a mirror of incoai/Qwen3.8-27B-DFlash2 @
+# 015e795645c74b1a0eeef3b570031fb62e769bc5, model.safetensors sha256
+# 67fc76d68dc5a9415511a4f394ef744d67510cd20e93b37cc2cc7d28e4bab65c), loaded unchanged, under the licence its publisher
+# states (README front matter: apache-2.0).
+LAYER_TAPS = True
 
 
 def gated_delta_chunk(q, k, v, g, beta, s0, CH=CHUNK):
@@ -306,13 +332,20 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
         return jax.tree_util.tree_map(lambda a: a[i], t)
 
     def forward(W, ck, cv, toks, p0, lens, slots, Tc, contig=False, all_logits=False, verify=False, hidden=False, keep=None,
-                ed=None):
-        """keep (B,) bool or None: rows whose linear-attention state this call may change; the state rows of the others
+                ed=None, taps=()):
+        """taps (static): decoder layer ids whose outputs (the residual stream after that layer's MLP, before the final norm;
+        Hugging Face hidden_states[l + 1]) come back concatenated in that order as out["taps"] (B, T, len(taps) * D), from the
+        verify pass and from prefill (a block drafter's context, runtime/drafters/dflash.py); () = the program without them.
+        keep (B,) bool or None: rows whose linear-attention state this call may change; the state rows of the others
         (padding rows of a decode bucket, rows paused mid-prefill) are written back as they were. The verify pass writes no
         linear state (speculative decoding commits the accepted part after it), so it takes no keep.
         ed: the activation-edit operand (make_forward(edits=...) only)."""
         AE.check_forward_args(edits, ed, verify)
         B, T = toks.shape
+        taps = tuple(int(l) for l in taps)
+        assert all(0 <= l < L for l in taps), taps
+        assert not (taps and (kv_in_loop or edits is not None)), "taps: one chip, no activation edits"
+        tsub = sorted({l % FI for l in taps})     # sub-layers of a group whose output is tapped
         assert not verify or (contig and not kv_in_loop), "verify runs on contig rows, one chip"
         assert not (verify and keep is not None), "the verify pass takes no keep mask"
         Kc, Vc = ck
@@ -398,6 +431,7 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
                 x, R, C = carry
             g, w = xg["g"], xg["w"]
             rl, cl = [], []
+            tp = {}                   # tapped sub-layer outputs of this group (taps only)
             erl = []                  # activation-edit reads of the group's layers (edits only)
             if contig:
                 Cg = lax.dynamic_slice(C, (g, 0, 0, 0, 0), (1, FI - 1, B) + C.shape[3:])[0]
@@ -444,17 +478,19 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
                 else:
                     x, er = mlp_edited(x + o, w["mlp"], i, l_, lay)
                     erl.append(er)
+                if i in tsub:
+                    tp[f"tap{i}"] = x
             km = None if keep is None else keep[None, :, None, None]
             if kern is not None:
                 Cn = jnp.stack(cl) if km is None else jnp.where(km, jnp.stack(cl), Cg0)
                 C = lax.dynamic_update_slice(C, lax.optimization_barrier(Cn)[None], (g, 0, 0, 0, 0))
                 if edits is not None:
                     return (x, R, C), dict(k=k, v=v, er={n: jnp.stack([e[n] for e in erl]) for n in erl[0]})
-                return (x, R, C), dict(k=k, v=v)
+                return (x, R, C), dict(k=k, v=v, **tp)
             if verify:
                 rec = jax.tree.map(lambda *a: jnp.stack(a), *rl)
                 rec["x"] = jnp.stack(cl)
-                return (x, R, C), dict(k=k, v=v, rec=rec)
+                return (x, R, C), dict(k=k, v=v, rec=rec, **tp)
             Rn, Cn = jnp.stack(rl), jnp.stack(cl)
             if km is not None:
                 Rn, Cn = jnp.where(km[..., None], Rn, Rg0), jnp.where(km, Cn, Cg0)
@@ -468,7 +504,7 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
                 return (x, R, C, Kl, Vl), None
             if edits is not None:
                 return (x, R, C), dict(k=k, v=v, er={n: jnp.stack([e[n] for e in erl]) for n in erl[0]})
-            return (x, R, C), dict(k=k, v=v)
+            return (x, R, C), dict(k=k, v=v, **tp)
 
         xs = dict(w=W["g"], g=jnp.arange(NG, dtype=jnp.int32))
         if edits is not None and e_lay is not None:      # (L, ..) -> (NG, FI, ..): each group scans its FI layers' rows
@@ -483,6 +519,8 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
         if not kv_in_loop:
             Kc, Vc = kv_write(Kc, Vc, slots, pos, ys["k"], ys["v"])
         out = dict(ck=(Kc, Vc), cv=(R1, C1))
+        if taps:                  # (NG, B, T, D) per tapped sub-layer -> layer l = group l // FI, sub-layer l % FI
+            out["taps"] = jnp.concatenate([ys[f"tap{l % FI}"][l // FI] for l in taps], -1)
         if edits is not None:     # (NG, FI, ..) -> (L, ..)
             out["edit_reads"] = {n: a.reshape((NG * FI,) + a.shape[2:]) for n, a in ys["er"].items()}
         if verify:                # bf16 logits at every position, as one-token decode computes them for its argmax
