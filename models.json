@@ -217,6 +217,7 @@
         "source": "ours",
         "format": "bshj-build",
         "family": "Qwen3.8",
+        "family_collection": "Qwen on TPU",
         "params_b": {
           "total": 26.9,
           "active": null

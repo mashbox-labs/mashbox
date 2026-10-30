@@ -10,6 +10,8 @@ Views:
                        an overview with no models block, no model named and no count; a family line names exactly
                        the GGUF families models.json has
   llms.txt             the block between <!-- models:start --> and <!-- models:end -->
+  docs/SUMMARY.md      the block between <!-- models:start --> and <!-- models:end -->: the docs sidebar's models list
+                       (the site reads its sidebar from this file), one line per live model linking its page
   hf/<id>/README.md    the Hugging Face card of every model that has an HF repo
                        (rendered from templates/hf/card-<kind>.md in the repo)
   docs/openapi.json    the server's OpenAPI 3.1 description, from src/mashbox/runtime/openapi.py
@@ -26,7 +28,8 @@ Views:
                        and <!-- api:start --> / <!-- api:end --> (routes and sampling fields) in docs/*.md, docs/models/*.md
   versions             models.json is the one source: src/mashbox/__init__.py reads it, pyproject.toml takes it
                        from mashbox.__version__ (dynamic), and no other file writes a version
-  licences             LICENSE, pyproject [project].license, licenses/<id>/LICENSE sha256 and every page's licence
+  licences             LICENSE, pyproject [project].license, licenses/<id>/LICENSE sha256 (and licenses/<id>/NOTICE when
+                       upstream has one: upstream.notice_sha256, optional) and every page's licence
                        wording agree with models.json (report only: fails on a mismatch, never edits)
   cloud prices         blocks between <!-- cloud:start NAME --> / <!-- cloud:end --> in docs pages, from
                        docs/data/cloud-prices.json (dated Google Cloud list prices, memory bandwidth) and models.json;
@@ -77,16 +80,19 @@ import urllib.request
 from pathlib import Path
 from string import Template
 
+# collection: the Hugging Face collection every live repo of the kind sits in (None: none). A new kind names its own,
+# and collection_problems checks it with no other change.
+TPU_COLLECTION = "TPU models"
 KINDS = {
-    "llm-gguf": {"suffix": "-GGUF", "label": "LLM, GGUF"},
-    "llm-tpu": {"suffix": "-TPU", "label": "LLM"},
-    "world": {"suffix": "-TPU", "label": "World model"},
-    "video": {"suffix": "-TPU", "label": "Video"},
-    "image": {"suffix": "-TPU", "label": "Image"},
-    "voice": {"suffix": "-TPU", "label": "Voice"},
-    "rig": {"suffix": "", "label": "Rigging"},   # our own CPU models (Track2Rig): HF repo = the model name
+    "llm-gguf": {"suffix": "-GGUF", "label": "LLM, GGUF", "collection": None},
+    "llm-tpu": {"suffix": "-TPU", "label": "LLM", "collection": TPU_COLLECTION},
+    "world": {"suffix": "-TPU", "label": "World model", "collection": TPU_COLLECTION},
+    "video": {"suffix": "-TPU", "label": "Video", "collection": TPU_COLLECTION},
+    "image": {"suffix": "-TPU", "label": "Image", "collection": TPU_COLLECTION},
+    "voice": {"suffix": "-TPU", "label": "Voice", "collection": TPU_COLLECTION},
+    "rig": {"suffix": "", "label": "Rigging", "collection": None},   # our own CPU models (Track2Rig): HF repo = the model name
     # no label of its own: catalog.py (code the chip records ran) has none for it, so `mashbox models` prints the id
-    "image-to-3d": {"suffix": "-TPU", "label": "image-to-3d"},
+    "image-to-3d": {"suffix": "-TPU", "label": "image-to-3d", "collection": TPU_COLLECTION},
 }
 CHIPS = ("v5e", "v6e", "v5p-8", "v6e-4")      # the chip types people rent: v5e, v6e, a v5p slice and a v6e slice
 CHIP_LABEL = {"v5e": "TPU v5e", "v6e": "TPU v6e", "v5p-8": "TPU v5p slice (v5p-8)", "v6e-4": "TPU v6e slice (v6e-4)"}
@@ -376,6 +382,8 @@ def validate_catalog(reg, problems):
             problems.add(where, f"catalog.format must be one of {CATALOG_FORMATS}")
         if not str(c.get("family", "")).strip():
             problems.add(where, "catalog.family is empty")
+        if "family_collection" in c and not (isinstance(c["family_collection"], str) and c["family_collection"].strip()):
+            problems.add(where, "catalog.family_collection, when set, is the title of the family's collection on Hugging Face")
         if not _params_ok(c.get("params_b")):
             problems.add(where, "catalog.params_b must be {total, active}, each a number of billions or null")
         if not isinstance(c.get("experimental"), bool):
@@ -868,6 +876,12 @@ def builds_head(reg):
     return f"**{ml.lead_line(reg)}.**\n\n**{ml.BUILDS}**\n\n{ml.BUILDS_LINE}\n\n"
 
 
+def sidebar_block(reg):
+    """The docs sidebar's models list (docs/SUMMARY.md between the models markers): every live model's page, in the
+    README table's order. A model with no docs/models/<id>.md yet keeps its line: the site builds its page from the row."""
+    return "\n".join(f"* [{m['name']}](models/{m['id']}.md)" for m in live(reg))
+
+
 def readme_block(reg):
     """The README models block: the lead line, then two labelled tiers: MASHBOX builds (our ports table), then every
     GGUF file by publisher."""
@@ -875,14 +889,14 @@ def readme_block(reg):
 
 
 # The Hugging Face org card is the org's static README Space. Like the GitHub org profile it is an overview with no
-# model list (overview_problems), and the "TPU models" collection holds every live TPU port.
+# model list (overview_problems). Each live repo sits in its kind's collection (KINDS) and in the family collection its
+# row names (catalog.family_collection): the "TPU models" collection holds every live TPU port.
 ORG_CARD_URL = "https://huggingface.co/spaces/{org}/README/raw/main/README.md"
-TPU_COLLECTION = "TPU models"
 
 
 def tpu_ports(reg):
-    """The live models whose Hugging Face repo is a TPU port (named <Upstream>-TPU): the "TPU models" collection."""
-    return {m["hf_repo"] for m in live(reg) if m["hf_repo"] and m["hf_repo"].endswith("-TPU")}
+    """The live repos in the "TPU models" collection: the ports of every kind that names it (collection_wants)."""
+    return collection_wants(reg)[TPU_COLLECTION]
 
 
 FAMILIES_RE = re.compile(r"\bFamilies covered(?: so far)?: ([^.\n]+)\.")
@@ -914,18 +928,45 @@ def overview_problems(reg, text, where):
     return out
 
 
-def collection_problems(reg, body, where):
-    """[(where, problem)]: the org's "TPU models" collection holds exactly the live TPU ports of our org (other orgs'
-    repos may sit in it; family collections are not checked here)."""
-    cols = [c for c in json.loads(body) if c.get("title") == TPU_COLLECTION]
-    if len(cols) != 1:
-        return [(where, f"{len(cols)} collections titled {TPU_COLLECTION!r} (want 1)")]
-    org = reg["hf"]["org"]
-    ours = {i["id"] for i in cols[0].get("items") or [] if i.get("type") == "model" and i["id"].startswith(org + "/")}
-    want = tpu_ports(reg)
-    return ([(where, f"{TPU_COLLECTION!r} lacks {r}") for r in sorted(want - ours)]
-            + [(where, f"{TPU_COLLECTION!r} holds {r}, which is not a live TPU port in models.json")
-               for r in sorted(ours - want)])
+def collections_of(m):
+    """The collection titles a model's Hugging Face repo sits in: its kind's (KINDS collection) and the family collection
+    its row names (catalog.family_collection), when it has them."""
+    return [t for t in (KINDS[m["kind"]].get("collection"), (m.get("catalog") or {}).get("family_collection")) if t]
+
+
+def collection_wants(reg):
+    """{collection title: the live repos of our org that sit in it}. Every kind's collection is listed, empty or not."""
+    want = {k["collection"]: set() for k in KINDS.values() if k.get("collection")}
+    for m in live(reg):
+        if m["hf_repo"]:
+            for title in collections_of(m):
+                want.setdefault(title, set()).add(m["hf_repo"])
+    return want
+
+
+def collection_problems(reg, body, where, fetch=None):
+    """[(where, problem)]: each collection of collection_wants exists once in the org and holds exactly its live repos of
+    our org (other orgs' repos may sit in it). body is the org's listing, which shows at most 4 items of a collection:
+    with fetch, each matched collection is read whole (api/collections/<slug>) before it is compared."""
+    cols, org, out = json.loads(body), reg["hf"]["org"], []
+    for title, want in sorted(collection_wants(reg).items()):
+        hit = [c for c in cols if c.get("title") == title]
+        if len(hit) != 1:
+            if want or hit:
+                out.append((where, f"{len(hit)} collections titled {title!r} (want 1)"))
+            continue
+        items = hit[0].get("items") or []
+        if fetch is not None and hit[0].get("slug"):
+            st, whole = fetch.get(f"https://huggingface.co/api/collections/{hit[0]['slug']}")
+            if st != 200:
+                out.append((where, f"{title!r}: cannot read the whole collection (HTTP {st})"))
+                continue
+            items = json.loads(whole).get("items") or []
+        ours = {i["id"] for i in items if i.get("type") == "model" and i["id"].startswith(org + "/")}
+        out += [(where, f"{title!r} lacks {r}") for r in sorted(want - ours)]
+        out += [(where, f"{title!r} holds {r}, which is not a live model of that collection in models.json")
+                for r in sorted(ours - want)]
+    return out
 
 
 # Lists and counts live only in rendered blocks. Outside them a page names no count of models (COUNT_RE), and the org
@@ -1527,6 +1568,11 @@ def render_all(reg, repo, profile, templates, problems, places=None, org_card=No
             views["llms.txt"] = out
     else:
         problems.add("llms.txt", "missing")
+    summary = repo / "docs" / "SUMMARY.md"
+    if summary.exists():
+        out = splice(summary.read_text(), sidebar_block(reg), "docs/SUMMARY.md", problems)
+        if out is not None:
+            views["docs/SUMMARY.md"] = out
     for page in (profile, org_card):   # overviews: checked, never rendered (they carry no list to render)
         if page is not None:
             for w, msg in overview_problems(reg, page.read_text(), str(page)):
@@ -3073,13 +3119,15 @@ def check_licences(reg, repo, problems):
             problems.add("pyproject.toml", "[project].license-files does not list LICENSE")
     for m in reg["models"]:
         up, where = m["upstream"], f"models.json {m['id']}"
-        f, want = repo / "licenses" / m["id"] / "LICENSE", up.get("license_sha256")
-        if f.is_file() and not want:
-            problems.add(where, f"upstream.license_sha256 missing (the sha256 of licenses/{m['id']}/LICENSE as pinned)")
-        elif want and not f.is_file():
-            problems.add(where, f"licenses/{m['id']}/LICENSE missing (copy the upstream file unchanged)")
-        elif want and _sha256(f) != want:
-            problems.add(f"licenses/{m['id']}/LICENSE", "differs from the pinned upstream file (upstream.license_sha256); never edit it")
+        # the upstream LICENSE, and its NOTICE where upstream has one (optional: upstream.notice_sha256), unchanged
+        for name, key in (("LICENSE", "license_sha256"), ("NOTICE", "notice_sha256")):
+            f, want = repo / "licenses" / m["id"] / name, up.get(key)
+            if f.is_file() and not want:
+                problems.add(where, f"upstream.{key} missing (the sha256 of licenses/{m['id']}/{name} as pinned)")
+            elif want and not f.is_file():
+                problems.add(where, f"licenses/{m['id']}/{name} missing (copy the upstream file unchanged)")
+            elif want and _sha256(f) != want:
+                problems.add(f"licenses/{m['id']}/{name}", f"differs from the pinned upstream file (upstream.{key}); never edit it")
         for name, _, lic in own_files(repo, m):
             if not lic:
                 problems.add(where, f"{name}: our own file in {m['hf_repo']} has no licence in upstream.json (a maintainer decides it)")
@@ -3274,13 +3322,16 @@ def check_online(reg, views, fetch, problems, repo=None):
             cards["the card rendered from models.json"] = want
         for x in card_tag_problems(m, rev, cards, fetch) + weights_tag_problems(m, rev, fetch):
             problems.add(where, x)
-        lic_sha = m["upstream"].get("license_sha256")
-        if lic_sha:  # the upstream LICENSE travels with our conversion, unchanged (Apache-2.0 section 4)
-            st, text = fetch.get(f"https://huggingface.co/{m['hf_repo']}/raw/{rev}/LICENSE")
+        # the upstream LICENSE, and its NOTICE where it has one, travel with our conversion unchanged (Apache-2.0 4)
+        for name, key in (("LICENSE", "license_sha256"), ("NOTICE", "notice_sha256")):
+            lic_sha = m["upstream"].get(key)
+            if not lic_sha:
+                continue
+            st, text = fetch.get(f"https://huggingface.co/{m['hf_repo']}/raw/{rev}/{name}")
             if st != 200:
-                problems.add(where, f"no LICENSE at {rev[:12]} (HTTP {st}): upload licenses/{m['id']}/LICENSE unchanged")
+                problems.add(where, f"no {name} at {rev[:12]} (HTTP {st}): upload licenses/{m['id']}/{name} unchanged")
             elif hashlib.sha256(text.encode()).hexdigest() != lic_sha:
-                problems.add(where, f"LICENSE at {rev[:12]} differs from the pinned upstream file")
+                problems.add(where, f"{name} at {rev[:12]} differs from the pinned upstream file")
     gh = reg["github"]
     st, _ = fetch.get(f"https://api.github.com/repos/{gh['org']}/{gh['repo']}/git/ref/tags/v{reg['version']}")
     if st != 200:
@@ -3309,7 +3360,7 @@ def check_online(reg, views, fetch, problems, repo=None):
     if st != 200:
         problems.add("hf collections", f"cannot list the collections of {hf_org} (HTTP {st})")
     else:
-        for w, msg in collection_problems(reg, body, "hf collections"):
+        for w, msg in collection_problems(reg, body, "hf collections", fetch):
             problems.add(w, msg)
     pages = {f.relative_to(repo).as_posix(): f.read_text() for f in _prose(repo)} if repo is not None else {}
     check_links(reg, {**pages, **views}, fetch, problems)  # every page, hand-written or generated (views win: rendered text)
