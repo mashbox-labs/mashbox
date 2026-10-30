@@ -6,7 +6,9 @@ from it and checks that the views on disk, on Hugging Face and on GitHub match.
 
 Views:
   README.md            the block between <!-- models:start --> and <!-- models:end -->
-  profile README       same markers (optional, --profile PATH)
+  profile README       checked, never rendered (optional, --profile PATH; --org-card PATH for the Hugging Face org card):
+                       an overview with no models block, no model named and no count; a family line names exactly
+                       the GGUF families models.json has
   llms.txt             the block between <!-- models:start --> and <!-- models:end -->
   hf/<id>/README.md    the Hugging Face card of every model that has an HF repo
                        (rendered from templates/hf/card-<kind>.md in the repo)
@@ -827,28 +829,6 @@ def readme_measured(m):
             f"[All results](https://huggingface.co/{m['hf_repo']})")
 
 
-def profile_measured(m):
-    """Profile cell: every headline number marked readme, as the README prints them, chip named; else the first result."""
-    hl = [h for h in m.get("headline") or [] if h.get("readme")]
-    if not hl:
-        return measured_cell(m, n=1)
-    r = m["results"][hl[0]["results"][0]]
-    return "; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" {_lists().chip_note(r['chip'])}"
-
-
-def profile_table(reg):
-    """Compact view for the org profile (reads on a phone): model and maker, in and out, supported chips (CPU first when
-    the model's cpu row passes)."""
-    rows = []
-    for m in live(reg):
-        # CPU first when the cpu row passes, the same rule as every other chip list (catalog.chips_run)
-        passed = ["CPU"] if (m["chips"].get("cpu") or {}).get("status") == "passing" else []
-        passed += [CHIP_LABEL[c] for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
-        rows.append([f"**[{m['name']}]({code_url(reg, m)})** by {m['upstream']['maker']}" + experimental_note(m, "<br>"),
-                     f"{m['in']} in, {m['out']} out", profile_measured(m), ", ".join(passed) or "n/a"])
-    return table(["Model", "What it does", "Measured", "Chips"], rows)
-
-
 CATALOG_URL = "https://mashbox.gg/docs/supported-models"
 
 
@@ -867,12 +847,13 @@ def _lists():
 def gguf_block(reg):
     """The overviews' GGUF tier (model_lists.gguf_block): every gguf[] row, one collapsed section per publisher, each
     file linking its exact file on Hugging Face, then the catalog link. Rendered, never typed: a new gguf[] row reaches
-    the README, the org profile and the Hugging Face org card with render --write."""
+    the README with render --write."""
     return _lists().gguf_block(reg, CATALOG_URL)
 
 
 def builds_head(reg):
-    """The top of every overview: the lead line (the catalog's size from models.json), then the MASHBOX builds tier."""
+    """The top of the README's models block: the lead line (the catalog's size from models.json), then the MASHBOX
+    builds tier."""
     ml = _lists()
     return f"**{ml.lead_line(reg)}.**\n\n**{ml.BUILDS}**\n\n{ml.BUILDS_LINE}\n\n"
 
@@ -883,44 +864,10 @@ def readme_block(reg):
     return builds_head(reg) + models_table(reg, absolute=False) + "\n\n" + gguf_block(reg)
 
 
-def profile_block(reg):
-    """The org profile models block: the same lead line and tiers, with the compact builds table."""
-    return builds_head(reg) + profile_table(reg) + "\n\n" + gguf_block(reg)
-
-
-# The Hugging Face org card is the org's static README Space. Its models block is rendered here like the GitHub
-# profile's (never typed on Hugging Face), and the "TPU models" collection holds every live TPU port.
+# The Hugging Face org card is the org's static README Space. Like the GitHub org profile it is an overview with no
+# model list (overview_problems), and the "TPU models" collection holds every live TPU port.
 ORG_CARD_URL = "https://huggingface.co/spaces/{org}/README/raw/main/README.md"
 TPU_COLLECTION = "TPU models"
-
-
-def org_card_measured(m):
-    """Org card cell: the README's numbers (every headline marked readme), chip named; else the README's first two
-    results (measured_cell)."""
-    hl = [h for h in m.get("headline") or [] if h.get("readme")]
-    if not hl:
-        return measured_cell(m)
-    r = m["results"][hl[0]["results"][0]]
-    return "; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" {_lists().chip_note(r['chip'])}"
-
-
-def org_card_table(reg):
-    """The org card table: each model links its Hugging Face repo; the chips are the passing rows, CPU first (the same
-    rule as profile_table)."""
-    rows = []
-    for m in live(reg):
-        passed = ["CPU"] if runs_cpu(m) else []
-        passed += [CHIP_LABEL[c] for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
-        name = f"[{m['name']}](https://huggingface.co/{m['hf_repo']})" if m["hf_repo"] else m["name"]
-        rows.append([f"**{name}** by {m['upstream']['maker']}" + experimental_note(m, "<br>"),
-                     f"{m['in']} in, {m['out']} out", org_card_measured(m), ", ".join(passed) or "n/a"])
-    return table(["Model", "What it does", "Measured", "Chips"], rows)
-
-
-def org_card_block(reg):
-    """The Hugging Face org card models block in the same two tiers as the README and the profile: MASHBOX builds (the
-    org card table), then the GGUF tier."""
-    return builds_head(reg) + org_card_table(reg) + "\n\n" + gguf_block(reg)
 
 
 def tpu_ports(reg):
@@ -928,17 +875,33 @@ def tpu_ports(reg):
     return {m["hf_repo"] for m in live(reg) if m["hf_repo"] and m["hf_repo"].endswith("-TPU")}
 
 
-def org_card_problems(reg, card, where):
-    """[(where, problem)] for an org card's text: the block must equal org_card_block, the prose names no model and no
-    count, and the company line is models.json's."""
+FAMILIES_RE = re.compile(r"\bFamilies covered(?: so far)?: ([^.\n]+)\.")
+
+
+def overview_problems(reg, text, where):
+    """[(where, problem)] for an org overview (the GitHub org profile, the Hugging Face org card: a
+    general overview, the families we cover and links): no models block, no model named, no lead line, count line or
+    typed count; a "Families covered: ..." line names exactly models.json's GGUF families (any order), so a new family
+    shows as drift; the company line is models.json's. The model lists live in README, llms.txt and the docs catalog."""
     out = []
-    if MARK_START not in card or MARK_END not in card:
-        out.append((where, f"no {MARK_START} / {MARK_END} block"))
-    elif card.split(MARK_START, 1)[1].split(MARK_END, 1)[0].strip() != org_card_block(reg).strip():
-        out.append((where, "models block differs from the one rendered from models.json"))
-    if reg.get("company_line") and reg["company_line"] not in card:
+    if MARK_START in text or MARK_END in text:
+        out.append((where, f"carries a {MARK_START} block: the overviews list no models (README, llms.txt and the docs "
+                           "catalog do)"))
+    for rx, what in ((LEAD_RE, "lead line"), (ENTRIES_RE, "count line")):
+        for m in rx.finditer(text):
+            out.append((where, f"prints the {what} {m.group(0)!r}: the overviews print no count"))
+    out += [(w, msg) for w, msg in list_problems(reg, GEN_BLOCK_RE.sub(" ", text), where, names=True)]
+    want = _lists().gguf_families(reg)
+    for m in FAMILIES_RE.finditer(text):
+        got = [f.strip() for f in re.split(r",\s*|\s+and\s+", m.group(1)) if f.strip()]
+        lost = [f for f in want if f not in got]
+        extra = [f for f in got if f not in want]
+        if lost or extra:
+            out.append((where, f"family line {m.group(0)!r} differs from models.json's GGUF families {want}"
+                               + (f" (missing {lost})" if lost else "") + (f" (not in models.json: {extra})" if extra else "")))
+    if reg.get("company_line") and reg["company_line"] not in text:
         out.append((where, "company line differs from models.json company_line"))
-    return out + list_problems(reg, card, where, names=True)
+    return out
 
 
 def collection_problems(reg, body, where):
@@ -1389,7 +1352,7 @@ def pin_links(reg, repo, text, where, problems):
 
 
 def render_all(reg, repo, profile, templates, problems, places=None, org_card=None):
-    """Return {relative path or 'profile': rendered text} for every view. places: the pages section of the private
+    """Return {relative path: rendered text} for every view. places: the pages section of the private
     number map (None without one): pages get their markers back from it, are filled, and come out without markers;
     the new places are left in render_all.places."""
     views = {}
@@ -1407,14 +1370,10 @@ def render_all(reg, repo, profile, templates, problems, places=None, org_card=No
             views["llms.txt"] = out
     else:
         problems.add("llms.txt", "missing")
-    if profile is not None:
-        out = splice(profile.read_text(), profile_block(reg), str(profile), problems)
-        if out is not None:
-            views["profile"] = out
-    if org_card is not None:   # the Hugging Face org card (README Space), same markers as the profile
-        out = splice(org_card.read_text(), org_card_block(reg), str(org_card), problems)
-        if out is not None:
-            views["org-card"] = out
+    for page in (profile, org_card):   # overviews: checked, never rendered (they carry no list to render)
+        if page is not None:
+            for w, msg in overview_problems(reg, page.read_text(), str(page)):
+                problems.add(w, msg)
     for m in live(reg):  # a "coming soon" model's card is not published yet; it is checked again at its launch
         if m["hf_repo"]:
             views[f"hf/{m['id']}/README.md"] = render_card(reg, m, templates, repo)
@@ -3111,23 +3070,19 @@ def check_online(reg, views, fetch, problems, repo=None):
         problems.add("pypi", f"cannot read the mashbox project (HTTP {st})")
     elif json.loads(body)["info"]["version"] != reg["version"]:
         problems.add("pypi", f"newest release is {json.loads(body)['info']['version']}, models.json says {reg['version']}")
-    # The org profile's models block is a view of models.json too (the repo's own copy is checked offline with --profile)
+    # The org profile is an overview: no model list, no count, the family line as models.json has it
     st, prof = fetch.get(f"https://raw.githubusercontent.com/{gh['org']}/.github/main/profile/README.md")
     if st != 200:
         problems.add("profile", f"org profile not readable (HTTP {st})")
-    elif MARK_START not in prof or MARK_END not in prof:
-        problems.add("profile", f"org profile has no {MARK_START} / {MARK_END} block")
-    elif prof.split(MARK_START, 1)[1].split(MARK_END, 1)[0].strip() != profile_block(reg).strip():
-        problems.add("profile", "org profile models block differs from the one rendered from models.json")
-    if st == 200:
-        for w, msg in list_problems(reg, prof, "profile (live)", names=True):
+    else:
+        for w, msg in overview_problems(reg, prof, "profile (live)"):
             problems.add(w, msg)
     # The Hugging Face org card and the "TPU models" collection, as a logged-out visitor sees them
     st, card = fetch.get(ORG_CARD_URL.format(org=hf_org))
     if st != 200:
         problems.add("hf org card", f"not readable (HTTP {st})")
     else:
-        for w, msg in org_card_problems(reg, card, "hf org card (live)"):
+        for w, msg in overview_problems(reg, card, "hf org card (live)"):
             problems.add(w, msg)
     st, body = fetch.get(f"https://huggingface.co/api/collections?owner={hf_org}&limit=100")
     if st != 200:
@@ -3175,8 +3130,8 @@ def main(argv=None):
                          "edit the words around a number; render --write takes them out again")
     ap.add_argument("pages", nargs="*", help="markup: the pages (repo-relative)")
     ap.add_argument("--repo", required=True, help="root of the main repo (holds models.json)")
-    ap.add_argument("--profile", help="org profile README to keep in sync (optional)")
-    ap.add_argument("--org-card", help="Hugging Face org card (the org's README Space README.md) to keep in sync (optional)")
+    ap.add_argument("--profile", help="org profile README to check: an overview with no model list (optional)")
+    ap.add_argument("--org-card", help="Hugging Face org card (the org's README Space README.md) to check the same way (optional)")
     ap.add_argument("--org-defaults", help="the .github repo: CONTRIBUTING.md and SECURITY.md must equal the main repo's")
     ap.add_argument("--templates", help="card templates; default: <repo>/templates/hf when it exists, else the org templates")
     ap.add_argument("--write", action="store_true", help="render: write the views in place")
@@ -3201,7 +3156,6 @@ def main(argv=None):
         (repo / "templates" / "hf" if (repo / "templates" / "hf").is_dir() else DEFAULT_TEMPLATES)
     profile = Path(a.profile) if a.profile else None
     org_card = Path(a.org_card) if a.org_card else None
-    own = {"profile": (profile, "profile/README.md"), "org-card": (org_card, "hf-org-card/README.md")}
     problems = Problems()
     try:
         reg = json.loads((repo / "models.json").read_text())
@@ -3251,9 +3205,9 @@ def main(argv=None):
     if a.cmd == "render":
         for key, text in views.items():
             if a.out:
-                dest = Path(a.out) / (own[key][1] if key in own else key)
+                dest = Path(a.out) / key
             elif a.write:
-                dest = own[key][0] if key in own else repo / key
+                dest = repo / key
             else:
                 print(f"----- {key}\n{text}")
                 continue
@@ -3265,7 +3219,7 @@ def main(argv=None):
         return 1 if problems else 0
 
     for key, text in views.items():
-        path = own[key][0] if key in own else repo / key
+        path = repo / key
         if not path.exists():
             problems.add(key, "rendered view missing on disk (run render --write)")
         elif path.read_text() != text:
@@ -3274,12 +3228,6 @@ def main(argv=None):
     for f in _prose(repo):
         rel = f.relative_to(repo).as_posix()
         for w, msg in list_problems(reg, views.get(rel, f.read_text()), rel):
-            problems.add(w, msg)
-    if profile is not None and profile.exists():
-        for w, msg in list_problems(reg, views.get("profile", profile.read_text()), str(profile), names=True):
-            problems.add(w, msg)
-    if org_card is not None and org_card.exists():
-        for w, msg in org_card_problems(reg, views.get("org-card", org_card.read_text()), str(org_card)):
             problems.add(w, msg)
     check_conditions(reg, repo, problems)
     check_levels(repo, problems)
@@ -3293,8 +3241,6 @@ def main(argv=None):
     check_commands(reg, repo, problems)
     check_cloud(reg, repo, problems)
     check_licences(reg, repo, problems)
-    if profile is not None and profile.exists() and reg["company_line"] not in profile.read_text():
-        problems.add(str(profile), "company line differs from models.json company_line")
     if a.org_defaults:
         for name in ("CONTRIBUTING.md", "SECURITY.md"):
             mine, theirs = repo / name, Path(a.org_defaults) / name

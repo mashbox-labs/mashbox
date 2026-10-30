@@ -690,8 +690,8 @@ def test_path_filter_runs_what_a_change_can_break():
 def test_sync_online_coming_soon_model():
     """The nightly --online check passes a coming-soon model whose HF repo is private (401/403) or absent (404), and
     fails one that is public before its launch or whose state cannot be read (fixtures, no network). The fixture also
-    answers the release-wide checks (tag, PyPI's newest version, the org profile's rendered block, the HF org card's
-    rendered block and the TPU models collection), so any problem left is the coming-soon model's own."""
+    answers the release-wide checks (tag, PyPI's newest version, the org profile and the HF org card as overviews with
+    no model list, and the TPU models collection), so any problem left is the coming-soon model's own."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
     sc = importlib.util.module_from_spec(spec)
@@ -700,8 +700,7 @@ def test_sync_online_coming_soon_model():
            "models": [{"id": "soon", "name": "Soon", "kind": "world", "in": "text", "out": "video",
                        "upstream": {"maker": "Someone"}, "hf_repo": "mashbox-labs/Soon-TPU", "hf_revision": "",
                        "launch": "coming soon"}]}
-    profile = f"# Org\n\n{sc.MARK_START}\n{sc.profile_block(reg)}\n{sc.MARK_END}\n"
-    org_card = f"# Org\n\n{sc.MARK_START}\n{sc.org_card_block(reg)}\n{sc.MARK_END}\n"
+    profile = org_card = "# Org\n\nWe run open models on Google Cloud TPU.\n"
 
     class Fetch:
         def __init__(self, repo_state):
