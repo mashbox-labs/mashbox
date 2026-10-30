@@ -8,9 +8,14 @@ import textwrap
 def _run(tmp_path, body):
     (tmp_path / "conftest.py").write_text((__import__("pathlib").Path(__file__).with_name("conftest.py")).read_text())
     (tmp_path / "test_x.py").write_text(textwrap.dedent(body))
+    __import__("os").utime(tmp_path / "test_x.py", (1_000_000_000, 1_000_000_000))   # same mtime every run: a fast
+    # machine rewrites the file within one second, so a bytecode cache keyed on (mtime, size) must never be read
     out = tmp_path / "c.json"
-    subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)], capture_output=True,
-                   env={"MASHBOX_CONTRACTS_OUT": str(out), "PATH": "/usr/bin:/bin"}, cwd=tmp_path)
+    out.unlink(missing_ok=True)            # a run that writes no results must never read the previous run's file
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)],
+                       capture_output=True, text=True, cwd=tmp_path,
+                       env={"MASHBOX_CONTRACTS_OUT": str(out), "PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"})
+    assert out.exists(), (r.stdout + r.stderr)[-2000:]
     return json.loads(out.read_text())["contracts"]
 
 
