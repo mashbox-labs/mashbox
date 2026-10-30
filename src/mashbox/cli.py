@@ -169,6 +169,8 @@ def speculation(a, m, cfg, tp, component_set_sha=None, later=False, model=None):
         k = dk if dk is not None else dr["k_default"]
     elif sv in ("ngram", "draft"):
         return forced_drafter(sv, dk, tp, model, cfg)
+    elif sv == "dflash":
+        return dflash_drafter(a, dk, tp, model, cfg)
     if k is not None and not (1 if sv == "mtp" else 0) <= k <= kmax:      # --draft-k 0 is never off
         raise SystemExit(f"--draft-k {k}: use 1 to {kmax}" if sv == "mtp" else f"--mtp {k}: use 0 (off) to {kmax}")
     mfile = getattr(a, "mtp_file", None)
@@ -256,7 +258,11 @@ def draft_refusal(a, gguf=None):
     """--speculation draft / --draft-model FILE: a draft model drafts for a GGUF target only, given with --draft-model
     (--draft-model alone means --speculation draft). Where that does not hold every run path stops with this line before
     any file is fetched or loaded or the server starts (main before the model row, cmd_run before the API keys, load()
-    and cmd_gguf/load_gguf first); else None. gguf: whether the target is a GGUF file (default: a.gguf is set)."""
+    and cmd_gguf/load_gguf first); else None. gguf: whether the target is a GGUF file (default: a.gguf is set).
+    --speculation dflash / --drafter-dir DIR stop here the same way (dflash_refusal)."""
+    why = dflash_refusal(a, gguf)
+    if why:
+        return why
     sv, dm = getattr(a, "speculation", None), getattr(a, "draft_model", None)
     if dm and sv not in (None, "auto", "draft"):
         return f"--draft-model is the draft model of --speculation draft, not of --speculation {sv}"
@@ -267,6 +273,78 @@ def draft_refusal(a, gguf=None):
     if not dm:
         return "--speculation draft needs --draft-model FILE: a smaller GGUF file or repo with the same tokenizer"
     return None
+
+
+DFLASH_GGUF = ("--speculation dflash runs on a model from the catalog whose forward gives the drafter its layer outputs, "
+               "not on a GGUF file")
+
+
+def dflash_refusal(a, gguf=None):
+    """--speculation dflash / --drafter-dir DIR: the DFlash drafter runs from the folder --drafter-dir gives, on a model
+    from the catalog only (a GGUF forward gives no layer outputs). The line every run path stops with (draft_refusal
+    calls this first), else None. gguf: whether the target is a GGUF file (default: a.gguf is set)."""
+    sv, dd = getattr(a, "speculation", None), getattr(a, "drafter_dir", None)
+    if dd and sv != "dflash":
+        return f"--drafter-dir is the drafter of --speculation dflash, not of --speculation {sv or 'auto'}"
+    if sv != "dflash":
+        return None
+    if bool(getattr(a, "gguf", None)) if gguf is None else gguf:
+        return DFLASH_GGUF
+    if not dd:
+        return ("--speculation dflash needs --drafter-dir DIR: the DFlash drafter's folder (config.json and "
+                "model.safetensors); docs/speculation.md names the drafter to download for each model")
+    return None
+
+
+def dflash_drafter(a, k, tp, model, cfg):
+    """--speculation dflash --drafter-dir DIR on a model from the catalog: the DFlash block drafter
+    (runtime/drafters/dflash.py) from that folder, where the module that defines the model's forward declares
+    LAYER_TAPS (the forward returns layer outputs for a drafter), never by the model's name.
+    --draft-k 1 to the drafter's block less one (default: all of them). One chip only. auto never picks it and it has no
+    gate record in this version, so it always says "not gated on this chip" and such a deployment is never certified."""
+    from .runtime import tenancy
+    from .runtime.drafters import dflash as DF
+    from .runtime.spec_step import SPEC_STEP_VERSION
+    why = dflash_refusal(a, gguf=False)
+    if why:
+        raise SystemExit(why)
+    if tp > 1:
+        raise SystemExit("--speculation dflash: speculative decoding runs on one chip (no tensor parallel)")
+    fwd = sys.modules.get(getattr(getattr(model, "make_forward", None), "__module__", None) or "")
+    if not (getattr(model, "LAYER_TAPS", False) or getattr(fwd, "LAYER_TAPS", False)):
+        raise SystemExit("--speculation dflash: this model's forward does not give a drafter its layer outputs "
+                         "(its architecture declares no LAYER_TAPS)")
+    d = a.drafter_dir
+    if not os.path.isfile(os.path.join(d, "config.json")):
+        raise SystemExit(f"--drafter-dir {d}: no config.json there; give the drafter's folder (config.json and model.safetensors)")
+    try:
+        bs = DF.Config(d).bs
+    except (NotImplementedError, KeyError, ValueError) as e:
+        raise SystemExit(f"--drafter-dir {d}: not a DFlash 2 drafter this version runs: {e}")
+    k = bs - 1 if k is None else k
+    if not 1 <= k <= bs - 1:
+        raise SystemExit(f"--draft-k {k}: use 1 to {bs - 1} (the drafter's block of {bs} less its first token)")
+    files = sorted(f for f in os.listdir(d) if f.endswith(".safetensors"))
+    sha = tenancy.file_sha256(os.path.join(d, files[0])) if len(files) == 1 else None    # the deployment's drafter key
+    try:
+        dr = DF.DFlash(model, cfg, d, k, weights_sha256=sha)
+    except (NotImplementedError, KeyError, ValueError) as e:
+        raise SystemExit(f"--speculation dflash: {e}")
+    log("speculation: not gated on this chip")
+    log(json.dumps(dict(event="speculation", used=True, method="dflash", draft_k=k, gated=False, reason="--speculation dflash",
+                        spec_step_version=SPEC_STEP_VERSION)))
+    return dict(drafter=dr, draft_k=k)
+
+
+def dflash_slots(a):
+    """--speculation dflash at --slots' default (8) runs 1 slot: the drafter's weights and its K/V ring per slot come on
+    top of the model's, and on a TPU v6e-1 the 8-bit Qwen3.8-27B with the drafter at 8 slots ran out of memory where 1
+    slot fits. --slots N runs as given."""
+    if getattr(a, "speculation", None) == "dflash" and a.slots == 8:
+        log("mashbox: --speculation dflash runs one request at a time (--slots 1): with the drafter, 8 slots did not fit "
+            "a TPU v6e-1's memory. --slots N sets it")
+        log(json.dumps(dict(event="dflash_slots", slots=1, asked=8)))
+        a.slots = 1
 
 
 def forced_drafter(kind, k, tp, model, cfg):
@@ -303,6 +381,8 @@ def gguf_speculation(a, c, A, records=None, f=None):
     from .runtime.drafters import select as SEL
     from .runtime.spec_step import SPEC_STEP_VERSION
     sv, k = getattr(a, "speculation", None), getattr(a, "draft_k", None)
+    if sv == "dflash":
+        raise GGUFError(f"mashbox: {DFLASH_GGUF}")
     given = getattr(a, "draft_gguf", None)
     forced = "draft_model" if sv == "draft" or (given and sv in (None, "auto")) else sv
 
@@ -475,6 +555,7 @@ def load(a):
     d = hub.upstream_dir(m, log)                         # config and tokenizer only (small)
     cache = setup_cache(a.cache_dir)
     tp = tensor_parallel(getattr(a, "tensor_parallel_size", 0))
+    dflash_slots(a)                                      # before the fit check and the kernels (built for 8 slots)
     fit_check(a, m, d, tp)                               # before the weights download, check or load
     w = hub.weights_file(m, path=a.weights, log=log)
     from . import kernels as K
@@ -766,13 +847,17 @@ def cmd_run(a, argv=None):
         log(f"mashbox: {draft_refusal(a)}")
         return 2                                         # before an API key is made or the server starts
     keys = api_keys(a) if a.prompt is None else []       # before the load: a bad key file fails at once
-    if a.prompt is None and not getattr(a, "gguf", None):
+    if a.prompt is None and not getattr(a, "gguf", None) and not getattr(a, "hf", None):
         # serving a models.json model: this process is the HTTP front; the engine (load, warm-up, chip) runs in a
         # worker process that the front restarts by itself after a device fault, out of memory, a hung call or a kill
-        # (runtime/front.py). A GGUF file is still served in this one process (below).
+        # (runtime/front.py). A GGUF file or a Hugging Face model is still served in this one process (below).
         from .runtime.front import serve_cli          # serve() logs the "ui" url once the port is bound
         return serve_cli(a, sys.argv[1:] if argv is None else list(argv), keys, log, t0=time.time())
-    m, eng, chat, info, t0 = load_gguf(a) if getattr(a, "gguf", None) else load(a)
+    if getattr(a, "hf", None):
+        from . import hf as HF
+        m, eng, chat, info, t0 = HF.load(a)
+    else:
+        m, eng, chat, info, t0 = load_gguf(a) if getattr(a, "gguf", None) else load(a)
     if a.prompt is not None:
         ids = chat.chat_ids([dict(role="user", content=a.prompt)], enable_thinking=a.thinking)
         samp = None if a.temperature == 0 else [dict(temperature=a.temperature, top_p=a.top_p, top_k=a.top_k, seed=a.seed)]
@@ -876,8 +961,9 @@ def build_parser():
     for name in ("run", "download"):
         p = sub.add_parser(name, help="download (first time), load and serve a model, or answer one prompt" if name == "run"
                            else "download and check a model's files without loading them")
-        p.add_argument("model", help="model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, or a Hugging Face GGUF "
-                       "repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0)")
+        p.add_argument("model", help="model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, a Hugging Face GGUF "
+                       "repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or "
+                       "a Hugging Face safetensors repo or model folder (e.g. Qwen/Qwen3-4B)")
         p.add_argument("--weights", metavar="FILE", help="a local .bshj file instead of the download (its sha256 is still checked)")
         p.add_argument("--no-kernels", action="store_true", help="plain JAX only: a catalog model runs without its TPU kernels "
                        "(slower decode, same outputs within rounding)")
@@ -910,19 +996,24 @@ def build_parser():
                                 "model's draft file (Qwen3.8-27B: --mtp 2); one chip only")
             p.add_argument("--mtp-file", metavar="FILE",
                            help="a local draft .bshj file instead of the download (its sha256 is still checked)")
-            p.add_argument("--speculation", choices=("auto", "off", "mtp", "ngram", "draft"),
+            p.add_argument("--speculation", choices=("auto", "off", "mtp", "ngram", "draft", "dflash"),
                            help="speculative decoding. auto (default): the first drafter that applies to the model file, in this "
-                                "order: 1 a trained drafter made for this model (not in this release); 2 the model's own MTP "
+                                "order: 1 a trained drafter made for this model (auto picks none in this release); 2 the model's own MTP "
                                 "head; 3 a smaller draft model with the same tokenizer (only one you give with --draft-model); "
                                 "4 n-gram over the request's own text (llama, qwen2, qwen3, qwen35, exaone and granite GGUF files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head "
-                                "only); off; or force one kind (then it says 'not gated on this chip'). One chip only")
+                                "only); off; or force one kind (then it says 'not gated on this chip'). dflash: the DFlash block drafter "
+                                "from --drafter-dir (Qwen3.8-27B), never picked by auto. One chip only")
             p.add_argument("--draft-k", type=int, metavar="K",
                            help="drafts per verify pass for a drafter you pick: ngram 1 to 8 (default 3); draft 1 to 8 (default 3); "
-                                "mtp 1 to the head's k_max (Qwen3.8-27B: 1 to 3, default 2)")
+                                "mtp 1 to the head's k_max (Qwen3.8-27B: 1 to 3, default 2); dflash 1 to 7 (default 7)")
             p.add_argument("--draft-model", metavar="FILE",
                            help="--speculation draft with this draft model: a smaller GGUF file or repo (as the model argument) "
                                 "with the same tokenizer, a llama, qwen2, qwen3, exaone or granite file; for a GGUF model "
                                 "only. Its weights and cache take chip memory next to the model's")
+            p.add_argument("--drafter-dir", metavar="DIR",
+                           help="--speculation dflash with the DFlash drafter in DIR: its config.json and model.safetensors "
+                                "(for Qwen3.8-27B, the Hugging Face repo z-lab/Qwen3.8-27B-DFlash2). It runs one request at "
+                                "a time unless --slots N is given")
             p.add_argument("--tensor-parallel-size", "-tp", type=int, default=0, metavar="N",
                            help="chips to split the model across, as vLLM (1, 2 or 4); default: the chips of this host, at most 4 "
                                 "(1 on a TPU v6e-1, 4 on a TPU v5e-4 or v6e-4)")
@@ -941,7 +1032,8 @@ def build_parser():
     p.add_argument("--json", action="store_true", help="the same list as JSON")
     p = sub.add_parser("inspect", help="what a GGUF file or repo holds (architecture, block types, tokenizer) and how it "
                        "would run here, without loading it")
-    p.add_argument("model", help="a .gguf file or a Hugging Face GGUF repo[:quant tag]")
+    p.add_argument("model", help="a .gguf file, a Hugging Face GGUF repo[:quant tag], or a Hugging Face safetensors repo "
+                   "or model folder")
     p.add_argument("--no-download", action="store_true", help="for a repo: only show which file llama.cpp's rule picks")
     return ap
 
@@ -978,28 +1070,78 @@ def main(argv=None):
     return cmd_run(a, argv)
 
 
+def host_note(a):
+    if getattr(a, "host", "127.0.0.1") not in ("127.0.0.1", "localhost", "::1"):
+        log("note: serving on a non-loopback address exposes the server to your network (an API key is required); "
+            "prefer an SSH tunnel")
+
+
 def cmd_gguf(a):
-    """GGUF files and repos: every refusal is one clear line and exit 2, never a stack trace"""
+    """GGUF files and repos: every refusal is one clear line and exit 2, never a stack trace. A model folder, or a repo
+    whose listing has no GGUF file but config.json and safetensors, goes to cmd_hf"""
     from .gguf import GGUFError, resolve as GR
+    if os.path.isdir(a.model):                       # a GGUF model is a file; a folder is a Hugging Face model folder
+        return cmd_hf(a)
     try:
         if a.cmd == "inspect":
-            return cmd_inspect(a)
+            try:
+                return cmd_inspect(a)
+            except GR.NoGGUF as e:
+                return hf_listed(a, e)
         if getattr(a, "weights", None):
             raise GGUFError("mashbox: --weights is for models.json models; pass the .gguf file as the model")
         if getattr(a, "mtp", None) or getattr(a, "mtp_file", None):
             raise GGUFError("mashbox: --mtp and --mtp-file are for models.json models; for a GGUF file use --speculation")
         if a.cmd != "download" and draft_refusal(a, gguf=True):
             raise GGUFError(f"mashbox: {draft_refusal(a, gguf=True)}")     # before the file is fetched
-        a.gguf = GR.resolve(a.model, log=log)
+        try:
+            a.gguf = GR.resolve(a.model, log=log)
+        except GR.NoGGUF as e:
+            return hf_listed(a, e)
         if getattr(a, "draft_model", None):
             a.draft_gguf = GR.resolve(a.draft_model, log=log)
         if a.cmd == "download":
             log(json.dumps(dict(event="downloaded", path=a.gguf["path"])))
             return 0
-        if a.host not in ("127.0.0.1", "localhost", "::1"):
-            log("note: serving on a non-loopback address exposes the server to your network (an API key is required); "
-                "prefer an SSH tunnel")
+        host_note(a)
         return cmd_run(a)
     except GGUFError as e:
+        log(str(e))
+        return 2
+
+
+def hf_listed(a, e):
+    """a repo the GGUF resolver listed and found no .gguf file in: the Hugging Face path when that listing has config.json
+    and safetensors weights, else the resolver's own refusal"""
+    from . import hf as HF
+    if not HF.claims(a.model, e.files):
+        raise e
+    return cmd_hf(a, e.files)
+
+
+def cmd_hf(a, files=None):
+    """Hugging Face safetensors (mashbox/hf), one chip: a model folder, or an owner/name repo whose listing has config.json
+    and safetensors weights and no GGUF file (files: that listing, when cmd_gguf already made it). Every refusal is one
+    clear line and exit 2; the flag refusals and an architecture this path does not read stop before any weights download,
+    the other checks (config fields, weight types, tokenizer, fit) run after it"""
+    from .gguf import GGUFError
+    from . import hf as HF
+    try:
+        if not HF.claims(a.model, files):
+            raise HF.HFError(f"mashbox: {a.model}: no config.json with safetensors weights here. mashbox runs a model folder, "
+                             "a Hugging Face repo with safetensors or GGUF files, a .gguf file and the models in "
+                             "`mashbox models`")
+        if a.cmd == "inspect":
+            print(json.dumps(HF.inspect(a.model, log=log), indent=1))
+            return 0
+        if HF.run_refusal(a):
+            raise HF.HFError(HF.run_refusal(a))
+        a.hf = HF.resolve(a.model, log=log)
+        if a.cmd == "download":
+            log(json.dumps(dict(event="downloaded", path=a.hf["path"])))
+            return 0
+        host_note(a)
+        return cmd_run(a)
+    except (HF.HFError, GGUFError) as e:
         log(str(e))
         return 2

@@ -1,0 +1,32 @@
+{
+ "name": "llama",
+ "architecture": "LlamaForCausalLM",
+ "seed": 1234,
+ "tokens": [
+  80,
+  237,
+  45,
+  200,
+  49,
+  183,
+  26,
+  143,
+  40,
+  142,
+  3,
+  119,
+  133,
+  9,
+  92,
+  177
+ ],
+ "n_vocab": 256,
+ "transformers": "5.5.4",
+ "torch": "2.11.0+cu130",
+ "sha256": {
+  "config.json": "7b5cb25e44c84376cba51cf90265927b136485928907fbac09200d8bb4956e1b",
+  "generation_config.json": "4e4e52d32be01dc604f43339af68524596e6f700353411239760f0d527cb0bd4",
+  "logits.f32": "595997300a08848e9442ed981b7ae5114f756544ebf3ea548ea580102e9f1833",
+  "model.safetensors": "35fcb3421795fd4bfe9566292cb64f00e3abac7b4f1dfe70e8832725fd0c6ce5"
+ }
+}

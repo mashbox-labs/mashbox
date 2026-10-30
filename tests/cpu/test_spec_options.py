@@ -181,7 +181,8 @@ PAGE_NAME = {"trained": "A trained drafter made for this model", "mtp": "The mod
 
 def test_speculation_help_names_every_drafter_in_the_order_of_choice():
     """the --speculation help lists auto's order exactly as drafters.ORDER and docs/speculation.md do,
-    numbered, every kind without a module in this release marked "not in this release", and nothing more"""
+    numbered, every kind without a module in this release marked "not in this release", every kind that runs only when
+    picked (drafters.PICK_ONLY) marked "auto picks none in this release", and nothing more"""
     import re
     from mashbox.runtime import drafters as D
     h = run_help("--speculation")
@@ -189,7 +190,12 @@ def test_speculation_help_names_every_drafter_in_the_order_of_choice():
     assert [int(n) for n, _ in items] == list(range(1, len(D.ORDER) + 1)), (items, h)
     for (n, text), kind in zip(items, D.ORDER):
         assert text.startswith(HELP_NAME[kind]), (kind, text)
-        assert ("(not in this release)" in text) == (kind not in D.MODULES), (kind, text)
+        assert ("(not in this release)" in text) == (kind not in D.MODULES and kind not in D.PICK_ONLY), (kind, text)
+        assert ("(auto picks none in this release)" in text) == (kind in D.PICK_ONLY), (kind, text)
+    import importlib
+    assert not set(D.PICK_ONLY) & set(D.MODULES) and set(D.PICK_ONLY) <= set(D.ORDER), (D.PICK_ONLY, D.MODULES)
+    for mod in D.PICK_ONLY.values():        # a kind that runs when picked ships its module in this release
+        importlib.import_module(mod)
     page = open(os.path.join(ROOT, "docs", "speculation.md")).read().split("## How auto picks a drafter", 1)[1]
     listed = re.findall(r"^(\d)\. \*\*([^*]+)\*\*", page.split("\n## ", 1)[0], re.M)
     assert [int(n) for n, _ in listed] == list(range(1, len(D.ORDER) + 1)), listed

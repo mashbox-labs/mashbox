@@ -103,7 +103,10 @@ def make_step(fwd, commit, drafter):
 
         def one(i, carry):
             ck, cv, Dc, tok, pos, rem, st, out, cn, cnt, seen, tr = carry
-            d, kd, ck = drafter.draft(W, DW, ck, Dc, tok, pos, Tc, K, sp, st)
+            dr_ = drafter.draft(W, DW, ck, Dc, tok, pos, Tc, K, sp, st)
+            d, kd, ck = dr_[:3]
+            if len(dr_) > 3:           # a drafter that updates its own carry while drafting (DFlash: the ring write)
+                Dc = dr_[3]
             r = fwd(W, ck, cv, jnp.concatenate([tok[:, None], d], 1), pos, jnp.full((B,), K1, i32), slots, Tc, contig=True,
                     verify=True, **drafter.verify_kw)
             kc = jnp.clip(jnp.minimum(kr, rem - 1), 0, K)

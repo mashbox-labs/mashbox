@@ -1,0 +1,33 @@
+{
+ "name": "qwen3",
+ "architecture": "Qwen3ForCausalLM",
+ "seed": 1234,
+ "tokens": [
+  149,
+  163,
+  59,
+  88,
+  20,
+  81,
+  143,
+  179,
+  222,
+  215,
+  73,
+  21,
+  50,
+  11,
+  199,
+  81
+ ],
+ "n_vocab": 256,
+ "transformers": "5.5.4",
+ "torch": "2.11.0+cu130",
+ "sha256": {
+  "config.json": "4123c4f5dbe0e22df2be19c08c04496782cf7345f730fc0371f054094cb63687",
+  "generation_config.json": "fbb58d751746765c8705fc4e5579991b70860b4d69caed00d2c3e939ba7e54b7",
+  "logits.f32": "7c846a8310a4c7b96267a3879a71c59ba78dfa3719f68ced35c31e5f8d1c7f6f",
+  "logits.q8_0.f32": "9537f9db9ecbb8c946ca3982cf409236455ea90166e484fb8945ee0a19720893",
+  "model.safetensors": "e0394f2562f0527b916769e06e44c8148681c2ae3de4c60e5e045075b5fec9f2"
+ }
+}

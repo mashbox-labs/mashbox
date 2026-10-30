@@ -1,0 +1,41 @@
+{
+ "repo": "Qwen/Qwen3-4B-Instruct-2507",
+ "revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+ "conversations": [
+  [
+   {
+    "role": "user",
+    "content": "Hello"
+   }
+  ],
+  [
+   {
+    "role": "system",
+    "content": "Be brief."
+   },
+   {
+    "role": "user",
+    "content": "What is 2+2?"
+   }
+  ],
+  [
+   {
+    "role": "user",
+    "content": "Hi"
+   },
+   {
+    "role": "assistant",
+    "content": "Hello! How can I help?"
+   },
+   {
+    "role": "user",
+    "content": "Name a prime."
+   }
+  ]
+ ],
+ "renders": [
+  "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n",
+  "<|im_start|>system\nBe brief.<|im_end|>\n<|im_start|>user\nWhat is 2+2?<|im_end|>\n<|im_start|>assistant\n",
+  "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\nHello! How can I help?<|im_end|>\n<|im_start|>user\nName a prime.<|im_end|>\n<|im_start|>assistant\n"
+ ]
+}

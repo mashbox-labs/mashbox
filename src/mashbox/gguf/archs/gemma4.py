@@ -17,7 +17,7 @@ so each token's K (and V) of a layer is stored flat in a row as wide as the wide
 width); narrower layers use the front of the row.
 
 Not handled (refused at load with a message): per-layer token embeddings (E2B / E4B), shared K/V layers, routed experts
-(26B-A4B), a fused qkv tensor, rope scaling.
+(26B-A4B), a fused qkv tensor, rope scaling, per-layer feed-forward lengths.
 """
 import numpy as np
 import jax
@@ -44,12 +44,15 @@ class Config:
         no = lambda why: GGUFError(f"mashbox: {A} file with {why} is not supported in this version")
         self.L_all = self.L = int(k("block_count"))
         self.nextn = 0
-        self.D, self.F = int(k("embedding_length")), int(k("feed_forward_length"))
+        self.D, ff = int(k("embedding_length")), k("feed_forward_length")
         self.H = int(k("attention.head_count"))
         if int(k("embedding_length_per_layer_input", 0) or 0):
             raise no("per-layer token embeddings")
         if int(k("attention.shared_kv_layers", 0) or 0):
             raise no("shared K/V layers")
+        if not np.isscalar(ff):                     # one value per layer (gemma-4-E2B files)
+            raise no("per-layer feed-forward lengths")
+        self.F = int(ff)
         names = list(f.tensors)
         if any(".attn_qkv." in n for n in names):
             raise no("a fused qkv tensor")
