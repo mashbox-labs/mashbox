@@ -349,6 +349,7 @@ The OpenAPI 3.1 description of this server, with the running model's id.
 | `component_set_sha` | string or null |  | Id of the model's component set (null until set). |
 | `certification` | string |  | Whether this server's build passed the certification gate on its chip. |
 | `compiles_after_ready` | integer or null |  | Programs compiled since the server reported ready, in every worker process it has run (0 when the start-up warm-up compiled every program the requests ran; null before ready or where this process does not count them). |
+| `routed_experts` | object or null |  | Mixture-of-experts models: the path the routed experts run on, read where the engine runs. path: kernel (the kernel package's routed-expert kernel at every call site), exact (the exact path) or mixed; kernel: that kernel's id, version and package (null when the package has none); sites: the routed-op call sites traced on each path; exact_why: why any site ran exact. Null for a dense model and before the first program is traced. Fields: `path`, `kernel`, `sites`, `exact_why`. |
 | `worker_pid` | integer |  | Process id of the model's worker, when the engine runs in a worker process. |
 | `worker_restarts` | integer |  | Times the worker was started again after a fault. |
 

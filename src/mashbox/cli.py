@@ -537,10 +537,13 @@ def load(a):
 
 def aot_dir(cache, eng):
     """The executable table's folder (runtime/programs.py): one per deployment under the compile cache folder, local to
-    this machine and user. None (no table) with MASHBOX_AOT=0, and with speculative decoding on: the warm-up compiles its
-    programs through jit, outside the table, so a table would not hold every program this deployment runs."""
+    this machine and user. None (no table) with MASHBOX_AOT=0, with speculative decoding on: the warm-up compiles its
+    programs through jit, outside the table, so a table would not hold every program this deployment runs; and with the
+    record-only top-k hook on (eng.topk, MASHBOX_RECORD_TOPK): its traced programs also return top-k, which the compile
+    key does not name, so a table saved without the hook must not be loaded for them."""
     why = ("MASHBOX_AOT=0" if os.environ.get("MASHBOX_AOT") == "0" else
-           "speculative decoding is on: the table does not hold its programs" if getattr(eng, "DK", 0) else None)
+           "speculative decoding is on: the table does not hold its programs" if getattr(eng, "DK", 0) else
+           "the record-only top-k hook is on: the compile key does not name top-k" if getattr(eng, "topk", 0) else None)
     if why:
         log(json.dumps(dict(event="aot_table", used=False, reason=why)))
         return None
@@ -556,19 +559,31 @@ def gguf_slots(a, f, c, kt, lim=None):
 
 
 def load_gguf(a):
-    """`run` for a GGUF file or repo: the file's own blocks on TPU (mashbox.ops), its tokenizer and chat template"""
+    """`run` for a GGUF file or repo: the file's own blocks on TPU (mashbox.ops), its tokenizer and chat template. An
+    MoE file with no passing chip row of its own (gguf.archs.held) is refused with one line before anything is loaded"""
     t0 = time.time()
-    from . import gguf as G, ops
+    from . import gguf as G
     if draft_refusal(a):
         raise G.GGUFError(f"mashbox: {draft_refusal(a)}")
+    r = a.gguf
+    f, A, c = G.open_model(r["path"], repo=r["repo"], quant=r["tag"])
+    held = G.archs.held(f.arch, r["path"], r["repo"], r["tag"], moe=G.archs.moe_file(f))   # a MoE file with no passing row of its own: one line, nothing loaded
+    if held:
+        raise G.GGUFError(held)
+    return _load_gguf_for_record(a, f, A, c, t0)
+
+
+def _load_gguf_for_record(a, f, A, c, t0):
+    """load_gguf below the hold: the opened file f (its arch module A, config c) loaded as `run` loads it. `run` reaches
+    it only through load_gguf; the chip record runner (tools/gguf_chip_record.py) calls it directly, because a held file
+    needs a chip record before it can have a passing catalog row. Internal, not a supported way to load a file: the hold
+    is the support gate of `run`, serving and `inspect` (`tpu up` takes catalog models only and starts `mashbox run` on
+    the chip), not a same-process boundary (any Python code that imports this module can call this function)"""
+    from . import gguf as G, ops
     from .gguf import tokenizer as GT
     from .runtime.engine import Engine
     from .runtime.chat import Chat
     r = a.gguf
-    f, A, c = G.open_model(r["path"], repo=r["repo"], quant=r["tag"])
-    held = G.archs.held(f.arch, r["path"], r["repo"], r["tag"])     # an unlisted MoE architecture: one line, nothing loaded
-    if held:
-        raise G.GGUFError(held)
     if getattr(a, "tensor_parallel_size", 0) > 1:
         raise G.GGUFError("mashbox: GGUF files run on one chip in this version; --tensor-parallel-size is for models.json models")
     if not a.no_kernels:
@@ -601,19 +616,15 @@ def load_gguf(a):
     gguf_deployment(eng, f, r, W)
     gguf_spec_gate(eng, gate_css, lambda: gguf_deployment(eng, f, r, W))
     log(json.dumps(dict(event="loaded", weights_s=info["load_s"], gb=round(info["device_bytes"] / 1e9, 2), bpw=info["bpw"],
-                        kernel_gb=round(info["kernel_bytes"] / 1e9, 2), reference_gb=round(info["reference_bytes"] / 1e9, 2))))
+                        kernel_gb=round(info["kernel_bytes"] / 1e9, 2), reference_gb=round(info["reference_bytes"] / 1e9, 2),
+                        resident_f32_gb=round(info["resident_f32_bytes"] / 1e9, 2))))
     return dict(id=r["repo"] or r["file"]), eng, chat, info, t0
 
 
 def file_identity(path):
-    """-> (sha256 of a weights file, how it was found). A Hugging Face cache blob is named by the Hub's sha256 of its
-    bytes (blobs/<sha256>): that name is used; any other file is read once."""
-    from .runtime import tenancy
-    real = os.path.realpath(path)
-    name = os.path.basename(real)
-    if os.path.basename(os.path.dirname(real)) == "blobs" and len(name) == 64 and all(ch in "0123456789abcdef" for ch in name):
-        return name, "hub_blob_name"
-    return tenancy.file_sha256(path), "read"
+    """-> (sha256 of a weights file, how it was found): gguf.resolve.file_identity"""
+    from .gguf import resolve as GR
+    return GR.file_identity(path)
 
 
 def gguf_file_sha(r):
@@ -632,11 +643,11 @@ def gguf_deployment(eng, f, r, W):
     and component set (/health, the startup log), and the prefix cache namespace. The file's sha256 (every shard of a
     split file) stands for its weights, tokenizer and chat template, which it all holds."""
     import hashlib
+    from .gguf import resolve as GR
     from .runtime import tenancy, compile_key as CK
     t = time.time()
-    fsha, ids = gguf_file_sha(r)
-    log(json.dumps(dict(event="gguf_identity", sha256=fsha, shards=len(ids), how=sorted({i[1] for i in ids}),
-                        seconds=round(time.time() - t, 1))))
+    fsha, n, how = GR.identity(r["path"])
+    log(json.dumps(dict(event="gguf_identity", sha256=fsha, shards=n, how=how, seconds=round(time.time() - t, 1))))
     mid = r["repo"] or r["file"]
     _, eng.deployment_id, eng.component_set_sha = CK.for_engine(eng, mid, fsha, CK.weights_layout(W), kernel_bundle_sha=None, tp=1,
                                                               drafter=eng.drafter.key() if getattr(eng, "DK", 0) else None)

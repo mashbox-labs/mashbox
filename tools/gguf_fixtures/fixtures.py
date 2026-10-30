@@ -191,15 +191,21 @@ def write_qwen35(path, seed=0, layers=4, quant=None, nextn=False, override=None,
 DENSE = dict(llama=dict(D=256, F=384, H=8, KV=2, HD=32, theta=5e5, eps=1e-5, ctx=4096, pre="llama-bpe", freqs=True,
                         bias=("attn_q", "attn_k", "attn_v", "attn_output")),
              qwen2=dict(D=256, F=384, H=8, KV=2, HD=32, theta=1e6, eps=1e-6, ctx=4096, pre="qwen2", bias=("attn_q", "attn_k", "attn_v")),
-             qwen3=dict(D=256, F=512, H=8, KV=4, HD=64, theta=1e6, eps=1e-6, ctx=4096, pre="qwen2", qknorm=True))
+             qwen3=dict(D=256, F=512, H=8, KV=4, HD=64, theta=1e6, eps=1e-6, ctx=4096, pre="qwen2", qknorm=True),
+             qwen3moe=dict(D=256, F=512, H=8, KV=4, HD=64, theta=1e6, eps=1e-6, ctx=4096, pre="qwen2", qknorm=True),
+             qwen2moe=dict(D=256, F=384, H=8, KV=2, HD=32, theta=1e6, eps=1e-6, ctx=4096, pre="qwen2",
+                           bias=("attn_q", "attn_k", "attn_v")))
 
 
-def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None, rope=None, hp=None):
+def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None, rope=None, hp=None, moe=None):
     """Write a tiny random dense-attention GGUF (llama / qwen2 / qwen3) in llama.cpp's conventions: llama with a
     rope_freqs tensor (Llama 3.1 style frequency factors) and q/k/v/output biases, qwen2 with q/k/v biases, qwen3 with
     per-head q/k norms and a head size that is not embedding_length / head_count. quant, override: as write_qwen35.
     hp: {DENSE key: value} in place of the arch's defaults; tie=True leaves output.weight out (a tied head, as llama.cpp's
-    converter writes Llama 3.2 1B/3B, Qwen2.5 0.5B-3B and Qwen3 0.6B-4B)."""
+    converter writes Llama 3.2 1B/3B, Qwen2.5 0.5B-3B and Qwen3 0.6B-4B).
+    moe: None, or dict(E=experts, K=experts used, FE=expert FFN size, FS=shared expert FFN size or 0) -> routed experts
+    in place of every layer's FFN, as llama.cpp writes them (llama: the experts' size is feed_forward_length; qwen2moe
+    and qwen3moe: expert_feed_forward_length, and qwen2moe's shared expert has a sigmoid gate)."""
     import gguf
     c = dict(DENSE[arch], **(hp or {}))
     rng = np.random.default_rng(seed)
@@ -211,7 +217,14 @@ def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None,
     w.add_context_length(c["ctx"])
     w.add_embedding_length(D)
     w.add_block_count(layers)
-    w.add_feed_forward_length(F)
+    w.add_feed_forward_length(moe["FE"] if moe and arch == "llama" else F)
+    if moe:
+        w.add_expert_count(moe["E"])
+        w.add_expert_used_count(moe["K"])
+        if arch != "llama":
+            w.add_expert_feed_forward_length(moe["FE"])
+        if moe.get("FS"):
+            w.add_expert_shared_feed_forward_length(moe["FS"])
     w.add_head_count(H)
     w.add_head_count_kv(KV)
     if HD != D // H:
@@ -271,6 +284,18 @@ def write_dense(path, arch="llama", seed=0, layers=4, quant=None, override=None,
             put(b + "attn_q_norm.weight", norm(HD))
             put(b + "attn_k_norm.weight", norm(HD))
         put(b + "ffn_norm.weight", norm(D))
+        if moe:
+            E, FE, FS = moe["E"], moe["FE"], moe.get("FS", 0)
+            put(b + "ffn_gate_inp.weight", lin(E, D))
+            put(b + "ffn_gate_exps.weight", np.stack([lin(FE, D) for _ in range(E)]), big=True)
+            put(b + "ffn_up_exps.weight", np.stack([lin(FE, D) for _ in range(E)]), big=True)
+            put(b + "ffn_down_exps.weight", np.stack([lin(D, FE) for _ in range(E)]), big=True)
+            if FS:
+                put(b + "ffn_gate_inp_shexp.weight", (rng.standard_normal(D) / np.sqrt(D)).astype(np.float32))
+                put(b + "ffn_gate_shexp.weight", lin(FS, D), big=True)
+                put(b + "ffn_up_shexp.weight", lin(FS, D), big=True)
+                put(b + "ffn_down_shexp.weight", lin(D, FS), big=True)
+            continue
         put(b + "ffn_gate.weight", lin(F, D), big=True)
         put(b + "ffn_up.weight", lin(F, D), big=True)
         put(b + "ffn_down.weight", lin(D, F), big=True)
@@ -387,7 +412,7 @@ def write(name, path, override=None, quant=True):
         return write_gemma4(path, seed=fx["seed"], layers=fx["layers"], quant=q, override=override, hp=fx.get("hp"))
     if fx["arch"] in DENSE:
         return write_dense(path, fx["arch"], seed=fx["seed"], layers=fx["layers"], quant=q, override=override, rope=fx.get("rope"),
-                           hp=fx.get("hp"))
+                           hp=fx.get("hp"), moe=fx.get("moe"))
     return write_qwen35(path, seed=fx["seed"], layers=fx["layers"], quant=q, nextn=fx.get("nextn", False),
                         override=override, moe=fx.get("moe"), hp=fx.get("hp"))
 
@@ -406,6 +431,10 @@ FIXTURES = {
     "qwen35moe-pyquant": dict(arch="qwen35moe", seed=7, layers=4, make="gguf-py", quant=["Q8_0", "Q4_0", "Q5_0", "Q8_0"],
                               moe=dict(E=8, K=2, FE=32, FS=32)),
     "llama-f32": dict(arch="llama", seed=10, layers=4, make="gguf-py", quant=None),
+    "qwen3moe-f32": dict(arch="qwen3moe", seed=20, layers=4, make="gguf-py", quant=None, moe=dict(E=8, K=2, FE=32)),
+    "qwen2moe-f32": dict(arch="qwen2moe", seed=21, layers=4, make="gguf-py", quant=None,
+                         moe=dict(E=8, K=3, FE=32, FS=48)),
+    "llama-moe-f32": dict(arch="llama", seed=22, layers=4, make="gguf-py", quant=None, moe=dict(E=8, K=2, FE=32)),
     "qwen2-f32": dict(arch="qwen2", seed=11, layers=4, make="gguf-py", quant=None),
     "qwen3-f32": dict(arch="qwen3", seed=12, layers=4, make="gguf-py", quant=None),
     "llama-pyquant": dict(arch="llama", seed=13, layers=4, make="gguf-py", quant=["Q8_0", "Q4_0", "Q5_0", "Q4_1", "Q5_1"]),
@@ -433,6 +462,10 @@ FIXTURES = {
     "qwen35-eps-f32": dict(arch="qwen35", seed=48, layers=4, make="gguf-py", quant=None, hp=dict(eps=0.25)),
     "qwen35moe-eps-f32": dict(arch="qwen35moe", seed=49, layers=4, make="gguf-py", quant=None,
                               moe=dict(E=8, K=2, FE=16, FS=24), hp=dict(eps=0.25)),
+    "qwen3moe-eps-f32": dict(arch="qwen3moe", seed=55, layers=4, make="gguf-py", quant=None, moe=dict(E=8, K=2, FE=32),
+                             hp=dict(eps=0.25)),
+    "qwen2moe-eps-f32": dict(arch="qwen2moe", seed=56, layers=4, make="gguf-py", quant=None,
+                             moe=dict(E=8, K=3, FE=32, FS=48), hp=dict(eps=0.25)),
 }
 
 

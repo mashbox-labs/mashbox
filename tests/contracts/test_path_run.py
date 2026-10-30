@@ -3,12 +3,20 @@
 Bars, written before the first run:
   1. `mashbox run <llama-f32 fixture> --prompt "the hat" --max-tokens 6 --temperature 0` exits 0, its plan names arch
      llama, it loads, and it prints the same answer twice (greedy decoding is deterministic on one machine).
-  2. gguf.archs.held (run's refusal, which reads catalog.py): None for every dense architecture in ARCHS; for a
-     mixture-of-experts one, None exactly when catalog.arch_rows lists it, else one line naming llama.cpp.
-  3. The MoE decision follows the registry: adding a passing MoE chip row lifts the refusal, removing it restores it.
-Recorded (exact): the plan's arch, the held decision of every dense ARCHS architecture, and of one MoE architecture
-with and without a passing MoE row. The shipped registry's MoE decisions follow models.json's rows (bar 2 checks them)
-and are never recorded: a passing MoE row added to the catalog must not move the path/run fingerprint of every row. The answer text is a float argmax and is checked by bar 1, never recorded.
+  2. gguf.archs.held (run's refusal, which reads catalog.py), for every ARCHS architecture: a file with no name (path
+     None) of a dense-named architecture is never held; of a mixture-of-experts one (catalog.moe_arch) it is always held,
+     with one line naming llama.cpp (a file with no name proves nothing).
+  3. The MoE hold is per file (MOE 33, DESIGN.md item 14): for every ARCHS architecture, two files F1, F2 with routed
+     experts (moe=True) and different bytes, on the shipped registry minus the architecture's rows plus, per sub-case,
+     (a) a passing MoE row naming F1's sha256: F1 runs and F2 is held; (b) the same row with no sha256: both held (a row
+     with no sha256 lifts nothing); (c) no MoE row: both held. A held file gets one line naming llama.cpp. A file of a
+     dense-named architecture without routed experts (moe=False) is never held, in every sub-case.
+Recorded (exact): the plan's arch; per ARCHS architecture, one case (so an architecture added to ARCHS adds a case and
+moves none a record named): whether it is MoE-named, the no-name decision, the 6 F1/F2 decisions of bar 3 and the dense-file decision on the fixed
+registry. The shipped registry's MoE decisions follow models.json's rows and are never recorded: a passing MoE row added
+to the catalog must not move the path/run fingerprint of every row. The answer text is a float argmax and is checked by
+bar 1, never recorded. Not asserted, by design since the per-file hold: "listed == runnable" (catalog.arch_rows lists
+per architecture, held releases per file; the catalog view's tests cover the listing).
 """
 import importlib.util
 import json
@@ -50,35 +58,49 @@ def test_run_path_on_a_tiny_file(contract, tmp_path, capsys, monkeypatch):
     c.record(arch)
 
 
-def _decisions(archs):
-    from mashbox.gguf import archs as GA
-    return {a: GA.held(a) for a in sorted(archs.ARCHS)}
+from mashbox.gguf import archs as _GA    # noqa: E402 - after the jax skip; the case list is ARCHS at collection
+
+ARCHS = sorted(_GA.ARCHS)
 
 
 @pytest.mark.contract
-def test_catalog_refusal_on_the_run_path(contract, monkeypatch):
+def test_there_is_a_moe_architecture_for_bar_3(contract):
+    contract("path/run")
+    from mashbox import catalog
+    assert any(catalog.moe_arch(a, catalog.arch_models().get(a)) for a in ARCHS), \
+        "no MoE architecture in ARCHS: bar 3 has nothing to check"
+
+
+@pytest.mark.contract
+@pytest.mark.parametrize("arch", ARCHS)
+def test_catalog_refusal_on_the_run_path(contract, monkeypatch, tmp_path, arch):
     c = contract("path/run")
     from mashbox import catalog
     from mashbox.gguf import archs as GA
+    from mashbox.gguf.resolve import identity
     reg = catalog.registry()
-    now = _decisions(GA)
-    for a, line in now.items():
-        moe = catalog.moe_arch(a, catalog.arch_models().get(a))
-        listed = any(r["arch"] == a for r in catalog.arch_rows(reg))
-        if not moe:
-            assert line is None, (a, line)
-        else:
-            assert (line is None) == listed, (a, line, listed)
-            assert line is None or ("llama.cpp" in line and "\n" not in line), line
-    dense = {a: v is None for a, v in now.items() if not catalog.moe_arch(a, catalog.arch_models().get(a))}
-    c.record(json.dumps(dense, sort_keys=True))
-    moe_archs = [a for a in GA.ARCHS if catalog.moe_arch(a, catalog.arch_models().get(a))]
-    assert moe_archs, "no MoE architecture in ARCHS: bar 3 has nothing to check"
-    a = moe_archs[0]
-    base = [g for g in reg.get("gguf") or [] if g["arch"] != a]
-    row = {"id": "contract-moe-row", "arch": a, "moe": True, "chips": {"v6e": {"status": "passing"}}}
-    for gg, want in ((base + [row], True), (base, False)):
+    moe = bool(catalog.moe_arch(arch, catalog.arch_models().get(arch)))
+    c.record(json.dumps([arch, moe]))
+
+    def runs(path, is_moe):
+        line = GA.held(arch, path=path, moe=is_moe)
+        assert line is None or ("llama.cpp" in line and "\n" not in line), (arch, line)
+        return line is None
+    noname = runs(None, False)
+    assert noname is (not moe), (arch, noname)                                        # bar 2
+    f1, f2 = tmp_path / "f1.gguf", tmp_path / "f2.gguf"
+    f1.write_bytes(b"GGUF path/run contract file one")
+    f2.write_bytes(b"GGUF path/run contract file two")
+    sha1 = identity(str(f1))[0]
+    assert sha1 and sha1 != identity(str(f2))[0]
+    base = [g for g in reg.get("gguf") or [] if g["arch"] != arch]
+    row = {"id": "contract-moe-row", "arch": arch, "moe": True, "chips": {"v6e": {"status": "passing"}}}
+    got = []
+    for sub, gg in (("a", base + [dict(row, sha256=sha1)]), ("b", base + [row]), ("c", base)):
         monkeypatch.setattr(catalog, "registry", lambda gg=gg: dict(reg, gguf=gg))
-        got = GA.held(a) is None
-        assert got == want and got == any(r["arch"] == a for r in catalog.arch_rows(catalog.registry())), (a, gg[-1:])
-        c.record(json.dumps([a, got]))
+        d = [runs(str(f1), True), runs(str(f2), True)]
+        assert d == ([True, False] if sub == "a" else [False, False]), (arch, sub, d)     # bar 3
+        if not moe:
+            assert runs(str(f1), False) and runs(str(f2), False), (arch, sub)          # a dense file is never held
+        got.append(d)
+    c.record(json.dumps([arch, noname, got, True if not moe else None]))

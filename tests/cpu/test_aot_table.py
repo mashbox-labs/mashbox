@@ -462,6 +462,21 @@ def test_no_table_with_speculative_decoding(tmp_path):
     assert cli.aot_dir(str(tmp_path), e) is None
 
 
+def test_no_table_with_the_record_topk_hook(tmp_path, monkeypatch):
+    """the record-only top-k hook (MASHBOX_RECORD_TOPK, engine.topk) changes what the traced decode programs return,
+    and the compile key names trace but not top-k: with the hook on there is no table, so a table saved without top-k
+    is never loaded for it, and the aot_table line says why"""
+    from mashbox import cli
+    lines = []
+    monkeypatch.setattr(cli, "log", lines.append)
+    e = types.SimpleNamespace(DK=0, topk=0, deployment_id="dep-a")
+    assert cli.aot_dir(str(tmp_path), e) == os.path.join(str(tmp_path), "aot", "dep-a") and lines == []
+    e.topk = 4
+    assert cli.aot_dir(str(tmp_path), e) is None
+    got = json.loads(lines[-1])
+    assert got["event"] == "aot_table" and got["used"] is False and "top-k" in got["reason"], got
+
+
 # ------------------------------------------------------------------ warm-up: table programs proven without running them
 def loaded_engine(tmp_path):
     """A fresh stand-in engine with the table of a warmed one loaded (every serializable program). -> (engine, load)"""

@@ -21,15 +21,19 @@ CPU test against llama.cpp's CPU logits.
 Not handled (refused at load with a message): rope scaling, a fused full-attention qkv, a Hadamard-folded checkpoint.
 The file's MTP layer (`nextn`) is read and reported; the speculative decoder that uses it lives in the engine.
 """
+import re
+
 import numpy as np
 import jax
 import jax.numpy as jnp
 from jax import lax
+from jax.experimental.layout import Layout, with_layout_constraint
 
 from ... import ops
 from ...moe import ffn as MF
 from ...models.qwen3_8_27b import model as M
 from ..reader import GGUFError
+from ...moe import MoEError, detect_gguf
 
 f32, bf16 = jnp.float32, jnp.bfloat16
 # the Models label (docs/gguf.md) of each architecture ARCHS maps to this module; catalog reads it with ast
@@ -57,7 +61,7 @@ class Config:
         # expert_shared_feed_forward_length and no feed_forward_length (unsloth/Qwen3.6-35B-A3B-GGUF); FFN shapes are
         # read from the tensors, so F is informational there
         self.D = int(k("embedding_length"))
-        self.F = int(k("feed_forward_length", 0) or 0) if f.arch == "qwen35moe" else int(k("feed_forward_length"))
+        self.F = int(k("feed_forward_length", 0) or 0) if int(k("expert_count", 0) or 0) > 0 else int(k("feed_forward_length"))
         self.H, self.KV = int(k("attention.head_count")), int(k("attention.head_count_kv"))
         self.HD = int(k("attention.key_length", self.D // self.H))
         if int(k("attention.value_length", self.HD)) != self.HD:
@@ -94,7 +98,12 @@ class Config:
             raise GGUFError("mashbox: qwen35 file with a fused full-attention qkv tensor is not supported in this version")
         # qwen35moe (llama.cpp src/models/qwen35moe.cpp): the same layers with a routed-expert FFN (softmax router, top-k,
         # weights renormalised to sum 1, optional expert_weights_scale) plus a shared expert gated by a sigmoid
-        self.moe = A == "qwen35moe"
+        try:
+            self.spec = detect_gguf(f.get, f.tensors, A, shapes=lambda n: f.tensors[n].shape, n_layers=self.L)
+        except MoEError as e:
+            raise GGUFError(str(e)) from None
+        self.moe = self.spec is not None
+        self.moe_spec = self.spec                   # mashbox.moe.ffn.moe_ffn reads the routing from it
         if self.moe:
             self.E, self.K = int(k("expert_count")), int(k("expert_used_count"))
             self.w_scale = float(k("expert_weights_scale", 0.0) or 0.0)
@@ -119,11 +128,60 @@ class _T:
         self.kind, self.names = kind, names
 
 
+# small tensors a contraction multiplies (every other small tensor is elementwise): the routed-expert router and the
+# shared expert's gate, held as float32 values on the device
+CONTRACTED_SMALL = ("ffn_gate_inp.weight", "ffn_gate_inp_shexp.weight")
+
+
+def role(name):
+    """a tensor's name without its layer: blk.3.ffn_gate_inp.weight -> ffn_gate_inp.weight"""
+    return re.sub(r"^blk\.\d+\.", "", name)
+
+
+def new_stats():
+    return dict(bytes=0, values=0, kernel_bytes=0, ref_bytes=0, ref_types={}, f32_bytes=0, f32_types={}, f32_roles={},
+                bf16_bytes=0)
+
+
+def book(stats, h, t, name, nb):
+    """count one multiplied weight in the bucket of the path it runs on (ops.route; h None = a small tensor held as
+    float32 values): nb is the file's bytes of it, except a kernel's, which counts its planes' device bytes.
+    resident_f32 is counted by role and by file type, never as reference and never as a kernel."""
+    r = "resident_f32" if h is None else ops.route(h)
+    if r == "kernel":
+        planes = h.packed if isinstance(h, ops.Packed) else h
+        stats["kernel_bytes"] += sum(int(a.nbytes) for a in jax.tree_util.tree_leaves(planes))
+    elif r == "resident_f32":
+        stats["f32_bytes"] += nb
+        stats["f32_types"][t.type_name] = stats["f32_types"].get(t.type_name, 0) + nb
+        stats["f32_roles"][role(name)] = stats["f32_roles"].get(role(name), 0) + nb
+    elif r == "native_bf16":
+        stats["bf16_bytes"] += nb
+    else:
+        stats["ref_bytes"] += nb
+        stats["ref_types"][t.type_name] = stats["ref_types"].get(t.type_name, 0) + nb
+
+
+def tied_head(stats, t, use_kernels):
+    """a tied output head: the token embedding's blocks prepared to be multiplied, counted on its path as
+    token_embd.weight (the embedding's bytes count once in device_bytes)"""
+    h = ops.prepare(t.rows(), t.type, t.shape, use_kernel=use_kernels)
+    book(stats, h, t, "token_embd.weight", int(t.nbytes))
+    return h
+
+
+def routes(stats):
+    """the weights event's fields for the path every multiplied weight runs on"""
+    return dict(kernel_bytes=stats["kernel_bytes"], reference_bytes=stats["ref_bytes"],
+                reference_types=stats["ref_types"], resident_f32_bytes=stats["f32_bytes"], resident_f32_types=stats["f32_types"],
+                resident_f32_roles=stats["f32_roles"], native_bf16_bytes=stats["bf16_bytes"])
+
+
 def load(f, c, use_kernels=True, log=None):
     """-> (W, info). Big linears: ops handles from the file's blocks (stacked over layer groups when every group has the
     same types, so one lax.scan runs them; else a list of groups, unrolled). Small tensors: exact float32."""
     import time
-    t0, stats = time.time(), dict(bytes=0, values=0, kernel_bytes=0, ref_bytes=0, ref_types={})
+    t0, stats = time.time(), new_stats()
 
     def rows(names, stacked=False):
         """the tensors' blocks as stored; several names (one role of every layer group) are stacked on the host, so the
@@ -139,16 +197,13 @@ def load(f, c, use_kernels=True, log=None):
         if t.type not in ops.reference.TYPES:
             raise GGUFError(f"mashbox: {names[0]} is ggml type {t.type}, which the GGUF reader in this version cannot read")
         h = ops.prepare(raw, t.type, t.shape, use_kernel=use_kernels)
-        nb = t.nbytes * len(names)
-        if isinstance(h, ops.Packed):
-            stats["kernel_bytes"] += sum(int(a.nbytes) for a in jax.tree_util.tree_leaves(h.packed))
-        else:
-            stats["ref_bytes"] += nb
-            stats["ref_types"][t.type_name] = stats["ref_types"].get(t.type_name, 0) + nb
+        book(stats, h, t, names[0], t.nbytes * len(names))
         return h
 
     def small(*names, stacked=False):
         t, raw = rows(names, stacked)
+        if role(names[0]) in CONTRACTED_SMALL:          # multiplied: float32 values held on the device
+            book(stats, None, t, names[0], t.nbytes * len(names))
         return ops.reference.dequant(jnp.asarray(raw), t.type, t.shape[-1])
 
     def need(name):
@@ -240,12 +295,11 @@ def load(f, c, use_kernels=True, log=None):
     stats["bytes"] += t.nbytes
     stats["values"] += int(np.prod(t.shape))
     W["norm"] = small("output_norm.weight")
-    W["head"] = big("output.weight") if not c.tie else ops.prepare(t.rows(), t.type, t.shape, use_kernel=use_kernels)
+    W["head"] = big("output.weight") if not c.tie else tied_head(stats, t, use_kernels)
     jax.block_until_ready(jax.tree_util.tree_leaves(W))
     info = dict(load_s=round(time.time() - t0, 2), device_bytes=int(stats["bytes"]), n_weights=int(stats["values"]),
                 bpw=round(stats["bytes"] * 8 / max(1, stats["values"]), 3), file=f.path.rsplit("/", 1)[-1],
-                layers_stacked=stacked, kernel_bytes=stats["kernel_bytes"], reference_bytes=stats["ref_bytes"],
-                reference_types=stats["ref_types"], mtp_layers=c.nextn, mixed_roles=sorted(mixed_roles))
+                layers_stacked=stacked, mtp_layers=c.nextn, mixed_roles=sorted(mixed_roles), **routes(stats))
     if log:
         log(info)
     return W, info
@@ -302,10 +356,34 @@ def l2(x, eps):
     return x * lax.rsqrt(jnp.sum(x * x, -1, keepdims=True) + eps)
 
 
+def kv_read(Kc, Vc, g, slots, Tc, contig):
+    """Group g's cached K/V of this call's rows, positions < Tc -> (B, Tc, KV, HD) each.
+
+    contig rows are slots 0..B-1: one slice of the cache, held in the cache's own (row-major) layout. Without the layout
+    constraint XLA on TPU gives the attention dot its preferred layout by copying the WHOLE cache to it at every decode step
+    instead of the slice (measured with Qwen3.6-35B-A3B on one v6e: 2 x 377.5 MB per token)."""
+    if contig:
+        B = slots.shape[0]
+        rm = Layout(major_to_minor=(0, 1, 2, 3))
+        return with_layout_constraint(Kc[g, :B, :Tc], rm), with_layout_constraint(Vc[g, :B, :Tc], rm)
+    return Kc[g][slots, :Tc], Vc[g][slots, :Tc]
+
+
 def kv_write(Kc, Vc, slots, pos, ks, vs):
     """Write this call's K/V (NG,B,T,KV,HD) at (slot, position) of the model's groups; positions past the cache are dropped
-    (an MTP group after them is written by its own layer)."""
+    (an MTP group after them is written by its own layer).
+
+    One row of one token (decode at 1 user) goes in with dynamic_update_slice under lax.cond(position inside the cache).
+    XLA on TPU turns that row's dropping scatter into a select that reads the old K/V at the position, and to read it the
+    whole cache was copied to another layout at every decode step (the same measurement: 2 x 377.5 MB per token)."""
     n = ks.shape[0]
+    if ks.shape[1:3] == (1, 1):
+        i = (0, slots[0], pos[0, 0], 0, 0)
+
+        def put(kv):
+            return (lax.dynamic_update_slice(kv[0], ks.astype(kv[0].dtype), i),
+                    lax.dynamic_update_slice(kv[1], vs.astype(kv[1].dtype), i))
+        return lax.cond(pos[0, 0] < Kc.shape[2], put, lambda kv: kv, (Kc, Vc))
     return (Kc.at[:n, slots[:, None], pos].set(ks, mode="drop"), Vc.at[:n, slots[:, None], pos].set(vs, mode="drop"))
 
 
@@ -376,6 +454,7 @@ def make_forward(c, decode_kernels=None):
         R0, C0 = cv
         pos = p0[:, None] + jnp.arange(T, dtype=jnp.int32)[None]
         valid = jnp.arange(T)[None] < lens[:, None]
+        rows_ok = valid if keep is None else valid & keep[:, None]      # padding / paused rows route to no expert
         fr = pos.astype(f32)[..., None] * jnp.asarray(inv)
         emb = jnp.concatenate([fr, fr], -1)
         cos, sin = jnp.cos(emb).astype(act)[:, :, None], jnp.sin(emb).astype(act)[:, :, None]
@@ -427,7 +506,8 @@ def make_forward(c, decode_kernels=None):
 
         def attend(g, q, k, v):
             if Tc:
-                kk, vv = jnp.concatenate([Kc[g][slots, :Tc], k], 1), jnp.concatenate([Vc[g][slots, :Tc], v], 1)
+                kc, vc = kv_read(Kc, Vc, g, slots, Tc, contig)
+                kk, vv = jnp.concatenate([kc, k], 1), jnp.concatenate([vc, v], 1)
             else:
                 kk, vv = k, v
             s = jnp.einsum("btkgd,bskd->bkgts", q, kk, preferred_element_type=f32) * scale
@@ -453,7 +533,7 @@ def make_forward(c, decode_kernels=None):
             pairs of every row in this call are sorted by expert and only the picked experts run, each fetched once;
             rows past their length add no pairs). layer: w's routed experts are the whole stacks over layer groups and
             layer is this group's index (see the layer scan below)"""
-            y = MF.moe_ffn(h.reshape(B * T, D), mspec, w, valid.reshape(B * T), layer=layer)
+            y = MF.moe_ffn(h.reshape(B * T, D), mspec, w, rows_ok.reshape(B * T), layer=layer)
             return y.reshape(B, T, D).astype(act)
 
         def mlp(x, w, ln2, layer=None):

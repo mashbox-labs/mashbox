@@ -14,6 +14,7 @@ import re
 import sys
 
 from .server import KNOBS
+from ..moe import record as RX   # the routed-expert report's names (one place)
 
 GENERATED = "Generated from src/mashbox/runtime/openapi.py by tools/hf_github_sync_check.py render --write. Do not edit."
 
@@ -124,6 +125,20 @@ SCHEMAS = {
                                              "every worker process it has run (0 when the start-up warm-up compiled every "
                                              "program the requests ran; null before ready or where this process does not "
                                              "count them)."),
+                   "routed_experts": f(["object", "null"], "Mixture-of-experts models: the path the routed experts run "
+                                       "on, read where the engine runs. path: kernel (the kernel package's routed-expert "
+                                       "kernel at every call site), exact (the exact path) or mixed; kernel: that kernel's "
+                                       "id, version and package (null when the package has none); sites: the routed-op "
+                                       f"call sites traced on each path; {RX.WHY}: why any site ran exact. Null for a "
+                                       "dense model and before the first program is traced.",
+                                       properties={RX.PATH: f("string", "kernel, exact or mixed.",
+                                                              enum=list(RX.PATHS)),
+                                                   RX.KERNEL_KEY: f(["object", "null"], "id, version, package."),
+                                                   RX.SITES: obj(dict(zip(RX.SITE_PATHS, (
+                                                       f("integer", "Call sites on the kernel."),
+                                                       f("integer", "Call sites on the exact path."))))),
+                                                   RX.WHY: f("array", "Why sites ran exact.",
+                                                             items={"type": "string"})}),
                    "worker_pid": f("integer", "Process id of the model's worker, when the engine runs in a worker process."),
                    "worker_restarts": f("integer", "Times the worker was started again after a fault.")},
                   ["status"]),

@@ -360,6 +360,14 @@ def test_engine_kernels_rows_are_the_one_package_one_row_per_chip_and_jax():
     assert problems(reg) == []
 
 
+@pytest.mark.parametrize("bad", ["/tmp/{f}", "../../outside/{f}", "sub/{f}", "sub\\{f}", ".", ".."])
+def test_an_engine_kernels_file_is_a_bare_file_name(bad):
+    """the loader joins the row's file under its digest directory in the cache: an absolute path, a separator or a
+    parent step would put the verified wheel outside it, so the catalog refuses any file that is not a bare name"""
+    f = bad.format(f=BUNDLE["file"])
+    assert any("bare file name" in x for x in problems(with_row(bundle=dict(BUNDLE, file=f)))), f
+
+
 def test_bylines_follow_the_one_rule():
     for e, m in zip(catalog.ours(REG), catalog.live(REG)):
         own = m["catalog"]["format"] == "own-model"

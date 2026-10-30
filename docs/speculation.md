@@ -68,7 +68,7 @@ When the model loads, `mashbox run` prints one JSON line to stderr. For a model 
 
 ## Limits
 
-- Mixture-of-experts files (`qwen35moe`) and Gemma files (`gemma4`, `gemma3`) decode without speculation, and a drafter you pick stops with an error.
+- Mixture-of-experts files (`qwen35moe`, `qwen3moe`, `qwen2moe`) and Gemma files (`gemma4`, `gemma3`) decode without speculation, and a drafter you pick stops with an error.
 - GGUF files run copy from the conversation, or a draft model you give. An MTP layer inside a GGUF file is not used.
 - A draft model runs on a GGUF model only, and only `llama`, `qwen2`, `qwen3`, `exaone` and `granite` files can be one (every layer full attention).
 - If a speculation program fails to compile while the server warms up, the server starts without speculation and the start-up line says so.

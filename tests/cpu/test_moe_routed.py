@@ -568,3 +568,87 @@ def test_qwen35moe_layer_scan_passes_whole_expert_stacks(kind, tmp_path, monkeyp
         assert stub.seen, "the routed experts never reached the kernel"
         for whole, shapes in stub.seen:
             assert whole and shapes and all(v[:2] == (c.NG, c.E) for v in shapes.values()), (whole, shapes)
+
+
+@pytest.mark.parametrize("kind", ["kq", "nb", "nb-exact"])
+def test_dense_moe_layer_scan_passes_whole_expert_stacks(kind, tmp_path, monkeypatch):
+    """qwen3moe-f32 through archs.dense (all layers alike: one lax.scan): the routed experts reach the kernel as the whole
+    stacks over the layers (every leaf keeps its (layers, experts) axes) with the layer index as layer=, never a scan
+    slice; kq-plane and native-plane experts through the kernel, and native planes on the exact path, give the exact
+    path's logits (NMSE <= 1e-10, argmax identical; the bar of the qwen35moe test above)"""
+    from mashbox.gguf.reader import File
+    from mashbox.gguf.archs import dense as A
+    p = _fixture("qwen3moe-f32", tmp_path)
+    toks, i32 = [262, 72, 101, 256, 258, 32, 107, 263, 10, 262], jnp.int32
+
+    def run(use_kernels):
+        f = File(p)
+        c = A.Config(f, act=jnp.float32)
+        W, info = A.load(f, c, use_kernels=use_kernels)
+        fwd = jax.jit(A.make_forward(c), static_argnames=("Tc", "contig", "all_logits"))
+        ck, cv = A.new_state(c, 1, 32)
+        z = jnp.zeros((1,), i32)
+        r = fwd(W, ck, cv, jnp.asarray([toks[:8]], i32), z, jnp.asarray([8], i32), z, 0, all_logits=True)
+        out, ck, cv = [np.asarray(r["lg"][0])], r["ck"], r["cv"]
+        for i in range(8, len(toks)):
+            r = fwd(W, ck, cv, jnp.asarray([[toks[i]]], i32), jnp.asarray([i], i32), jnp.asarray([1], i32), z, 32,
+                    all_logits=True)
+            ck, cv = r["ck"], r["cv"]
+            out.append(np.asarray(r["lg"][0]))
+        return np.concatenate(out, 0), c, info
+
+    ref, c, info = run(False)
+    assert info["layers_stacked"] and c.L >= 2, (info["layers_stacked"], c.L)
+    if kind == "kq":
+        stub = _stub(monkeypatch); name = "_stub_moe_kernels"
+    else:
+        stub, name = _nb_stub(monkeypatch, (0,), kernel=kind == "nb"), "_stub_nb_moe"
+    try:
+        ops.load_kernels(module=name)
+        got, _, info2 = run(True)
+    finally:
+        ops.load_kernels(module="off")
+    e = nmse(got, ref)
+    assert e <= 1e-10 and np.array_equal(got.argmax(-1), ref.argmax(-1)), e
+    if kind != "kq":                    # native-plane experts count as kernel bytes in the load stats
+        assert info2["kernel_bytes"] > 0 and info2["reference_bytes"] < info["reference_bytes"], (info, info2)
+    if kind != "nb-exact":
+        assert stub.seen, "the routed experts never reached the kernel"
+        E = c.spec.n_expert
+        for whole, shapes in stub.seen:
+            assert whole and shapes and all(v[:2] == (c.L, E) for v in shapes.values()), (whole, shapes)
+
+
+@pytest.mark.parametrize("arch", ["qwen35moe-f32", "qwen3moe-f32"])
+def test_padding_and_paused_rows_route_to_no_expert(arch, tmp_path, monkeypatch):
+    """a decode call with keep = [True, False] (row 1 is a padding row of the bucket or a row paused mid-prefill, whose
+    outputs the engine drops, engine.py's contract): row 1 adds no (row, expert) pairs, and row 0's logits are the same
+    bits as with keep = [True, True]"""
+    from mashbox.gguf.reader import File
+    from mashbox.gguf.archs import qwen35, dense
+    A = qwen35 if arch.startswith("qwen35") else dense
+    seen = []
+    real = MF.moe_ffn
+
+    def spy(h, spec, W, valid=None, *a, **k):            # the mask reaches the op inside a lax.scan: read it there
+        jax.debug.callback(lambda v: seen.append(np.asarray(v)), valid)
+        return real(h, spec, W, valid, *a, **k)
+    monkeypatch.setattr(MF, "moe_ffn", spy)
+    f = File(_fixture(arch, tmp_path))
+    c = A.Config(f, act=jnp.float32)
+    W, _ = A.load(f, c, use_kernels=False)
+    fwd = A.make_forward(c)
+    i32 = jnp.int32
+    ck, cv = A.new_state(c, 2, 32)
+    toks, pos, ones, slots = jnp.asarray([[262], [72]], i32), jnp.asarray([3, 5], i32), jnp.ones((2,), i32), jnp.arange(2, dtype=i32)
+    outs = {}
+    for name, keep in (("both", jnp.asarray([True, True])), ("one", jnp.asarray([True, False]))):
+        seen.clear()
+        r = fwd(W, ck, cv, toks, pos, ones, slots, 32, contig=True, all_logits=True, keep=keep)
+        outs[name] = np.asarray(r["lg"])
+        jax.effects_barrier()
+        assert seen, "the routed op was never called"
+        for v in seen:
+            v = np.asarray(v).reshape(2, -1)
+            assert v[0].all() and (v[1].all() if name == "both" else not v[1].any()), (name, v)
+    assert np.array_equal(outs["one"][0], outs["both"][0])

@@ -15,6 +15,7 @@ Called with layer (moe_ffn), the expert entries are the whole stacks over layer 
 """
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from .. import ops
 from .route import route
@@ -86,3 +87,62 @@ def moe_ffn(h, spec, W, valid=None, stats=None, layer=None):
     if "su" in W:
         y = y + shared_ffn(h, W, h.dtype)
     return jnp.where(valid[:, None], y, 0.0)
+
+
+def routed_fn(act="silu"):
+    """-> fn(x (N, D), ids (N, K) int32, wts (N, K) float32, *experts) -> (N, D) float32: one MoE layer's routed
+    experts for a model that routes by itself (NemotronH's moe.ROUTED contract: its own sigmoid router, selection bias
+    and scale), through the engine's routed op exactly as moe_ffn runs it: pairs sorted by expert (sort_pairs),
+    ops.expert_ffn (the kernel package's expert_ffn when it runs the act and covers the experts' types, else the exact
+    path, with the reason in ops.expert_report()), weighted outputs added in top-k order (combine). experts: (up, down)
+    for an ungated act (ops.UNGATED_ACTS: relu2), else (gate, up, down); each an ops handle stacked (E, rows, cols)
+    as ops.prepare(..., experts=True) makes it from the file's blocks (Q4_0 / Q8_0 native planes take the kernel), or
+    from bfloat16 arrays through prepare_ungated."""
+    keys = ("up", "down") if act in ops.UNGATED_ACTS else ("gate", "up", "down")
+
+    def fn(x, ids, wts, *experts):
+        if len(experts) != len(keys):
+            raise TypeError(f"routed_fn('{act}'): expects {', '.join(keys)}, got {len(experts)} expert weights")
+        W = dict(zip(keys, experts))
+        N, K = ids.shape
+        E = int(W["up"].shape[0])
+        e_s, row, w_s, inv = sort_pairs(ids.astype(jnp.int32), wts.astype(f32), jnp.ones((N,), jnp.bool_), E)
+        x_s = jnp.where((e_s < E)[:, None], x[row], jnp.zeros((), x.dtype))
+        return combine(ops.expert_ffn(x_s, e_s, w_s, W, act=act, n_expert=E), inv, N, K)
+    fn.act, fn.keys = act, keys
+    return fn
+
+
+def prepare_ungated(up, down):
+    """bfloat16 (or float32) routed-expert arrays in the (E, in, out) layout (up (E, D, F), down (E, F, D)) -> (up,
+    down) ops handles stacked (E, out, in) = (E, F, D) and (E, D, F), the routed op's layout: each transposed once and
+    stored as BF16 blocks (ggml type 30). The routed op runs BF16 experts on its exact path (they are not in a kernel
+    package's EXPERT_TYPES), so this is the CPU-parity form; a served file's Q4_0 / Q8_0 stacks take the kernel."""
+    out = []
+    for a in (up, down):
+        a = np.asarray(jnp.asarray(a).astype(jnp.bfloat16))
+        if a.ndim != 3:
+            raise ValueError(f"prepare_ungated: expected (E, in, out), got shape {a.shape}")
+        t = np.ascontiguousarray(np.swapaxes(a, 1, 2))                  # (E, out, in)
+        E, rows, cols = t.shape
+        raw = t.view(np.uint16).view(np.uint8).reshape(E, rows, cols * 2)
+        out.append(ops.prepare(raw, 30, (E, rows, cols), use_kernel=False, experts=True))
+    return tuple(out)
+
+
+def need_bytes(spec, D, tokens, experts, act_itemsize=2, kernel_types=frozenset()):
+    """the fit's MoE term (gguf.need_bytes adds it to the scratch): device bytes the routed op holds besides the weights
+    in its largest call, `tokens` rows (the engine's tokens_per_call) x K pairs, through ops.expert_scratch_bytes.
+    experts: (ggml type, GGUF shape (..., E, rows, cols), file bytes) of every routed expert stack. The call is counted
+    on the kernel when the package's expert_ffn takes every stack's type on a kernel path (ops.expert_ffn's own test),
+    else on the exact path, gathering one expert's largest projection (as loaded) per slot."""
+    P, E = int(tokens) * int(spec.n_used), int(spec.n_expert)
+    et = ops.expert_kernel_types()
+    kern, one = bool(experts), 0
+    for t, shape, nbytes in experts:
+        lead = 1
+        for v in shape[:-2]:
+            lead *= int(v)
+        one = max(one, ops.device_nbytes(t, shape, nbytes, kernel_types, experts=True) // max(1, lead))
+        kern = kern and int(t) in et and ops.weight_path(t, shape, experts=True, kernel_types=kernel_types) != "exact"
+    return ops.expert_scratch_bytes(P, D, spec.expert_ff, E, act_itemsize, kernel=kern, expert_bytes=one)

@@ -18,7 +18,9 @@ a row's finish are dropped. generate() is admit + step until its rows end.
 Padding rows (free or still-prefilling slots inside a decode bucket) never write live state: their K/V writes go past the
 cache and are dropped, and their linear-attention state rows are written back unchanged (keep mask), so a row paused
 mid-prefill keeps its state. trace=True records, per generated token, a hash of the row's f32 logits and its top-1 / top-2
-gap (an identity check compares these between a lone run and a batched run).
+gap (an identity check compares these between a lone run and a batched run). Record-only hook, off by default:
+with trace=True and env MASHBOX_RECORD_TOPK=k (set by a record harness, which records it), the same decode program also
+returns each token's top-k f32 logits (values, ids) and a result carries them as "topk"; the decode is unchanged.
 
 Prefix cache (prefix_cache=True, used by the server): the slot state lives on between calls. Each slot remembers the
 token ids its state holds at a few points (the end of the prompt, the start of its last message and, as llama.cpp's
@@ -70,6 +72,7 @@ class IsolationError(RuntimeError):
 i32 = np.int32
 I32_MAX = (1 << 31) - 1
 ALIGN = 64          # prefill chunk boundaries cut by the token budget land on this grid (the gated-delta chunk, model.CHUNK)
+TOPK_ENV = "MASHBOX_RECORD_TOPK"    # record-only: top-k logits per token from the decode program (needs trace=True)
 
 
 def logit_hash(lg):
@@ -175,6 +178,8 @@ class Engine:
         self.cache_ns = None        # the prefix-cache namespace (set_namespace; runtime/tenancy.py)
         # prefill tokens per step: while any row decodes (a stall-free budget; ~128 on v6e-1 8-bit, estimated) and idle
         self.budget_busy, self.budget_idle, self.trace = max(ALIGN, int(budget_busy)), max(ALIGN, int(budget_idle)), bool(trace)
+        topk = int(os.environ.get(TOPK_ENV) or 0)    # read at start; used only by calls with trace
+        self.topk = min(topk, cfg.V) if topk else 0    # cfg.V only when asked: the ABI refusals below need no config
         # sampled rows on row buckets: OFF until the batch-invariance probe passes for the sampler and the decode
         # ops at every bucket on the chip type; off, any sampled row runs the sampled program on all S rows
         self.sampled_buckets = False
@@ -231,11 +236,18 @@ class Engine:
 
         CTX_ = CTX
 
-        def tr0(K, B):
-            return (jnp.zeros((K, B), jnp.uint32), jnp.zeros((K, B), jnp.float32))
+        TOPK = self.topk
+
+        def tr0(K, B, trace=False):
+            t = (jnp.zeros((K, B), jnp.uint32), jnp.zeros((K, B), jnp.float32))
+            return t + ((jnp.zeros((K, B, TOPK), jnp.float32), jnp.zeros((K, B, TOPK), jnp.int32)) if TOPK and trace else ())
 
         def tr1(t, i, lg):
-            return (t[0].at[i].set(logit_hash(lg)), t[1].at[i].set(top2_gap(lg)))
+            out = (t[0].at[i].set(logit_hash(lg)), t[1].at[i].set(top2_gap(lg)))
+            if TOPK:
+                v, ix = lax.top_k(lg.astype(jnp.float32), TOPK)
+                out += (t[2].at[i].set(v), t[3].at[i].set(ix.astype(jnp.int32)))
+            return out
 
         def dec(W, ck, cv, tok, pos, Tc, K, trace=False):
             B = tok.shape[0]
@@ -246,7 +258,7 @@ class Engine:
                 r = fwd(W, ck, cv, tok[:, None], pos, ones, slots, Tc, contig=True, keep=pos < CTX_)
                 tr = tr1(tr, i, r["lg"]) if trace else tr
                 return r["ck"], r["cv"], r["nxt"], pos + 1, out.at[i].set(r["nxt"]), tr
-            ck, cv, tok, pos, out, tr = lax.fori_loop(0, K, step, (ck, cv, tok, pos, jnp.zeros((K, B), jnp.int32), tr0(K, B)))
+            ck, cv, tok, pos, out, tr = lax.fori_loop(0, K, step, (ck, cv, tok, pos, jnp.zeros((K, B), jnp.int32), tr0(K, B, trace)))
             return out, ck, cv, tok, pos, tr
 
         def decs(W, ck, cv, tok, pos, sp, step0, cnt, seen, Tc, K, trace=False):
@@ -265,7 +277,7 @@ class Engine:
                 # counts of rows that are not decoding (padding, prefilling) stay as they are
                 return (r["ck"], r["cv"], nt, pos + 1, out.at[i].set(nt), cnt.at[b_, nt].add(keep.astype(jnp.float32)),
                         seen.at[b_, nt].set(seen[b_, nt] | keep), tr)
-            init = (ck, cv, tok, pos, jnp.zeros((K, B), jnp.int32), cnt, seen, tr0(K, B))
+            init = (ck, cv, tok, pos, jnp.zeros((K, B), jnp.int32), cnt, seen, tr0(K, B, trace))
             ck, cv, tok, pos, out, cnt, seen, tr = lax.fori_loop(0, K, step, init)
             return out, ck, cv, tok, pos, cnt, seen, tr
 
@@ -293,7 +305,8 @@ class Engine:
         self.first_rows = jax.jit(first_rows, donate_argnums=(3, 4))
         self.dec = jax.jit(dec, static_argnames=("Tc", "K", "trace"), donate_argnums=(1, 2))
         self.decs = jax.jit(decs, static_argnames=("Tc", "K", "trace"), donate_argnums=(1, 2))
-        self.lhash = jax.jit(lambda lg: (logit_hash(lg), top2_gap(lg)))
+        self.lhash = jax.jit(lambda lg: (logit_hash(lg), top2_gap(lg))
+                             + (tuple(lax.top_k(lg.astype(jnp.float32), TOPK)) if TOPK else ()))
         self.first = jax.jit(first)
 
         def put(cv, s, r, c):
@@ -348,6 +361,8 @@ class Engine:
             self.gather_last = jax.jit(gather_last, out_shardings=zsh)
         # every program a request runs goes through the executable table (runtime/programs.py Table, Dispatch): warm()
         # builds or loads each one there, and a call runs its executable with no trace; a call not in it runs through jit
+        if self.topk and self.DK:
+            raise ValueError(f"{TOPK_ENV} covers the plain decode programs; speculative decoding (draft_k) has no top-k trace")
         self.aot = PG.Table()
         for n_, skip in (("fwd", 1), ("dec", 1), ("decs", 1), ("first_rows", 0), ("first", 0), ("lhash", 0), ("put", 0),
                          ("take", 0), ("kv_take", 0), ("kv_put", 0), ("swap", 0), ("gather_last", 0), ("_zl", 0)):
@@ -822,7 +837,7 @@ class Engine:
         for i, w in enumerate(why):
             if w is not None:
                 out_all[i] = dict(slot=None, ids=[], fin="error", error=w, cached=0, restored=0, sampled=False, t_admit=t0,
-                                  t_first=None, t_end=t0, calls=0, prompt_len=len(reqs[i].get("ids") or ()), lh=[])
+                                  t_first=None, t_end=t0, calls=0, prompt_len=len(reqs[i].get("ids") or ()), lh=[], topk=[])
         good = [i for i in range(n_all) if why[i] is None]
         if not good:
             return out_all
@@ -902,7 +917,7 @@ class Engine:
             s_ = slot[i]
             r = dict(slot=s_, ids=[], fin=None, max_new=int(reqs[i]["max_new"]), stop=stop, sampled=is_s[i],
                      cached=len(snap[i]["ids"]) if snap[i] else 0, restored=(len(snap[i]["ids"]) if ent[i] is not None else 0),
-                     t_admit=t0, t_first=None, t_end=None, calls=0, prompt_len=len(prompts[i]), lh=[], draft=reqs[i].get("draft", True),
+                     t_admit=t0, t_first=None, t_end=None, calls=0, prompt_len=len(prompts[i]), lh=[], topk=[], draft=reqs[i].get("draft", True),
                      prompt=prompts[i], cur=start[i], pts=pts[i], scope=sc[i][1], own=sc[i], made=set(),
                      new_snaps=keep_snaps[i] if pc else None)
             out_all[good[i]] = r
@@ -994,6 +1009,7 @@ class Engine:
             toks, t2, p2 = np.asarray(out), np.asarray(t2), np.asarray(p2)
             if self.trace:
                 th, tg = np.asarray(tr[0]), np.asarray(tr[1])
+                tv, ti = (np.asarray(tr[2]), np.asarray(tr[3])) if self.topk else (None, None)
             for s_ in live:
                 r = self.rows[s_]
                 r["calls"] += 1
@@ -1008,6 +1024,8 @@ class Engine:
                     r["ids"].append(t)
                     if self.trace:
                         r["lh"].append((int(th[k, s_]), float(tg[k, s_])))
+                        if self.topk:
+                            r["topk"].append((ti[k, s_].tolist(), tv[k, s_].tolist()))
                     if len(r["ids"]) >= r["max_new"]:
                         fin = "length"
                         break
@@ -1069,8 +1087,9 @@ class Engine:
             for r in new:
                 t_first[r["slot"]] = int(tk[r["slot"]])
         if self.trace:
-            h, g = self.lhash(buf)
-            h, g = np.asarray(h), np.asarray(g)
+            lt = self.lhash(buf)
+            h, g = np.asarray(lt[0]), np.asarray(lt[1])
+            fv, fi = (np.asarray(lt[2]), np.asarray(lt[3])) if self.topk else (None, None)
         now, ended = time.perf_counter(), []
         for b, r in enumerate(done):
             s_ = r["slot"]
@@ -1083,6 +1102,8 @@ class Engine:
             r["ids"].append(t)
             if self.trace:
                 r["lh"].append((int(h[s_]), float(g[s_])))
+                if self.topk:
+                    r["topk"].append((fi[s_].tolist(), fv[s_].tolist()))
             if len(r["ids"]) >= r["max_new"]:
                 self._end(r, "length")
                 ended.append(r)
@@ -1132,6 +1153,8 @@ class Engine:
                                new_tokens=sum(len(x) for x in ids), sampled=any(r["sampled"] for r in rows)))
         if self.trace:
             res["lh"] = [r["lh"] for r in rows]
+        if self.trace and self.topk:
+            res["topk"] = [r["topk"] for r in rows]
         return res
 
     # per-row backoff (the row's own history only): after BO_MISS rounds in a row with 0 accepted drafts the row

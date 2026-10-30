@@ -1,0 +1,47 @@
+{
+ "fetched_utc": "2026-10-28T23:30:43Z",
+ "configs": [
+  {
+   "file": "qwen3-30b-a3b.config.json",
+   "repo": "Qwen/Qwen3-30B-A3B",
+   "revision": "ad44e777bcd18fa416d9da3bd8f70d33ebb85d39",
+   "sha256": "2850ddb3bf7aecad20b611e2d44f3077fc8193f4827c93beddd4c02ad63c2297"
+  },
+  {
+   "file": "qwen3.6-35b-a3b.config.json",
+   "repo": "Qwen/Qwen3.6-35B-A3B",
+   "revision": "995ad96eacd98c81ed38be0c5b274b04031597b0",
+   "sha256": "93a4693fa9d8392fbfccd4b3c9873f4bfdcb14fdede978b123d07d19675efe99"
+  },
+  {
+   "file": "olmoe-1b-7b-0125.config.json",
+   "repo": "allenai/OLMoE-1B-7B-0125",
+   "revision": "9b0c1aa87e34a20052389dce1f0cf01da783f654",
+   "sha256": "21dc57233d4664eccd9734f5d46563a3716ff88dea5be0d33483fc2df9ce1482"
+  },
+  {
+   "file": "mixtral-8x7b.config.json",
+   "repo": "mistralai/Mixtral-8x7B-v0.1",
+   "revision": "fc7ac94680e38d7348cfa806e51218e6273104b0",
+   "sha256": "9d56d04b36d0fd12ff54ae4c5bac769cc176e254e64ff71144614b6318b40793"
+  },
+  {
+   "file": "gpt-oss-20b.config.json",
+   "repo": "openai/gpt-oss-20b",
+   "revision": "6cee5e81ee83917806bbde320786a8fb61efebee",
+   "sha256": "3a2a26ded679375b7928ddeca59764df7cea83220c1961035f6d6e232659e9ce"
+  },
+  {
+   "file": "deepseek-v3.config.json",
+   "repo": "deepseek-ai/DeepSeek-V3",
+   "revision": "e815299b0bcbac849fa540c768ef21845365c9eb",
+   "sha256": "cbf0b95dc614de208a109bb5fd4e7eed11385e9c68411d2c17db5319443035d9"
+  },
+  {
+   "file": "qwen1.5-moe-a2.7b.config.json",
+   "repo": "Qwen/Qwen1.5-MoE-A2.7B",
+   "revision": "1a758c50ecb6350748b9ce0a99d2352fd9fc11c9",
+   "sha256": "d0b1cd8f35beccb75211c06940da3274ea986363792ab0ececb60d4ec03dd8c6"
+  }
+ ]
+}

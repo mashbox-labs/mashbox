@@ -135,6 +135,14 @@ def emb_unit(f):
 
 EMB_UNIT = ("embedding x embedding_scale near unit scale, so attention and norms move the residual", emb_unit)
 
+
+def routed(f):
+    return has("blk.0.ffn_gate_exps.weight")(f) and int(key(f, "expert_used_count")) < int(key(f, "expert_count"))
+
+
+ROUTED = ("routed experts (top-k of expert_count)", routed)
+SHEXP = ("sigmoid-gated shared expert", has("blk.0.ffn_gate_inp_shexp.weight", "blk.0.ffn_up_shexp.weight"))
+
 # arch -> [(fixture, "float" | "block", [(feature, predicate)])]. The rope kind (adjacent pairs vs halves), the norm
 # formula and the graph are the architecture's own: every case of the contract runs them.
 CONTRACTS = {
@@ -146,6 +154,8 @@ CONTRACTS = {
         ("llama-tied-f32", "float", [TIED, FREQS]),
         ("llama-eps-f32", "float", [EPS]),
         ("llama-pyquant", "block", [BLOCKS]),
+        ("llama-moe-f32", "float", [ROUTED, ("experts under the llama name (feed_forward_length = expert size)",
+                                             lacks("blk.0.ffn_gate.weight")), OWN]),
     ],
     "qwen2": [
         ("qwen2-f32", "float", [("q/k/v biases, no output bias", lambda f: has(*[f"blk.0.attn_{t}.bias" for t in "qkv"])(f)
@@ -159,6 +169,16 @@ CONTRACTS = {
         ("qwen3-tied-f32", "float", [TIED, QKNORM]),
         ("qwen3-eps-f32", "float", [EPS, QKNORM]),
         ("qwen3-kquant", "block", [BLOCKS]),
+    ],
+    "qwen2moe": [
+        ("qwen2moe-f32", "float", [ROUTED, SHEXP, ("q/k/v biases", has(*[f"blk.0.attn_{t}.bias" for t in "qkv"])),
+                                   GQA, OWN]),
+        ("qwen2moe-eps-f32", "float", [EPS, ROUTED]),
+    ],
+    "qwen3moe": [
+        ("qwen3moe-f32", "float", [ROUTED, QKNORM, HDNE, ("no shared expert", lacks("blk.0.ffn_up_shexp.weight")),
+                                   GQA, OWN]),
+        ("qwen3moe-eps-f32", "float", [EPS, ROUTED, QKNORM]),
     ],
     "exaone": [
         ("exaone-f32", "float", [FREQS, GQA, OWN]),
