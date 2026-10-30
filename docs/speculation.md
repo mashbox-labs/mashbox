@@ -1,12 +1,12 @@
 # Speculative decoding
 
-Speculative decoding lets one pass of the model give several tokens. A cheap drafter guesses the next few tokens, and the model checks all of the guesses in one pass. It keeps every guess it agrees with, plus one token of its own. You meet it as the `--speculation` option of `mashbox run`, and in the `speculation` line the server prints when it starts.
+Speculative decoding lets one pass of the model give several tokens. A cheap drafter guesses the next few tokens, and the model checks all of the guesses in one pass. It keeps the guesses up to the first one it disagrees with, plus one token of its own. You meet it as the `--speculation` option of `mashbox run`, and in the `speculation` line the server prints when it starts.
 
 ## What it does for you
 
 - Measured speed: Qwen3.8-27B with its own MTP head (`--mtp 2`) decodes 74.84 tokens/s against 37.77 tokens/s without speculation, 1 request at a time on one TPU v6e-1 (8 chat prompts, 256 new tokens, greedy; see [Qwen3.8-27B](models/qwen3-8-27b.md#speculative-decoding)). No other drafter has a measured speed.
 - The answer follows the same rules as without it. A greedy request keeps the model's top token at every position, and a sampled request draws each token with the same settings and seed. Where the two best tokens score the same, or one bf16 step apart, the text can differ from a run without speculation.
-- It runs inside the batch: every request in a batch can speculate. With copy from the conversation or a draft model, a request whose guesses keep missing stops guessing for a while: after 4 passes in a row in which the model keeps none of its guesses, it decodes without guesses for 16 passes, then guesses again, and each time it misses again the wait doubles, up to 256 passes. The MTP head guesses on every pass.
+- It runs inside the batch: every request in a batch can speculate. With copy from the conversation or a draft model, a request whose guesses keep missing stops guessing for a while: after 4 passes in a row in which the model keeps none of its guesses (or the drafter has none), it decodes without guesses for 16 passes, then guesses again; each further 4 such passes in a row double the wait, up to 256 passes, and a pass that keeps a guess sets it back to 16. The MTP head guesses on every pass.
 - No drafter has passed its checks on a chip in this release, so `auto` decodes without speculation. Turn it on with `--mtp K` or `--speculation ngram`.
 
 ## Where it runs
@@ -35,7 +35,7 @@ Tested means the drafter runs in `mashbox`'s own tests on small files of that ki
 
 A drafter you pick with `--speculation mtp`, `ngram`, `draft` or `--mtp K` runs wherever it applies to the model, checked on this chip or not. When it has not passed its checks on this chip, the server logs `speculation: not gated on this chip`.
 
-Speculation runs on one chip. With `--tensor-parallel-size` above 1, `auto` decodes without it and a drafter you pick stops with an error.
+Speculation runs on one chip. A model from the catalog on more than one chip (`--tensor-parallel-size` above 1; left out, it is 4 on a v5e-4, v6e-4 or v5p-8) decodes without it under `auto`, and a drafter you pick stops with an error. A GGUF file runs on one chip only: `--tensor-parallel-size` above 1 stops the run.
 
 ## How auto picks a drafter
 
@@ -43,7 +43,7 @@ Speculation runs on one chip. With `--tensor-parallel-size` above 1, `auto` deco
 
 1. **A trained drafter made for this model** (DFlash, DFlare or EAGLE3), matched by the model's tokenizer and shape. This release does not run trained drafters, so `auto` moves on to the next one.
 2. **The model's own MTP head**, when the file has one and `mashbox` implements that head for the file's format. Qwen3.8-27B ships one with its `.bshj` weights.
-3. **A smaller model with the same tokenizer**, when you give one with `--draft-model`. `auto` does not look one up for you in this release, so without `--draft-model` it moves on to the next one.
+3. **A smaller model with the same tokenizer**. `auto` does not look one up in this release, so it moves on to the next one. One you give with `--draft-model` runs as `--speculation draft` does: your pick, not gated on this chip.
 4. **Copy from the conversation** (n-gram prompt lookup), on the GGUF files listed for it in [Where it runs](#where-it-runs).
 
 On Qwen3.8-27B, `auto` looks at the MTP head only. Copy from the conversation runs there when you pick it with `--speculation ngram`.
@@ -52,7 +52,7 @@ When nothing in the list has passed its checks on this chip, the model decodes w
 
 ## Check it is on
 
-When the model loads, `mashbox run` prints one JSON line to stderr:
+When the model loads, `mashbox run` prints one JSON line to stderr. For a model from the catalog with `--speculation ngram` it reads:
 
 ```
 {"event": "speculation", "used": true, "method": "ngram", "draft_k": 3, "gated": false, "reason": "--speculation ngram", ...}

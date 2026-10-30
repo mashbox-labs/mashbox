@@ -39,6 +39,20 @@ def test_speculation_help_says_what_auto_reads():
     assert "else n-gram" not in h and "Qwen3.8-27B reads its MTP head only" in h, h
 
 
+def test_speculation_help_names_every_ngram_architecture():
+    """--speculation: the n-gram step names every GGUF architecture whose module has a verify pass and is not a
+    mixture of experts (drafters.select.applies turns those down), and no other"""
+    import re
+    from mashbox import catalog
+    from mashbox.gguf import archs as GA
+    runs = {a for a, m in GA.ARCHS.items()
+            if getattr(importlib.import_module(m), "SPEC_VERIFY", False) and not catalog.moe_arch(a)}
+    h = run_help("--speculation")
+    named = re.search(r"n-gram over the request's own text \(([^)]*) GGUF files\)", h)
+    assert named, h
+    assert set(re.split(r", | and ", named.group(1))) == runs, (named.group(1), sorted(runs))
+
+
 def test_mtp_0_is_off_and_long_form_0_is_refused(monkeypatch):
     """--mtp 0 turns speculation off; --speculation mtp --draft-k 0 stops with the 1 to k_max range"""
     from mashbox.models import qwen3_8_27b as Q
@@ -123,7 +137,7 @@ def test_a_forced_gguf_drafter_never_reads_the_auto_gate(tmp_path, monkeypatch, 
 
 
 def test_public_run_with_draft_stops_before_the_model_row_keys_and_server(monkeypatch, tmp_path):
-    """SPECd-F01: the public `mashbox run <models.json model> --speculation draft` in server form (no --prompt, a
+    """the public `mashbox run <models.json model> --speculation draft` in server form (no --prompt, a
     non-loopback --host) stops with its one line and exit 2 before the model row is read, an API key is made or the
     server front starts; no key file appears"""
     from mashbox.runtime import front
@@ -144,7 +158,7 @@ def test_public_run_with_draft_stops_before_the_model_row_keys_and_server(monkey
 
 
 def test_cmd_run_with_draft_stops_before_api_keys(monkeypatch):
-    """SPECd-F01: cmd_run called directly with --speculation draft stops (exit 2, one line) before api_keys,
+    """cmd_run called directly with --speculation draft stops (exit 2, one line) before api_keys,
     the server front or a load"""
     from mashbox.runtime import front
     seen, logs = [], []
@@ -166,7 +180,7 @@ PAGE_NAME = {"trained": "A trained drafter made for this model", "mtp": "The mod
 
 
 def test_speculation_help_names_every_drafter_in_the_order_of_choice():
-    """SPECd-F02: the --speculation help lists auto's order exactly as drafters.ORDER and docs/speculation.md do,
+    """the --speculation help lists auto's order exactly as drafters.ORDER and docs/speculation.md do,
     numbered, every kind without a module in this release marked "not in this release", and nothing more"""
     import re
     from mashbox.runtime import drafters as D

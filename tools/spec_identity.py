@@ -1,4 +1,4 @@
-"""ST-S13: are the MTP speculation programs of this tree the programs the chip records measured?
+"""Are the MTP speculation programs of this tree the programs the chip records measured?
 
 Builds the tiny Qwen3.8 MTP engine of tests/cpu/test_spec_in_step.py (random weights, no chip, no network), lists every
 program warm() compiles with speculation on (prefill with hidden states, plain decode, the drafter's prefill program and

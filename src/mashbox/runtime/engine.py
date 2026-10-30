@@ -1256,7 +1256,7 @@ class Engine:
         return (toks, t2s, p2s, (th, tg)), ck, cv, L
 
     def _spec_fault(self, e, ck, cv):
-        """A speculation call raised (fallback F-spec-row). When it failed before the device took the slot state (its
+        """A speculation call raised. When it failed before the device took the slot state (its
         donated K/V and linear state are all still there: tracing, compiling, the drafter's host side), the state is
         unchanged: this call replays with the plain decode program (warmed), and speculation stays off for this engine's
         life (spec_off, spec_why; spec_stats faults). -> True. Else False: the state is gone, so the A13 failure rules

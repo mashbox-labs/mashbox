@@ -1,4 +1,4 @@
-"""Speculation for any model (runtime/spec_step.py, runtime/drafters/): the n-gram drafter on every GGUF dense family
+"""Speculation for every architecture with a verify pass (runtime/spec_step.py, runtime/drafters/): the n-gram drafter on every GGUF dense family
 (llama, qwen2, qwen3: tiny f32 fixtures from tools/gguf_fixtures) and on the tiny hybrid Qwen3.8 BSHJ model, the dense
 verify pass, the drafter choice from metadata, the forced fallback, the per-row backoff and the call-level plain choice.
 CPU, no network.
@@ -52,8 +52,8 @@ RESIDUAL = (".attn_output.weight", ".ssm_out.weight", ".ffn_down.weight")
 PATHS = {}
 _COMPILES = [0]
 # The slow speculation rows (ST-S3's step mutants, ST-S2 at 64 users) run where speculation code changes:
-# runtime/spec_step.py, runtime/drafters/, runtime/drafter.py or the speculation parts of runtime/engine.py (plan 4.3:
-# mutants only when speculation paths change). MASHBOX_SPEC_SLOW=1 runs them; every other run skips them with this reason.
+# runtime/spec_step.py, runtime/drafters/, runtime/drafter.py or the speculation parts of runtime/engine.py (mutants
+# only when speculation paths change). MASHBOX_SPEC_SLOW=1 runs them; every other run skips them with this reason.
 SPEC_SLOW = [pytest.mark.slow, pytest.mark.skipif(os.environ.get("MASHBOX_SPEC_SLOW") != "1", reason=(
     "speculation slow row: runs with MASHBOX_SPEC_SLOW=1 where runtime/spec_step.py, runtime/drafters/, "
     "runtime/drafter.py or engine.py speculation code changes"))]
@@ -368,7 +368,7 @@ def test_st_s11_forced_failure_and_build_failure_decode_plain(fams, monkeypatch)
     assert "not gated" in lines[-1] or "not on a TPU" in lines[-1]
 
 
-# ---------------------------------------------------------------------------------------------------------- added in r2
+# ----------------------------------------------------------------------------------------------------------
 def test_ngram_find_equals_match():
     """find() (NumPy windows, run on the host for each live row before a call) equals match() on 3,000 histories"""
     rng = np.random.default_rng(3)
@@ -630,7 +630,7 @@ def drive_hist(eng, plan):
     return rows
 
 
-# ---------------------------------------------------------------------------------------------------------- added in r3
+# ----------------------------------------------------------------------------------------------------------
 def test_st_s12_backoff_wait_sequence():
     """the POLICY numbers: 4 rounds in a row with drafts and 0 accepted -> 16 rounds at k = 0; each further failure
     doubles the wait up to 256; an accepted draft resets it (Engine._backoff, the row's own record only)"""
@@ -775,7 +775,7 @@ def test_server_loop_ngram_equals_plain(fams, tmp_path, monkeypatch):
     assert (out[False][2], out[True][2]) == (0, 3) and out[True][3] > 0
 
 
-# ---------------------------------------------------------------------------------------------------------- added in r4
+# ----------------------------------------------------------------------------------------------------------
 def bucket_plan(V, seed=21):
     """one row alone first (row bucket 1), then 4 rows at once (row bucket 4)"""
     ps = loop_prompts(V, 5, seed)
@@ -783,7 +783,7 @@ def bucket_plan(V, seed=21):
 
 
 def test_k0_row_bucket_runs_plain(fams):
-    """a k_table with k = 0 at a row bucket (gate_apply writes it where speculation measured slower than plain): the
+    """a k_table with k = 0 at a row bucket (a gate record has it where speculation measured slower than plain): the
     warm-up lists no speculation program there and runs, calls at that bucket run the plain decode program, the other
     bucket speculates, and every row equals the plain engine's"""
     c = fams["llama-f32"][0]

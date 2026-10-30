@@ -1,4 +1,4 @@
-"""Speculative decoding inside the batched step, for every model the engine runs: one program per call runs N rounds of
+"""Speculative decoding inside the batched step, for every architecture with a verify pass: one program per call runs N rounds of
 draft, verify, accept, commit and after_commit for every decoding row of a row bucket.
 
 The three parts and who provides them:

@@ -702,7 +702,7 @@ def warm(eng, chat):
         return eng.warm(workers=nw)
     try:
         w = run()
-    except Exception as e:      # FALLBACK RULE: speculation that fails before ready leaves the plain engine, which warms again
+    except Exception as e:      # fallback: speculation that fails before ready leaves the plain engine, which warms again
         if isinstance(e, programs.TableFailed) or not getattr(eng, "DK", 0):
             raise               # a table program's failure ends this process, which never warms a second time (A13)
         eng.drop_speculation(failed=True)
@@ -903,7 +903,7 @@ def build_parser():
                            help="speculative decoding. auto (default): the first drafter that applies to the model file, in this "
                                 "order: 1 a trained drafter made for this model (not in this release); 2 the model's own MTP "
                                 "head; 3 a smaller draft model with the same tokenizer (only one you give with --draft-model); "
-                                "4 n-gram over the request's own text (llama, qwen2, qwen3 and qwen35 GGUF files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head "
+                                "4 n-gram over the request's own text (llama, qwen2, qwen3, qwen35, exaone and granite GGUF files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head "
                                 "only); off; or force one kind (then it says 'not gated on this chip'). One chip only")
             p.add_argument("--draft-k", type=int, metavar="K",
                            help="drafts per verify pass for a drafter you pick: ngram 1 to 8 (default 3); draft 1 to 8 (default 3); "
