@@ -77,6 +77,31 @@ jobs:
           files=$(python3 tools/ci_select.py --files-of "$AREA" --shard "$SHARD")
           python3 -m pytest $files -p no:cacheprovider -m "$AREA and not t0 and not quarantine" --durations=15 -rs -o faulthandler_timeout=900
 
+  t1-gate:
+    # The one required T1 check: green when every leg tools/ci_select.py picked passed, or when it picked none (a docs,
+    # licence or registry-version change runs T0 alone and skips every leg). Red when T0 failed, or when a picked leg
+    # failed, was cancelled or did not run.
+    needs: [t0, t1]
+    if: always()
+    name: t1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Every picked T1 leg passed
+        env:
+          T0: ${{ needs.t0.result }}
+          PICKED: ${{ needs.t0.outputs.any }}
+          T1: ${{ needs.t1.result }}
+        run: |
+          echo "t0=$T0 picked=$PICKED t1=$T1"
+          if [ "$T0" != "success" ]; then echo "T0 did not pass: $T0"; exit 1; fi
+          case "$PICKED" in
+            true) [ "$T1" = "success" ] || { echo "a picked T1 leg did not pass: $T1"; exit 1; } ;;
+            false) [ "$T1" = "skipped" ] || { echo "T1 legs ran although none was picked: $T1"; exit 1; } ;;
+            *) echo "T0 gave no T1 pick"; exit 1 ;;
+          esac
+          echo "T1 ok"
+
   track2rig-video:
     # The video step's own package: Python 3.10, as the tracker it wraps. CPU tests only (no tracker, no GPU).
     needs: t0
