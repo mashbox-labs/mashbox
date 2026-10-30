@@ -186,6 +186,27 @@ def test_the_repos_paragraph_is_rendered_from_models_json_and_true_for_every_rep
             assert claim not in text, (claim, text)
 
 
+def test_the_repos_paragraph_claims_our_tpu_kernels_only_as_far_as_the_rows_ship_them():
+    """The run tier's sentence claims our own TPU kernels from the rows (each row's kernels[]): for every repo when
+    every row of that collection ships kernels, for "some" when only some do, and not at all when none do. A port
+    that runs on plain JAX with no compiled kernels (TRELLIS.2) keeps the sentence true."""
+    def tier(reg):
+        return next(x for x in SC.repos_text(reg).split(". ") if '"TPU models"' in x)
+    tpu = [m for m in SC.live(REG) if m.get("hf_repo") and SC.KINDS[m["kind"]].get("collection") == SC.TPU_COLLECTION]
+    assert any(m.get("kernels") for m in tpu) and not all(m.get("kernels") for m in tpu), "the case this test covers"
+    some = tier(no_listed())
+    assert "port and tune with our own TPU kernels" not in some and "some of them also use our own TPU kernels" in some
+    reg = no_listed()
+    for m in reg["models"]:
+        m["kernels"] = m.get("kernels") or [{"file": "kernels/k.whl", "sha256": "a" * 64}]
+    every = tier(reg)
+    assert "port and tune with our own TPU kernels" in every and "some of them" not in every
+    for m in reg["models"]:
+        m["kernels"] = []
+    none = tier(reg)
+    assert "kernels" not in none and "Google Cloud TPU" in none and "`mashbox` package" in none
+
+
 def test_the_card_carries_the_repos_paragraph_as_rendered_or_fails_online():
     full = collections(sorted(SC.tpu_ports(REG)))
     assert org_problems(new_card(), full) == []
