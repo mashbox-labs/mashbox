@@ -2,6 +2,16 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.9
+
+### A compile cache is unpacked only on the deployment it was built for
+
+1. **`kernels.accelerator` (new):** this host's accelerator as compile-cache rows name it, the chip family and the number of chips counted by chip coordinates (`v6e-1`, `v6e-4`); `None` off TPU.
+2. **`hub.compile_cache(m, cache_dir, log, tp=1)`:** a `files[]` row with `kind` `xla-cache` is unpacked only when its `accelerator` equals `kernels.accelerator()` and its `tp` (1 when absent) equals the run's tensor-parallel size, and its `jax`, `jaxlib` and `libtpu` match as before. A row that names no `accelerator` is never unpacked. `cli.load` passes its `tp`.
+3. **`models.json`:** the Qwen3.8-27B cache row names `accelerator` `v6e-1` and `tp` 1; the Hy-Nomas cache row names `accelerator` `v6e-4`.
+
+Why: the row was matched by chip family alone, so a Qwen3.8-27B start on a v6e-4 at tensor-parallel size 4 unpacked the one-chip cache and still compiled every program at first use. Compatible: a run on the deployment a cache was built for unpacks it as before; any other run logs one line and compiles at first use, as it does with no cache.
+
 ## 0.1.8
 
 ### Routed experts on the kernel package: zero-flag bundle, F32 weights held as values, /health, a record-only top-k hook

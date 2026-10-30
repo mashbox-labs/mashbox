@@ -24,6 +24,17 @@ def chip_family():
     return kind
 
 
+def accelerator():
+    """This host's accelerator type as compile-cache rows name it: chip family + chips, e.g. 'v6e-1', 'v6e-4' (the Cloud
+    TPU accelerator type on v5e and v6e; on v5p the Cloud type counts TensorCores, and no cache row names a v5p). Chips are
+    counted by chip coordinates, so a chip with two devices counts once. None off TPU."""
+    fam = chip_family()
+    if fam is None:
+        return None
+    devs = jax.devices()
+    return f"{fam}-{len({(d.process_index, tuple(getattr(d, 'coords', (i,)))) for i, d in enumerate(devs)})}"
+
+
 def versions():
     import importlib.metadata as md
     out = {"jax": jax.__version__}

@@ -390,7 +390,7 @@ def test_load_hands_the_speculation_why_line_to_the_engine(run, monkeypatch, tmp
     monkeypatch.setattr(hub, "model_entry", lambda model_id: m)
     monkeypatch.setattr(hub, "upstream_dir", lambda mm, log=print: str(tmp_path))
     monkeypatch.setattr(hub, "weights_file", lambda mm, name=None, path=None, log=print: str(tmp_path / "w.bshj"))
-    monkeypatch.setattr(hub, "compile_cache", lambda mm, cache_dir, log=print: None)
+    monkeypatch.setattr(hub, "compile_cache", lambda mm, cache_dir, log=print, tp=1: None)
     monkeypatch.setattr(cli, "setup_cache", lambda d=None: str(tmp_path / "xla"))
     monkeypatch.setattr(cli, "tensor_parallel", lambda n: 1)
     monkeypatch.setattr(cli, "fit_check", lambda a, mm, d, tp: None)
