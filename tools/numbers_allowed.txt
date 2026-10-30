@@ -126,3 +126,8 @@ packages/track2rig-video/README.md | body size between two frames | the camera-c
 packages/track2rig-video/README.md | in `refine_endpoints` on a 24 GB GPU | NVIDIA L4 memory, NVIDIA's published spec
 packages/track2rig-video/README.md | its first 5 seconds at every 2nd frame | clip trim setting of the example (--max-frames 60 --frame-step 2), not a measurement
 docs/models/trellis-2.md | first run downloads 11.0 GB into | TRELLIS.2 download, the sum of its pinned files (upstream.json)
+docs/models/lfm3-1-7b-coreml.md | `prefill`: 8 tokens per call | the prefill function's fixed input length (a shape of the model), not a measurement
+docs/models/lfm3-1-7b-coreml.md | `decode`: 1 token per call | the decode function's input length (a shape of the model), not a measurement
+docs/models/lfm3-1-7b-coreml.md | `verify`: 8 tokens per call | the verify function's fixed input length (a shape of the model), not a measurement
+docs/models/lfm3-1-7b-coreml.md | reply length, which is 256 tokens unless you set it | the example program's default reply cap (a setting)
+docs/models/lfm3-1-7b-coreml.md | The context is 2048 tokens | the model's context length as built (a shape of the model), not a measurement

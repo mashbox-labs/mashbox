@@ -106,7 +106,11 @@ UNCONFIRMED = {"", "unconfirmed", "todo", "tbd", "unknown"}
 # elsewhere[]: models `mashbox run` does not start (a weights-only repo, a port to another device), listed with the device
 # their files are made for and a how-to-run link instead of a run command. A row names one of DEVICES and holds no run
 # path, chip row or number (ELSEWHERE_NOT): how it runs, and how fast, is the linked page's to say.
-DEVICES = ("TPU", "Apple Neural Engine")
+# Per device: its words on the pages and the Hugging Face collection its elsewhere[] repos sit in. Never a kind's
+# collection: "TPU models" holds what `mashbox run` starts on TPU.
+DEVICE_INFO = {"TPU": {"label": "Google Cloud TPU", "collection": "Weights for TPU"},
+               "Apple Neural Engine": {"label": "the Apple Neural Engine", "collection": "Apple Neural Engine models"}}
+DEVICES = tuple(DEVICE_INFO)
 ELSEWHERE_KEYS = ("id", "name", "summary", "device", "how_to_run", "hf_repo", "hf_revision", "upstream")
 ELSEWHERE_NOT = ("run", "path", "install", "chips", "results", "headline", "kernels", "launch")
 MARK_START, MARK_END = "<!-- models:start -->", "<!-- models:end -->"
@@ -197,6 +201,21 @@ def validate_elsewhere(reg, problems):
         for j, c in enumerate(up.get("components") or []):
             for msg in licence_field_problems(c):
                 problems.add(where, f"upstream.components[{j}]: {msg}")
+
+
+def elsewhere_page_problems(reg, root, problems):
+    """A listed row whose how_to_run is a docs model page links its own (mashbox.gg/docs/models/<id>), and that page,
+    docs/models/<id>.md, is in the tree."""
+    base = docs_url({"id": ""})
+    for i, r in enumerate(reg.get("elsewhere") or []):
+        link = str(r.get("how_to_run", "")).rstrip("/")
+        if not link.startswith(base):
+            continue
+        where = f"elsewhere[{i}] {r.get('id', '?')}"
+        if link != docs_url(r):
+            problems.add(where, f"how_to_run {link} is a docs model page but not its own page ({docs_url(r)})")
+        elif not (Path(root) / "docs" / "models" / f"{r['id']}.md").is_file():
+            problems.add(where, f"how_to_run is its docs page, and docs/models/{r['id']}.md is not in the tree")
 
 
 def validate(reg, repo_root, problems, release=False):
@@ -383,6 +402,7 @@ def validate(reg, repo_root, problems, release=False):
     validate_catalog(reg, problems)
     if reg["schema"] != 1:
         validate_elsewhere(reg, problems)
+        elsewhere_page_problems(reg, repo_root, problems)
 
 
 # ---------------------------------------------------------------- catalog (schema 2: catalog blocks, gguf[], engine_kernels[])
@@ -1038,8 +1058,10 @@ def builds_head(reg):
 
 def sidebar_block(reg):
     """The docs sidebar's models list (docs/SUMMARY.md between the models markers): every live model's page, in the
-    README table's order. A model with no docs/models/<id>.md yet keeps its line: the site builds its page from the row."""
-    return "\n".join(f"* [{m['name']}](models/{m['id']}.md)" for m in live(reg))
+    README table's order. A model with no docs/models/<id>.md yet keeps its line: the site builds its page from the row.
+    Then each listed row (elsewhere[]) whose how_to_run is its own docs page."""
+    own = [e for e in reg.get("elsewhere") or [] if str(e.get("how_to_run", "")).rstrip("/") == docs_url(e)]
+    return "\n".join(f"* [{m['name']}](models/{m['id']}.md)" for m in live(reg) + own)
 
 
 def readme_block(reg):
@@ -1096,13 +1118,81 @@ def collections_of(m):
 
 
 def collection_wants(reg):
-    """{collection title: the live repos of our org that sit in it}. Every kind's collection is listed, empty or not."""
+    """{collection title: the live repos of our org that sit in it}. Every kind's collection is listed, empty or not;
+    an elsewhere[] row sits in its device's collection (DEVICE_INFO), listed once a row names that device."""
     want = {k["collection"]: set() for k in KINDS.values() if k.get("collection")}
     for m in live(reg):
         if m["hf_repo"]:
             for title in collections_of(m):
                 want.setdefault(title, set()).add(m["hf_repo"])
+    for e in reg.get("elsewhere") or []:
+        if e.get("hf_repo") and e.get("device") in DEVICE_INFO:
+            want.setdefault(DEVICE_INFO[e["device"]]["collection"], set()).add(e["hf_repo"])
     return want
+
+
+# The org card's one paragraph on what our repos hold is rendered from models.json between these markers (views_sync
+# re-renders it after each merge; check_online and the drift check hold it): the run tier by its collection, the repos
+# `mashbox run` does not start by their device's collection, our own trained models. A hand-typed version went false the
+# day the weights-only repos went public.
+REPOS_START, REPOS_END = "<!-- repos:start -->", "<!-- repos:end -->"
+REPOS_RE = re.compile(re.escape(REPOS_START) + r"\n?(.*?)\n?" + re.escape(REPOS_END), re.S)
+
+
+def repo_suffix(repo):
+    """"-TPU" for mashbox-labs/Real-ESRGAN-TPU: the part of the repo name after its last hyphen ("" with none)"""
+    name = repo.split("/", 1)[-1]
+    return "-" + name.rsplit("-", 1)[1] if "-" in name else ""
+
+
+def repos_text(reg):
+    """The org card's repos paragraph, one line, from models.json. It names no model and no count, and claims nothing a
+    repo of any tier does not keep: sizes, bits per weight, numbers and file names are each card's to give."""
+    rows = [m for m in live(reg) if m.get("hf_repo")]
+    listed = [e for e in reg.get("elsewhere") or [] if e.get("hf_repo") and e.get("device") in DEVICE_INFO]
+    out = ["The models here are our own builds."]
+    tiers = {}
+    for m in rows:
+        k = KINDS[m["kind"]]
+        if k["suffix"]:
+            tiers.setdefault(k.get("collection"), set()).add(k["suffix"])
+    for title in sorted(tiers, key=lambda t: (t is None, t or "")):
+        names = " or ".join(f"`<Model>{x}`" for x in sorted(tiers[title]))
+        where = f' in the "{title}" collection' if title else ""
+        what = (" are open models we port and tune with our own TPU kernels, and they run on Google Cloud TPU with the "
+                "`mashbox` package." if title == TPU_COLLECTION else " run with the `mashbox` package.")
+        out.append(f"{names} repos{where}{what}")
+    for dev, info in DEVICE_INFO.items():
+        repos = [e["hf_repo"] for e in listed if e["device"] == dev]
+        if repos:
+            names = " or ".join(f"`<Model>{x}`" for x in sorted({repo_suffix(r) for r in repos}))
+            out.append(f'{names} repos in the "{info["collection"]}" collection hold files made for {info["label"]} that '
+                       "`mashbox run` does not start; each card shows how to use them.")
+    own = {}
+    for m in rows:
+        if not KINDS[m["kind"]]["suffix"]:
+            lab = KINDS[m["kind"]]["label"].lower()
+            own[lab] = own.get(lab, 0) + 1
+    if own:
+        said = [(f"{'an' if lab[0] in 'aeiou' else 'a'} {lab} model" if n == 1 else f"{lab} models")
+                for lab, n in sorted(own.items())]
+        out.append(f"We also trained {' and '.join(said)} of our own.")
+    if rows or listed:
+        out.append("Every port's card names the original model and its makers and keeps the original licence.")
+    return " ".join(out)
+
+
+def org_card_problems(reg, text, where):
+    """overview_problems, and the card carries its repos paragraph once, exactly as repos_text renders it."""
+    out = overview_problems(reg, text, where)
+    got = REPOS_RE.findall(text)
+    if len(got) != 1:
+        out.append((where, f"carries {len(got)} repos paragraphs ({REPOS_START} ... {REPOS_END}); want 1, rendered from "
+                           "models.json (repos_text)"))
+    elif got[0].strip() != repos_text(reg):
+        out.append((where, "repos paragraph differs from the one rendered from models.json (repos_text; views_sync "
+                           "re-renders it after each merge)"))
+    return out
 
 
 def collection_problems(reg, body, where, fetch=None):
@@ -1735,9 +1825,17 @@ def render_all(reg, repo, profile, templates, problems, places=None, org_card=No
         out = splice(summary.read_text(), sidebar_block(reg), "docs/SUMMARY.md", problems)
         if out is not None:
             views["docs/SUMMARY.md"] = out
-    for page in (profile, org_card):   # overviews: checked, never rendered (they carry no list to render)
+    # overviews carry no model list; the org card's repos paragraph is their one rendered part. It comes out in
+    # render_all.overviews (render --out writes it), never in the views compared with the tree
+    render_all.overviews = {}
+    for key, page, rule in (("profile/README.md", profile, overview_problems),
+                            ("hf-org-card/README.md", org_card, org_card_problems)):
         if page is not None:
-            for w, msg in overview_problems(reg, page.read_text(), str(page)):
+            text = page.read_text()
+            if REPOS_START in text:
+                text = REPOS_RE.sub(lambda _: f"{REPOS_START}\n{repos_text(reg)}\n{REPOS_END}", text, count=1)
+                render_all.overviews[key] = text
+            for w, msg in rule(reg, text, str(page)):
                 problems.add(w, msg)
     for m in live(reg):  # a "coming soon" model's card is not published yet; it is checked again at its launch
         if m["hf_repo"]:
@@ -2270,8 +2368,10 @@ def figure_text(reg, owner, key):
         f = (reg.get("figures") or {}).get(key)
         return f and f["text"]
     m = next((x for x in reg["models"] if x["id"] == owner), None)
-    if m is None:
-        return None
+    if m is None:   # a listed row (elsewhere[]): its figures only (no chip row, run args or results)
+        e = next((x for x in reg.get("elsewhere") or [] if x.get("id") == owner), None)
+        f = ((e or {}).get("figures") or {}).get(key)
+        return f and f["text"]
     if key.startswith("chip-") and (key[5:] in CHIPS or key[5:] == "cpu"):   # chip-cpu: a CPU model's chips.cpu row
         return chip_text(m, key[5:])
     if key.startswith("arg-"):   # r:MODEL/arg-ctx: the value after --ctx in cloud.agents.run_args ("32,768")
@@ -2297,11 +2397,16 @@ def load_numbers(repo):
     return json.loads(f.read_text()) if f.is_file() else None
 
 
+def figure_owners(reg):
+    """[(owner, row)] that hold named figures: "cloud" (models.json itself), each models[] row and each elsewhere[] row"""
+    return [("cloud", reg)] + [(m["id"], m) for m in reg["models"]] + [(e["id"], e) for e in reg.get("elsewhere") or []]
+
+
 def merge_figures(reg, nmap, problems=None):
     """The named figures live in the private map; the checks read them as models.json's. A figure still in models.json
     (a branch from before the map) is read too, and fails the check until render --write moves it."""
     figs = nmap.get("figures") or {}
-    for owner, row in [("cloud", reg)] + [(m["id"], m) for m in reg["models"]]:
+    for owner, row in figure_owners(reg):
         inline = row.get("figures") or {}
         if inline and problems is not None:
             problems.add("models.json", f"{owner}: {len(inline)} figures belong in {NUMBERS.as_posix()} (run render --write)")
@@ -2642,7 +2747,7 @@ def docstrings(repo):
 def check_numbers(reg, repo, problems, places=None):
     """M4c: every measured number in hand-written prose is in a number marker or allowed by name; figures are
     checked against their result when they repeat one (figures[...]["from"]). places: the private map's pages."""
-    for owner, figs in [("cloud", reg.get("figures") or {})] + [(m["id"], m.get("figures") or {}) for m in reg["models"]]:
+    for owner, figs in [(o, r.get("figures") or {}) for o, r in figure_owners(reg)]:
         for key, f in figs.items():
             if not re.fullmatch(r"[a-z][a-z0-9_.-]*", key) or not f.get("text") or not f.get("what"):
                 problems.add("models.json", f"figure {owner}/{key}: needs a lower-case name, text and what")
@@ -2753,7 +2858,7 @@ def check_numbers(reg, repo, problems, places=None):
                 problems.add(f.relative_to(repo).as_posix(), f"marker r:{mt.group(2)}/{mt.group(3)} ({r['metric']}) follows "
                                                              f"words for the {'/'.join(sorted(said))} start: wrong result number?")
     refs = {(mt.group(2), mt.group(3)) for f in _prose(repo) + ui_pages(repo) for mt in MARK_RE.finditer(_page(repo, f, places))}
-    for owner, figs in [("cloud", reg.get("figures") or {})] + [(m["id"], m.get("figures") or {}) for m in reg["models"]]:
+    for owner, figs in [(o, r.get("figures") or {}) for o, r in figure_owners(reg)]:
         for key in figs:
             if (owner, key) not in refs:
                 problems.add("models.json", f"figure {owner}/{key} is on no page (remove it)")
@@ -3498,12 +3603,17 @@ def elsewhere_online_problems(r, fetch):
         elif hashlib.sha256(text.encode()).hexdigest() != want:
             out.append(f"{name} at {rev[:12]} differs from the pinned upstream file")
     page, _, anchor = str(r["how_to_run"]).partition("#")
-    if page.rstrip("/") == f"https://huggingface.co/{repo}" and anchor:
+    on_card = page.rstrip("/") == f"https://huggingface.co/{repo}" and anchor
+    if on_card or r.get("figures"):
         st, card = fetch.get(f"https://huggingface.co/{repo}/raw/{rev}/README.md")
         if st != 200:
-            out.append(f"card not readable at {rev[:12]} (HTTP {st})")
-        elif anchor not in {heading_anchor(h) for h in HEADING_RE.findall(card)}:
+            return out + [f"card not readable at {rev[:12]} (HTTP {st})"]
+        if on_card and anchor not in {heading_anchor(h) for h in HEADING_RE.findall(card)}:
             out.append(f"how_to_run #{anchor}: no such heading in the card at {rev[:12]}")
+        flat = " ".join(card.split())
+        for key, f in sorted((r.get("figures") or {}).items()):   # one copy of each number: the card shows the row's
+            if " ".join(str(f.get("text", "")).split()) not in flat:
+                out.append(f"figure {key} {f.get('text')!r} is not on the card at {rev[:12]}")
     return out
 
 
@@ -3593,7 +3703,7 @@ def check_online(reg, views, fetch, problems, repo=None):
     if st != 200:
         problems.add("hf org card", f"not readable (HTTP {st})")
     else:
-        for w, msg in overview_problems(reg, card, "hf org card (live)"):
+        for w, msg in org_card_problems(reg, card, "hf org card (live)"):
             problems.add(w, msg)
     st, body = fetch.get(f"https://huggingface.co/api/collections?owner={hf_org}&limit=100")
     if st != 200:
@@ -3687,7 +3797,7 @@ def main(argv=None):
         return 1 if problems else 0
     nmap = load_numbers(repo)
     if nmap is not None:
-        moved = {o: dict(r.get("figures") or {}) for o, r in [("cloud", reg)] + [(m["id"], m) for m in reg["models"]]}
+        moved = {o: dict(r.get("figures") or {}) for o, r in figure_owners(reg)}
         merge_figures(reg, nmap, problems if a.cmd == "check" else None)
     views = render_all(reg, repo, profile, templates, problems, nmap["pages"] if nmap is not None else None,
                        org_card=org_card)
@@ -3695,7 +3805,7 @@ def main(argv=None):
     if a.cmd == "render" and nmap is not None and (a.write or a.out):
         # the private map: figures move out of models.json, places follow the pages as rendered
         new = {"_about": nmap.get("_about", ""), "figures": {}, "pages": render_all.places}
-        for o, r in [("cloud", reg)] + [(m["id"], m) for m in reg["models"]]:
+        for o, r in figure_owners(reg):
             if r.get("figures"):
                 new["figures"][o] = dict(sorted(r["figures"].items()))
         base = Path(a.out) if a.out else repo
@@ -3704,7 +3814,7 @@ def main(argv=None):
         print("wrote", base / NUMBERS)
         if any(moved.values()):
             raw = json.loads((repo / "models.json").read_text())
-            for row in [raw] + raw["models"]:
+            for row in [raw] + raw["models"] + (raw.get("elsewhere") or []):
                 row.pop("figures", None)
             text = json.dumps(raw, indent=2, ensure_ascii=False) + "\n"
             for dest in [base / "models.json"] + ([base / "src" / "mashbox" / "models.json"]
@@ -3725,6 +3835,12 @@ def main(argv=None):
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(text)
             print("wrote", dest)
+        for key, text in render_all.overviews.items():   # the org card is on Hugging Face: --out only, never the tree
+            if a.out:
+                dest = Path(a.out) / key
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(text)
+                print("wrote", dest)
         for p in problems:
             print("FAIL", p)
         return 1 if problems else 0

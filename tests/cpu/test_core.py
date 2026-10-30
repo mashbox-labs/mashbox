@@ -134,12 +134,13 @@ def test_docs_sidebar_lists_every_live_model():
     problems = sc.Problems()
     assert sc.splice(summary, sc.sidebar_block(reg), "docs/SUMMARY.md", problems) == summary and not problems
     block = summary[summary.index(sc.MARK_START):summary.index(sc.MARK_END)]
+    own = [e for e in reg.get("elsewhere") or [] if e["how_to_run"].rstrip("/") == sc.docs_url(e)]   # listed, own page
     assert [ln for ln in block.splitlines() if ln.startswith("* ")] == \
-        [f"* [{m['name']}](models/{m['id']}.md)" for m in sc.live(reg)]
+        [f"* [{m['name']}](models/{m['id']}.md)" for m in sc.live(reg) + own]
     new = dict(reg["models"][0], id="new-model", name="New Model")
     soon = dict(reg["models"][0], id="soon-model", name="Soon Model", launch="coming soon")
     lines = sc.sidebar_block(dict(reg, models=reg["models"] + [new, soon])).splitlines()
-    assert lines[-1] == "* [New Model](models/new-model.md)" and not any("soon-model" in ln for ln in lines)
+    assert lines[len(sc.live(reg))] == "* [New Model](models/new-model.md)" and not any("soon-model" in ln for ln in lines)
 
 
 def test_sync_check_catches_typed_drift(tmp_path):
@@ -784,7 +785,8 @@ def test_sync_online_coming_soon_model():
            "models": [{"id": "soon", "name": "Soon", "kind": "world", "in": "text", "out": "video",
                        "upstream": {"maker": "Someone"}, "hf_repo": "mashbox-labs/Soon-TPU", "hf_revision": "",
                        "launch": "coming soon"}]}
-    profile = org_card = "# Org\n\nWe run open models on Google Cloud TPU.\n"
+    profile = "# Org\n\nWe run open models on Google Cloud TPU.\n"
+    org_card = f"{profile}\n{sc.REPOS_START}\n{sc.repos_text(reg)}\n{sc.REPOS_END}\n"   # its repos paragraph as rendered
 
     class Fetch:
         def __init__(self, repo_state):

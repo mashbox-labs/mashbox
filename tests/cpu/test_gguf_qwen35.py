@@ -816,3 +816,98 @@ def test_qwen35_cache_is_the_shared_layout():
     assert K2.shape == (3, 5, 16, 8) and float(K2[:, 2, 7].min()) == 1.0 and float(jnp.abs(K2).sum()) == 3 * 8
     k, v = A.kv_read(K2, K2, 1, jnp.array([2, 0]), 8, False, 2, 4)
     assert k.shape == (2, 8, 2, 4) and float(k[0, 7].min()) == 1.0
+
+
+# ------------------------------------------------------------------------- linear-attention state read and write
+# Added 2026-10-30, before the change: a v6e profile of Qwen3.5-4B Q4_K_M decode showed a gather and a scatter of the
+# (NG, FI-1, S+1, HV, DK, DV) float32 pool once per layer group.
+def _pool_ops(fn, args, shapes):
+    """primitive names of every equation whose first operand has one of `shapes`, in fn's jaxpr and its sub-jaxprs"""
+    out = []
+
+    def walk(j):
+        for e in j.eqns:
+            a = getattr(e.invars[0], "aval", None) if e.invars else None
+            if a is not None and tuple(getattr(a, "shape", ())) in shapes:
+                out.append(e.primitive.name)
+            for p in e.params.values():
+                for q in (p if isinstance(p, (list, tuple)) else [p]):
+                    if hasattr(q, "jaxpr"):
+                        walk(q.jaxpr if hasattr(q.jaxpr, "eqns") else q.jaxpr.jaxpr)
+    walk(jax.make_jaxpr(fn)(*args).jaxpr)
+    return out
+
+
+def test_decode_reads_and_writes_the_recurrent_state_in_place(tmp_path):
+    """Decode rows are slots 0..B-1 (contig): each layer group reads its rows of the linear-attention pools (R float32,
+    conv tail C) with one slice and writes them back with dynamic_update_slice, never a gather or scatter on a whole
+    pool; the values are the slot-indexed path's (a fresh row starts from zero, a padding row keeps its state, the other
+    slots are untouched)."""
+    p, _, _ = fixture("qwen35-f32", tmp_path)
+    f = File(p)
+    c = A.Config(f, act=jnp.float32)
+    W, _ = A.load(f, c, use_kernels=False)
+    fwd = A.make_forward(c)
+    S, CTX, B = 4, 32, 3
+    ck, cv = A.new_state(c, S, CTX)
+    rng = np.random.default_rng(0)
+    cv = tuple(jnp.asarray(rng.normal(size=a.shape) * 0.1, a.dtype) for a in cv)      # live state in every slot
+    i32 = jnp.int32
+    toks = jnp.asarray(rng.integers(1, c.V, (B, 1)), i32)
+    p0, lens, slots = jnp.asarray([5, 9, 0], i32), jnp.ones((B,), i32), jnp.arange(B, dtype=i32)
+    keep = jnp.asarray([True, False, True])         # row 1 a padding row, row 2 fresh (p0 0)
+
+    def step(contig):
+        return lambda W, ck, cv: fwd(W, ck, cv, toks, p0, lens, slots, CTX, contig=contig, keep=keep)
+    ops_ = _pool_ops(step(True), (W, ck, cv), {tuple(a.shape) for a in cv})
+    assert "gather" not in ops_ and "scatter" not in ops_, ops_
+    assert ops_.count("dynamic_update_slice") >= 2, ops_
+    a, b = jax.jit(step(True))(W, ck, cv), jax.jit(step(False))(W, ck, cv)
+    for x, y in zip(jax.tree.leaves((a["cv"], a["ck"], a["lg"])), jax.tree.leaves((b["cv"], b["ck"], b["lg"]))):
+        assert np.array_equal(np.asarray(x), np.asarray(y))
+    for n, r in enumerate(a["cv"]):
+        assert np.array_equal(np.asarray(r[:, :, B:]), np.asarray(cv[n][:, :, B:]))      # other slots and the scratch slot
+        assert np.array_equal(np.asarray(r[:, :, 1]), np.asarray(cv[n][:, :, 1]))        # the padding row
+
+
+def _libtpu():
+    try:
+        return importlib.util.find_spec("libtpu") is not None
+    except Exception:
+        return False
+
+
+_TPU_DEC = {}
+
+
+def _tpu_decode_programs(monkeypatch):
+    """tools/kv_hlo_check.py's numbers for the decode programs (one row, all slots) of a qwen35 model whose pools are over
+    1 MiB (8 layers, linear attention 8 key / 16 value heads of 128, 8 slots): a deviceless v6e compile, once per run"""
+    monkeypatch.setenv("TPU_SKIP_MDS_QUERY", "1")
+    monkeypatch.setenv("ALLOW_MULTIPLE_LIBTPU_LOAD", "1")
+    if not _TPU_DEC:
+        s = importlib.util.spec_from_file_location("kv_hlo_check", os.path.join(ROOT, "tools", "kv_hlo_check.py"))
+        m = importlib.util.module_from_spec(s)
+        s.loader.exec_module(m)
+        m.MODELS["t-gdn"] = ("qwen35", dict(layers=8, hp=dict(D=128, F=128, H=4, KV=2, HD=64, RD=32, HK=8, HV=16, DK=128)))
+        _TPU_DEC.update(m.run("t-gdn", S=8, CTX=256, K=4, programs=("dec1", "decS"), log=lambda *_: None))
+    assert len(_TPU_DEC["cache"]) >= 3, _TPU_DEC["cache"]         # K/V, R and C tracked
+    return _TPU_DEC["programs"]
+
+
+@pytest.mark.skipif(not _libtpu(), reason="needs libtpu on the host for a deviceless TPU compile (no chip)")
+def test_tpu_decode_updates_the_recurrent_state_in_place(monkeypatch):
+    """The compiled TPU decode programs hold no gather or scatter on a whole linear-attention pool or K/V cache, and
+    the state is donated (updated in place)."""
+    for p, r in _tpu_decode_programs(monkeypatch).items():
+        assert "error" not in r and r["pool_scatters"] == 0 and r["pool_gathers"] == 0 and r["aliased"], (p, r)
+
+
+@pytest.mark.skipif(not _libtpu(), reason="needs libtpu on the host for a deviceless TPU compile (no chip)")
+@pytest.mark.xfail(strict=True, reason="MEASURED 2026-10-30: 2 copies of the conv pool C per "
+                   "decode program, at the call's entry and exit (outside the step loop), the same before and after the "
+                   "in-place change: TPU's device layout of (.., S+1, CK-1 = 3, CONV) puts another axis second-minor, the "
+                   "loop holds C row-major. Open item.")
+def test_tpu_decode_holds_no_copy_of_a_pool(monkeypatch):
+    for p, r in _tpu_decode_programs(monkeypatch).items():
+        assert "error" not in r and r["cache_copies"] == 0, (p, r)

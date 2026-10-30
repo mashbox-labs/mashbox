@@ -524,10 +524,14 @@ def make_forward(c, decode_kernels=None):
             return x + ffn(h, w["wg"], w["wu"], w["wd"])
 
         def group(x, R, C, g, w, exps=None):
-            gi = jnp.full((FI - 1, B), g, jnp.int32)
-            ii = jnp.broadcast_to(jnp.arange(FI - 1, dtype=jnp.int32)[:, None], (FI - 1, B))
-            si = jnp.broadcast_to(slots[None, :], (FI - 1, B))
-            Rg0, Cg0 = R[gi, ii, si], C[gi, ii, si]
+            if contig:            # rows are slots 0..B-1 (decode, verify): one slice of group g's rows of each pool, and
+                Rg0 = lax.dynamic_slice(R, (g, 0, 0, 0, 0, 0), (1, FI - 1, B) + R.shape[3:])[0]    # one in-place
+                Cg0 = lax.dynamic_slice(C, (g, 0, 0, 0, 0), (1, FI - 1, B) + C.shape[3:])[0]       # write below
+            else:
+                gi = jnp.full((FI - 1, B), g, jnp.int32)
+                ii = jnp.broadcast_to(jnp.arange(FI - 1, dtype=jnp.int32)[:, None], (FI - 1, B))
+                si = jnp.broadcast_to(slots[None, :], (FI - 1, B))
+                Rg0, Cg0 = R[gi, ii, si], C[gi, ii, si]
             Rg = jnp.where(fresh[None, :, None, None, None], 0.0, Rg0)
             Cg = jnp.where(fresh[None, :, None, None], jnp.zeros((), C.dtype), Cg0)
             rl, cl = [], []
@@ -550,8 +554,12 @@ def make_forward(c, decode_kernels=None):
             if keep is not None:
                 km = keep[None, :, None, None]
                 Rn, Cn = jnp.where(km[..., None], Rn, Rg0), jnp.where(km, Cn, Cg0)
-            R = R.at[gi, ii, si].set(Rn)
-            C = C.at[gi, ii, si].set(Cn)
+            if contig:            # in place: no gather or scatter of the whole pool
+                R = lax.dynamic_update_slice(R, Rn[None], (g, 0, 0, 0, 0, 0))
+                C = lax.dynamic_update_slice(C, Cn[None], (g, 0, 0, 0, 0))
+            else:
+                R = R.at[gi, ii, si].set(Rn)
+                C = C.at[gi, ii, si].set(Cn)
             return x, R, C, k, v, None
 
         if not isinstance(W["g"], list):
