@@ -71,7 +71,7 @@
         ]
       },
       "hf_repo": "mashbox-labs/Hy-Nomas-TPU",
-      "hf_revision": "15fba8b6b9e694ac396862268525ec31dbd9efe6",
+      "hf_revision": "d6bf490704a2dad3a81e6ba15743ccb8285a5baa",
       "card_release": "0.1.5",
       "pipeline_tag": null,
       "chips": {
@@ -238,7 +238,7 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "e54539661c83ecde08ffd46d818a8cde847dba16",
+      "hf_revision": "4cf19d0b3df34b8f26682cb70fab6c530f5ff8c6",
       "card_release": "0.1.5",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
