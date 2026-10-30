@@ -1,0 +1,37 @@
+"""The contract results writer (tests/contracts/conftest.py) on its own: status, fingerprint and record rules."""
+import json
+import subprocess
+import sys
+import textwrap
+
+
+def _run(tmp_path, body):
+    (tmp_path / "conftest.py").write_text((__import__("pathlib").Path(__file__).with_name("conftest.py")).read_text())
+    (tmp_path / "test_x.py").write_text(textwrap.dedent(body))
+    out = tmp_path / "c.json"
+    subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(tmp_path)], capture_output=True,
+                   env={"MASHBOX_CONTRACTS_OUT": str(out), "PATH": "/usr/bin:/bin"}, cwd=tmp_path)
+    return json.loads(out.read_text())["contracts"]
+
+
+def test_status_and_fingerprint_rules(tmp_path):
+    r = _run(tmp_path, """
+        import numpy as np, pytest
+        def test_a(contract): contract("k/pass").record([1, 2, 3])
+        def test_b(contract): contract("k/fail").record(b"x"); assert False
+        @pytest.mark.xfail(strict=True, reason="known gap")
+        def test_c(contract): contract("k/known").record("y"); assert False
+        def test_d(contract): contract("k/float").record(np.ones(2, np.float32))
+        def test_e(contract): contract("k/exact").record(np.ones(2, np.float32), exact=True)
+        def test_f(contract): contract("k/skip"); pytest.skip("no")
+    """)
+    assert {k: v["status"] for k, v in r.items()} == {"k/pass": "PASS", "k/fail": "FAIL", "k/known": "FAIL",
+                                                     "k/float": "FAIL", "k/exact": "PASS", "k/skip": "SKIP"}
+    r2 = _run(tmp_path, """
+        def test_a(contract): contract("k/pass").record([1, 2, 3])
+    """)
+    assert r2["k/pass"]["fingerprint"] == r["k/pass"]["fingerprint"]
+    r3 = _run(tmp_path, """
+        def test_a(contract): contract("k/pass").record([1, 2, 4])
+    """)
+    assert r3["k/pass"]["fingerprint"] != r["k/pass"]["fingerprint"]
