@@ -20,7 +20,7 @@ tags:
 
 ### Read our guide: [run Hy-Nomas on TPU](https://mashbox.gg/docs/models/hy-nomas)
 
-Tencent's open video world model, playable in the browser from a TPU v6e-4. The full pipeline also fits on a single TPU v6e chip (32 GB), at 2.46 s of compute per second of video. Made by Tencent Hunyuan, ported to TPU by MASHBOX Labs.
+Tencent's open video world model, playable in the browser from a TPU v6e-4. The full pipeline also fits on a single TPU v6e chip (32 GB), at 2.46 s of compute per second of video, main model quantized. Made by Tencent Hunyuan, ported to TPU by MASHBOX Labs.
 
 - **1.045 s (median of 87 and of 27 windows on two chips)**: compute per second of video, quality preset, Tencent decoder, 1.00 = real time, on TPU v6e-4
 - **0.689 s (median of 77 windows)**: compute per second of video, quality preset, MASHBOX Fast decoder, on TPU v6e-4
@@ -72,7 +72,7 @@ This port loads the original weights unchanged from [tencent/Hy-Nomas](https://h
 | Chip | Status | Note |
 |---|---|---|
 | TPU v5e | Not tested yet |  |
-| TPU v6e | One chip | the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 |
+| TPU v6e | One chip | the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4 |
 | TPU v5p slice (v5p-8) | Not tested yet |  |
 | TPU v6e slice (v6e-4) | Supported | 4 chips |
 

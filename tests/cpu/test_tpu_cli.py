@@ -735,7 +735,43 @@ def test_up_chip_choices_come_from_passing_chip_rows():
     for chip in ("v5p-8", "v5e-1"):                       # not passing / not a row: refused with the list
         with pytest.raises(tpu.Stop, match="runs on: v6e-1"):
             tpu.pick_chip(q, chip)
+    # a chip nobody ran reads "Not tested yet", a measured chip prints its measured line, a passing chip type names its
+    # host (test_up_chip_never_says_not_on_for_a_chip_the_model_ran_on); "Not on" stays for a chip with no row
+    with pytest.raises(tpu.Stop) as e:
+        tpu.pick_chip(q, "v5p-8")
+    assert "Not tested yet" in str(e.value) and "Not on" not in str(e.value), e.value
+    with pytest.raises(tpu.Stop, match="Not on v5e-1"):
+        tpu.pick_chip(q, "v5e-1")
+    hy = tpu.model("hy-nomas")
+    for chip, row in ((c.get("accelerator") or k, c) for k, c in hy["chips"].items() if c.get("status") == "measured"):
+        with pytest.raises(tpu.Stop) as e:
+            tpu.pick_chip(hy, chip)
+        assert row["run_note"] in str(e.value) and "Not on" not in str(e.value), e.value
     assert [c for c, _ in tpu.offered(tpu.model("hy-nomas"))] == ["v6e-4"]
+
+
+def test_up_chip_never_says_not_on_for_a_chip_the_model_ran_on():
+    """`tpu up --chip` with any chips row's key or host (v6e, v5e, v6e-4, v6e-1, v5e-4, every model with TPU settings)
+    never answers "Not on" when that row has a run (passing or measured): a passing row named by its chip type names the
+    host to ask for ("On v6e: use --chip v6e-1"), a measured one prints its measured line. "Not on" is left for a chip
+    with no row or a failing one."""
+    seen = 0
+    for m in (tpu.model(r["id"]) for r in tpu.registry()["models"] if "cloud" in r):
+        for key, row in m["chips"].items():
+            if not isinstance(row, dict) or row.get("status") not in ("passing", "measured"):
+                continue
+            for chip in dict.fromkeys((key, row.get("accelerator") or key)):
+                seen += 1
+                try:
+                    out = tpu.pick_chip(m, chip)
+                except tpu.Stop as e:
+                    said = str(e)
+                    assert "Not on" not in said, (m["id"], chip, said)
+                    if row["status"] == "passing":
+                        assert f"use --chip {row['accelerator']}" in said, (m["id"], chip, said)
+                    continue
+                assert row["status"] == "passing" and out["cloud"]["accelerator"] == row["gcloud_type"], (m["id"], chip)
+    assert seen >= 6
 
 
 # ------------------------------------------------------------------------------------- run on chips that are too small

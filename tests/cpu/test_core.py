@@ -738,7 +738,7 @@ def test_chip_note_replaces_not_supported():
     hy = next(x for x in reg["models"] if x["id"] == "hy-nomas")
     assert hy["chips"]["v6e"]["status"] == "measured"
     assert sc.chip_text(hy, "v6e").startswith(
-        "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video.")
+        "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized.")
 
 
 def test_runs_only_on_claim_follows_measured_rows(tmp_path):
@@ -833,3 +833,32 @@ def test_every_test_server_takes_its_port_from_the_bind():
                            for k in n.keywords)):
                 bad.append(f"{rel}:{n.lineno}")
     assert bad == [], f"start these through api_stub_engine.serve_on_free_port: {bad}"
+
+
+def test_sync_check_result_condition_never_dropped(tmp_path):
+    """A results row's condition ("main model quantized") stays next to its number on every page and models.json field;
+    a page or note that prints the number without it fails, one that carries it passes."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    reg = {"models": [{"id": "w", "name": "World", "summary": "Fits one chip at 7.25 s of compute per second.",
+                       "chips": {"v6e": {"note": "One chip: 7.25 s of compute, main model quantized."}},
+                       "results": [{"metric": "Compute, one chip, main model quantized", "value": "7.25 s (60 s run)",
+                                    "condition": "main model quantized"}]}]}
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "a.md").write_text("World runs at 7.25 s of compute. Also 17.25 s and 7.255 s elsewhere.\n"
+                                            "| World | 7.25 s | full pipeline, main model quantized |\n")
+    problems = sc.Problems()
+    sc.check_conditions(reg, tmp_path, problems)
+    text = " ".join(problems)
+    assert "w.summary" in text and "docs/a.md" in text and "line 1" in text, problems
+    assert "chips" not in text and "line 2" not in text and len(problems) == 2, problems
+    reg["models"][0]["results"][0]["metric"] = "Compute, one chip"
+    problems = sc.Problems()
+    sc.check_conditions(reg, tmp_path, problems)
+    assert any("is not in its metric" in p for p in problems), problems
+    assert ROOT.joinpath("models.json").exists()
+    problems = sc.Problems()
+    sc.check_conditions(json.loads((ROOT / "models.json").read_text()), ROOT, problems)
+    assert not list(problems), list(problems)

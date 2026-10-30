@@ -61,7 +61,7 @@ RULES = [
     ("this-run", re.compile(r"(?i)\b(?:in|from|on) (?:this|that|the same|an earlier|two earlier) (?:run|session|test)\b|"
                             r"\b(?:earlier|first measured|first-time) runs?\b|\bsame (?:day|morning)\b|\bthat morning\b"),
      "describe the result, not the run that produced it"),
-    ("yet", re.compile(r"(?i)\byet\b"), "state what the release does or does not do (\"Not supported: <reason>\")"),
+    ("yet", re.compile(r"(?i)\byet\b"), "state what the release does or does not do (a chip nobody ran reads \"Not tested yet\")"),
     ("pending", re.compile(r"(?i)\bpending\b"), "leave the section out until it has content"),
     ("coming-soon", re.compile(r"(?i)\bcoming soon\b|\bin the works\b|\bcomes? next\b|\blater also\b"), "unreleased things are simply absent"),
     ("for-now", re.compile(r"(?i)\bfor now\b|\bfor the moment\b"), "state what the release does"),

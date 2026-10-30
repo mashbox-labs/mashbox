@@ -26,7 +26,7 @@ The two TPU generations these docs use, side by side, and which one to pick. Spe
 <!-- chips:start -->
 | Model | Runs on | TPU v5e | TPU v6e | TPU v5p slice (v5p-8) | TPU v6e slice (v6e-4) |
 |---|---|---|---|---|---|
-| Hy-Nomas | TPU v6e-4 | Not tested yet | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 | Not tested yet | Supported: 4 chips |
+| Hy-Nomas | TPU v6e-4 | Not tested yet | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4 | Not tested yet | Supported: 4 chips |
 | Qwen3.8-27B | TPU v6e-1 | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: one chip (v6e-1) | Not tested yet | Supported: 4 chips, split across them automatically |
 | Track2Rig | CPU (on a TPU VM, the host CPU) | Not tested yet | Supported: tested on a TPU v6e-1 VM: mashbox run track2rig runs on the VM's host CPU (AMD EPYC 9B14) | Not tested yet | Not tested yet |
 <!-- chips:end -->

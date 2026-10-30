@@ -26,7 +26,7 @@
       "name": "Hy-Nomas",
       "kind": "world",
       "version": "0.1.0",
-      "summary": "Tencent's open video world model, playable in the browser from a TPU v6e-4. The full pipeline also fits on a single TPU v6e chip (32 GB), at 2.46 s of compute per second of video.",
+      "summary": "Tencent's open video world model, playable in the browser from a TPU v6e-4. The full pipeline also fits on a single TPU v6e chip (32 GB), at 2.46 s of compute per second of video, main model quantized.",
       "catalog": {
         "source": "ours",
         "format": "port",
@@ -79,8 +79,8 @@
           "status": "measured",
           "date": "2026-10-26",
           "accelerator": "v6e-1",
-          "note": "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4",
-          "run_note": "2.46 s of compute per second of video (this version of `mashbox run` starts on a v6e-4)"
+          "note": "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4",
+          "run_note": "2.46 s of compute per second of video, main model quantized (this version of `mashbox run` starts on a v6e-4)"
         },
         "v5e": {
           "status": "pending",
@@ -140,6 +140,7 @@
         {
           "chip": "TPU v6e-1 (one chip, 32 GB)",
           "metric": "Compute per second of video, full pipeline on one chip, 720p, main model quantized",
+          "condition": "main model quantized",
           "value": "2.46 s (60 s run)",
           "baseline": "1.00 s = real time",
           "date": "2026-10-26",
@@ -238,7 +239,7 @@
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
       "hf_revision": "c949fe6eb4a74ee9e306be2f53f4c92d2459a753",
-      "card_release": "0.1.3",
+      "card_release": "0.1.5",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
       "chat": {

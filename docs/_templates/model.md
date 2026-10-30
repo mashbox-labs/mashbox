@@ -21,7 +21,7 @@ How it runs:
 
 | Chip | Status |
 |---|---|
-| TPU v6e-<N> | <Supported | Not supported: why> |
+| TPU v6e-<N> | <Supported | the measured result with its number | Not tested yet | Not supported: the measured failure> |
 | TPU v5e-<N> | <...> |
 
 <Cost per hour at Google's on-demand list price, and the chip-hours that adds up to.

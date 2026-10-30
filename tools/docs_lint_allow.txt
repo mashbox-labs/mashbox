@@ -25,3 +25,5 @@ docs/models/hy-nomas.md | Not tested yet | 4 | a chip status: the model has not 
 docs/models/qwen3-8-27b.md | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
 hf/hy-nomas/README.md | Not tested yet | 2 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
 hf/qwen3-8-27b/README.md | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported
+docs/_templates/model.md | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported (Hy-Nomas v5e and v5p-8, Qwen3.8-27B v5p-8; Track2Rig is a CPU model: v5e, v5p-8 and v6e-4 not run)
+src/mashbox/tpu/__init__.py | Not tested yet | 1 | a chip status: the model has not run on this chip, so the row says so instead of supported or not supported (Hy-Nomas v5e and v5p-8, Qwen3.8-27B v5p-8; Track2Rig is a CPU model: v5e, v5p-8 and v6e-4 not run)

@@ -221,7 +221,17 @@ def pick_chip(m, chip):
         return m
     rows = dict(offered(m))
     if chip not in rows:
-        raise Stop(f"{m['name']} runs on: {', '.join(k for k, _ in offered(m)) or m['cloud']['accelerator']}. Not on {chip}")
+        runs = f"{m['name']} runs on: {', '.join(k for k, _ in offered(m)) or m['cloud']['accelerator']}."
+        row = next((c for k, c in (m.get("chips") or {}).items() if isinstance(c, dict)
+                    and (c.get("accelerator") == chip or (k == chip.split("-")[0] and not c.get("accelerator")) or k == chip)), None)
+        st = (row or {}).get("status")
+        if st == "passing":       # a chip type it runs on, named by its type (v6e): the host to ask for, never "Not on"
+            raise Stop(f"{runs} On {chip}: use --chip {row.get('accelerator') or row.get('gcloud_type')}")
+        if st == "measured":      # a chip we ran on: its measured line, never "Not on"
+            raise Stop(f"{runs} On {chip}: {row.get('run_note') or row.get('note')}")
+        if st == "pending":       # a chip nobody ran
+            raise Stop(f"{runs} On {chip}: Not tested yet")
+        raise Stop(f"{runs} Not on {chip}")   # no row, or a failing one
     c = rows[chip]
     return dict(m, cloud=dict(m["cloud"], accelerator=c["gcloud_type"], runtime=c.get("runtime") or m["cloud"]["runtime"],
                               zones=list(c.get("zones") or m["cloud"]["zones"])))

@@ -16,7 +16,7 @@ How it runs:
 | Chip | Status |
 |---|---|
 | TPU v6e slice (v6e-4: 4 chips, one VM) | Supported: 4 chips ([Performance](#performance)) |
-| TPU v6e (one chip, v6e-1) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4 |
+| TPU v6e (one chip, v6e-1) | One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4 |
 | TPU v5e | Not tested yet; the compiled kernels load and run on v5e ([Performance](#performance)) |
 | TPU v5p slice (v5p-8) | Not tested yet |
 
@@ -176,7 +176,7 @@ Point your agent (Claude Code, Codex, Gemini CLI or any other) at this repo and 
 ## FAQ
 
 - **Does typing a new world recompile the model?** No. Every text is padded to 256 or 512 tokens, so new text reuses the compiled programs (see [Options](#in-the-browser)).
-- **Can I run it on one TPU v6e chip or on TPU v5e?** One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video. This version of `mashbox run` starts on a v6e-4. TPU v5e: Not tested yet ([Performance](#performance)).
+- **Can I run it on one TPU v6e chip or on TPU v5e?** One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4. TPU v5e: Not tested yet ([Performance](#performance)).
 - **Can I try the app without a chip?** Yes: `--stub` serves the same browser app with test frames instead of the model ([Run](#run)).
 - **Where does a rendered clip go?** `--out out.mp4` writes it on the VM. Copy it to your machine with `gcloud compute tpus tpu-vm scp hy-nomas:out.mp4 . --zone=asia-northeast1-b` before you delete the chip.
 

@@ -1363,8 +1363,8 @@ def api_block(mods, page):
 
 
 def chip_text(m, chip):
-    """A models.json chip row as one line for the released version: "Supported: a v5e-4 (4 chips) ..." or
-    "Not supported: runs only on a v6e-4 ...". The condition follows a colon, never in brackets, so a page that
+    """A models.json chip row as one line for the released version: "Supported: a v5e-4 (4 chips) ...", a measured
+    row's note (its measured result), "Not tested yet", or "Not supported: <measured failure>". The condition follows a colon, never in brackets, so a page that
     shows the line up to its first " (" still carries it."""
     c = m["chips"].get(chip) or {}
     cell = chip_cell(m, chip)
@@ -2226,6 +2226,48 @@ def html_targets(body):
                   for _, u in CSS_URL_RE.findall(css) + CSS_IMPORT_RE.findall(css)]
 
 
+def check_conditions(reg, repo, problems):
+    """A results row with a "condition" (words that change what its number means, e.g. "main model quantized") never
+    loses them: every sentence or table row that prints the row's number, on a public page, a model card, llms.txt or
+    a models.json text field of that model, carries the condition words (a short words-only
+    condition, never a bit count). The results row itself is the source (its metric names the condition)."""
+    conds = []
+    for m in reg["models"]:
+        for i, r in enumerate(m.get("results") or []):
+            if not r.get("condition"):
+                continue
+            num = re.match(r"\s*(\d[\d,]*(?:\.\d+)?(?:\s*(?:ms|s|min|tok/s|tokens/s|GB|GiB|%))?)", str(r.get("value", "")))
+            if num:
+                pat = re.compile(r"(?<![\d.])" + re.escape(num.group(1)) + r"(?![\d])")
+                conds.append((m, i, pat, num.group(1), r["condition"]))
+    def units(text):   # a table row is one unit, prose splits at sentence ends and <br>
+        for n, line in enumerate(text.splitlines(), 1):
+            parts = [line] if line.lstrip().startswith("|") else re.split(r"(?<=[.!?])\s+|<br\s*/?>", line)
+            for part in parts:
+                yield n, part
+    for m, i, pat, num, cond in conds:
+        if cond not in str(m["results"][i].get("metric", "")):
+            problems.add("models.json", f"{m['id']} results[{i}] condition {cond!r} is not in its metric")
+        def walk(x, where):
+            if isinstance(x, dict):
+                for k, v in x.items():
+                    if not (where == m["id"] and k == "results"):
+                        walk(v, f"{where}.{k}")
+            elif isinstance(x, list):
+                for j, v in enumerate(x):
+                    walk(v, f"{where}[{j}]")
+            elif isinstance(x, str):
+                for _, part in units(x):
+                    if pat.search(part) and cond not in part:
+                        problems.add("models.json", f"{where} prints {num} ({m['id']} results[{i}]) without {cond!r}")
+        walk(m, m["id"])
+        for f in _prose(repo):
+            for n, part in units(f.read_text()):
+                if pat.search(part) and cond not in part and m["name"] in f.read_text():
+                    problems.add(f.relative_to(repo).as_posix(), f"line {n}: {num} ({m['id']} results[{i}]) without {cond!r}: "
+                                                                 f"{part.strip()[:120]}")
+
+
 def check_relative_links(repo, problems, reg=None):
     """Every relative link and image in the hand-written pages (inline or [id]: style) points at a file or folder in
     the repo, and a #fragment into a page at one of its headings (T0, offline). README's links are pinned to
@@ -2808,6 +2850,7 @@ def main(argv=None):
         elif path.read_text() != text:
             problems.add(key, "differs from its generated view: models.json, runtime/openapi.py or the CLI parsers (run render --write)")
     check_prose(reg, repo, problems)
+    check_conditions(reg, repo, problems)
     check_relative_links(repo, problems, reg)
     if nmap is not None:
         check_numbers(reg, repo, problems, nmap["pages"])
