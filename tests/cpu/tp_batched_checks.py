@@ -314,7 +314,7 @@ if want("TP6"):
 # TP7 ---------------------------------------------------------------------------------------------------------------------
 if want("TP7"):
     (K_, V_), (R_, C_) = c4.state
-    kvd = sorted({s.data.shape[3] for s in K_.addressable_shards})
+    kvd = sorted({s.data.shape[3] // cfg.HD for s in K_.addressable_shards})     # K/V heads flat in the cache row
     rvd = sorted({s.data.shape[3] for s in R_.addressable_shards})
     big1, big4 = engines(CTX=4096, S=8, K=1)
     st1, st4 = big1.new_state(), big4.new_state()

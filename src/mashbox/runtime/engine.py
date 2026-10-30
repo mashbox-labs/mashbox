@@ -321,14 +321,16 @@ class Engine:
                              + (tuple(lax.top_k(lg.astype(jnp.float32), TOPK)) if TOPK else ()))
         self.first = jax.jit(first)
 
+        # the second (snapshotted) state: linear-attention R, C with the slot on axis 2, or a model's own pair on the axis
+        # it names (archs/gemma4.py: sliding-window K/V rings, slot axis 1)
+        AX = getattr(model, "CV_SLOT_AXIS", 2)
+
         def put(cv, s, r, c):
-            R, C = cv
-            return (lax.dynamic_update_slice(R, r[:, :, None].astype(R.dtype), (0, 0, s, 0, 0, 0)),
-                    lax.dynamic_update_slice(C, c[:, :, None].astype(C.dtype), (0, 0, s, 0, 0)))
+            return tuple(lax.dynamic_update_index_in_dim(A, a.astype(A.dtype), s, AX) for A, a in zip(cv, (r, c)))
 
         def take(cv, s):
             R, C = cv
-            return lax.dynamic_index_in_dim(R, s, 2, keepdims=False), lax.dynamic_index_in_dim(C, s, 2, keepdims=False)
+            return lax.dynamic_index_in_dim(R, s, AX, keepdims=False), lax.dynamic_index_in_dim(C, s, AX, keepdims=False)
         self.put = jax.jit(put, donate_argnums=(0,))
         self.take = jax.jit(take)
 
@@ -340,11 +342,11 @@ class Engine:
         self.kv_take = jax.jit(kv_take, static_argnames=("n",))
 
         def swap(ck, cv, a, b):
-            """Exchange the whole state of slots a and b (K/V: slot axis 1; linear state R, C: slot axis 2)."""
+            """Exchange the whole state of slots a and b (K/V: slot axis 1; the second state: slot axis AX)."""
             def sw(x, ax):
                 xa, xb = lax.dynamic_index_in_dim(x, a, ax), lax.dynamic_index_in_dim(x, b, ax)
                 return lax.dynamic_update_index_in_dim(lax.dynamic_update_index_in_dim(x, xb, a, ax), xa, b, ax)
-            return jax.tree.map(lambda x: sw(x, 1), ck), jax.tree.map(lambda x: sw(x, 2), cv)
+            return jax.tree.map(lambda x: sw(x, 1), ck), jax.tree.map(lambda x: sw(x, AX), cv)
         self.swap = jax.jit(swap, donate_argnums=(0, 1))
         self.kv_put = jax.jit(kv_put, donate_argnums=(0,))
 

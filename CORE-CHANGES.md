@@ -2,6 +2,34 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.11
+
+### The K/V cache is updated in place, in a layout that does not pad; Gemma's sliding-window layers keep a ring
+
+1. **`runtime/kvcache.py` (new), the only code that holds, reads or writes the full-attention K/V cache, for every model the engine runs:** GGUF dense, qwen35 and gemma4/gemma3 (`gguf/archs`), Hugging Face safetensors runs (they run on these archs) and the Qwen3.8-27B build on one chip and under tensor parallel (`models/qwen3_8_27b/model.py`, `shard.py`).
+   - Layout: K and V are each `(groups, slots + 1, positions, KV heads x head size)`, with the heads flat in the last axis. It was `(..., positions, KV heads, head size)`. A TPU tiles the two minor axes, so one K/V head (gemma4) padded 1 -> 2 and a 64-wide head padded to 128 lanes.
+   - Write: one `dynamic_update_slice` per row, with no `cond` and no dropping scatter. Positions past the cache end write back the values already there, so nothing past the cache is written, as before.
+   - Read: the slice is held in the cache's own layout.
+   - With the old code, XLA on TPU gave the decode loop's cache other layouts and copied the whole cache at every step. `tools/kv_hlo_check.py` reads this from a deviceless v6e compile: 6 whole-cache copies -> 0 on every model that had them (decode, sampled decode, prefill, speculation verify). gemma-4-12b at 8 slots x 2048: decode temporaries 23.8 -> 0.26 GiB.
+2. **`gguf/archs/gemma4.py` (also used by gemma3):** the sliding-window layers keep a ring of min(window, context) positions per slot (`kvcache.ring_write` / `ring_pos`: position p at entry p mod size; the attention masks by each entry's real position). The full layers keep the whole context.
+   - The ring is the engine's second, snapshotted state (as the linear-attention state of hybrid files). It is saved at prompt points, put back on a resume and moved with its slot. `CV_SLOT_AXIS` = 1 tells the engine its slot axis.
+   - `state_bytes` gives `gguf.need_bytes` the new size. gemma-4-12b at 8 slots x 2048: 6.75 -> 3.94 GiB of slot state.
+   - A ring write skips tokens past a row's length, past the context end, and rows the call may not change. Speculative verify is not offered for these files (as before), so the ring never holds rejected drafts.
+3. **`runtime/engine.py`:** `put`, `take` and `swap` move the second state on the axis the model names (`CV_SLOT_AXIS`, default 2: unchanged for qwen35 and the 27B).
+4. **Tests:**
+   - `tests/cpu/test_kvcache.py` (new): the write equals the old dropping scatter bit for bit; the ring holds what a linear cache holds at each entry's position; no cond/scatter; and the deviceless TPU check (skipped without libtpu), which failed on 0.1.10's code.
+   - `test_gguf_gemma4.py`: the ring through the engine, compared with a no-cache forward. Batched, chunked, a prefix-cache resume and a host-cache restore, at windows 4 and 24, logits within 1e-3.
+   - `test_gguf_qwen35.py`'s old K/V form checks moved to `test_kvcache.py`.
+   - The tensor-parallel checks read heads per chip as the row share / head size.
+
+Why: unsloth/gemma-4-12b-it Q4_K_M could not decode on one v6e chip. Its decode asked 35.33 GiB of temporaries against 31.24 GiB, almost all of it copies of a padded cache. On one v6e chip at the zero-flag 8 slots x 2048 it now decodes with a peak of 16.04 GiB in place, 12.39 GiB with the ring. The same copies sat in Qwen2.5's decode and speculation verify, Qwen3.5's batched decode, prefill and speculation verify, and the Qwen3.8-27B build's batched decode and prefill; the Qwen3 and Llama files checked had none.
+
+How existing models keep working:
+- Same tokens: the values written and read are the same, and only their layout changes. The CPU tests and the arch contracts against llama.cpp pass unchanged. On one v6e chip, greedy ids equal 0.1.10's on Qwen3-4B, Llama-3.2-1B, Qwen3.5-4B and gemma-3-1b (Q4_K_M, 4 prompts alone and an 8-row batch each).
+- Gemma's sliding layers read their keys in ring order, so those attention sums run in another order (logits within 1e-3 of a no-cache forward in the CPU tests).
+- **Every compiled program changes.** A compile cache built from 0.1.10's code (the Qwen3.8-27B v6e-1 and v6e-4 tars) does not match 0.1.11 and must be rebuilt from 0.1.11's head before a release names it.
+- A saved host-cache entry or AOT program table from 0.1.10 is not read by 0.1.11. Their keys include the engine's programs, so they miss and are made again.
+
 ## 0.1.10
 
 ### TRELLIS.2: the image-to-3d kind, gated and ported upstream parts on the card

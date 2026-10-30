@@ -135,8 +135,10 @@ def need_bytes(f, c, ctx, slots, kernel_types=frozenset(), roles=None, tokens=20
     w = sum(ops.device_nbytes(f.tensors[n].type, f.tensors[n].shape, f.tensors[n].nbytes,
                               kernel_types if n in mult else frozenset()) for n in loaded)
     act = np.dtype(c.act).itemsize
-    kv = 2 * c.NG * (slots + 1) * ctx * c.KV * c.HD * act
-    rec = c.NG * (c.FI - 1) * (slots + 1) * (c.HV * c.DK * c.DV * 4 + (c.CK - 1) * c.CONV * act)
+    # an architecture with a state layout of its own (f None: a caller that passes roles and a config, no file)
+    sb = getattr(archs.module(f.arch), "state_bytes", None) if f is not None else None
+    kv = sb(c, ctx, slots) if sb is not None else 2 * c.NG * (slots + 1) * ctx * c.KV * c.HD * act
+    rec = 0 if sb is not None else c.NG * (c.FI - 1) * (slots + 1) * (c.HV * c.DK * c.DV * 4 + (c.CK - 1) * c.CONV * act)
     sh = [tuple(int(v) for v in f.tensors[n].shape) for n in mult
           if ops.weight_path(f.tensors[n].type, f.tensors[n].shape, kernel_types=kernel_types) == "exact"]
     big = max([ops.exact_chunk_rows(s[-2], s[-1]) * s[-1] * 4 for s in sh if len(s) >= 2], default=0)

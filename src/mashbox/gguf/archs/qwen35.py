@@ -27,10 +27,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from jax import lax
-from jax.experimental.layout import Layout, with_layout_constraint
 
 from ... import ops
 from ...moe import ffn as MF
+from ...runtime import kvcache
 from ...models.qwen3_8_27b import model as M
 from ..reader import GGUFError
 from ...moe import MoEError, detect_gguf
@@ -333,8 +333,7 @@ def mtp_tensors(f, c):
 def new_state(c, S, CTX, extra_groups=0):
     """Zeroed per-slot state for S slots (+1 scratch slot), the same layout as models/qwen3_8_27b. extra_groups: K/V groups
     after the model's NG (speculative decoding keeps the MTP layer's K/V in group NG)."""
-    kv = (c.NG + extra_groups, S + 1, CTX, c.KV, c.HD)
-    return ((jnp.zeros(kv, c.act), jnp.zeros(kv, c.act)),
+    return (kvcache.zeros(c.NG + extra_groups, S + 1, CTX, c.KV, c.HD, c.act),
             (jnp.zeros((c.NG, c.FI - 1, S + 1, c.HV, c.DK, c.DV), f32),
              jnp.zeros((c.NG, c.FI - 1, S + 1, c.CK - 1, c.CONV), c.act)))
 
@@ -356,35 +355,17 @@ def l2(x, eps):
     return x * lax.rsqrt(jnp.sum(x * x, -1, keepdims=True) + eps)
 
 
-def kv_read(Kc, Vc, g, slots, Tc, contig):
-    """Group g's cached K/V of this call's rows, positions < Tc -> (B, Tc, KV, HD) each.
-
-    contig rows are slots 0..B-1: one slice of the cache, held in the cache's own (row-major) layout. Without the layout
-    constraint XLA on TPU gives the attention dot its preferred layout by copying the WHOLE cache to it at every decode step
-    instead of the slice (measured with Qwen3.6-35B-A3B on one v6e: 2 x 377.5 MB per token)."""
-    if contig:
-        B = slots.shape[0]
-        rm = Layout(major_to_minor=(0, 1, 2, 3))
-        return with_layout_constraint(Kc[g, :B, :Tc], rm), with_layout_constraint(Vc[g, :B, :Tc], rm)
-    return Kc[g][slots, :Tc], Vc[g][slots, :Tc]
+def kv_read(Kc, Vc, g, slots, Tc, contig, KV, HD):
+    """Group g's cached K/V of this call's rows, positions < Tc -> (B, Tc, KV, HD) each (runtime/kvcache.py: one slice
+    for contig rows, held in the cache's own layout, so XLA never copies the whole cache for the attention dot)."""
+    return kvcache.read_heads(Kc, Vc, g, slots, Tc, contig, KV, HD)
 
 
 def kv_write(Kc, Vc, slots, pos, ks, vs):
-    """Write this call's K/V (NG,B,T,KV,HD) at (slot, position) of the model's groups; positions past the cache are dropped
-    (an MTP group after them is written by its own layer).
-
-    One row of one token (decode at 1 user) goes in with dynamic_update_slice under lax.cond(position inside the cache).
-    XLA on TPU turns that row's dropping scatter into a select that reads the old K/V at the position, and to read it the
-    whole cache was copied to another layout at every decode step (the same measurement: 2 x 377.5 MB per token)."""
-    n = ks.shape[0]
-    if ks.shape[1:3] == (1, 1):
-        i = (0, slots[0], pos[0, 0], 0, 0)
-
-        def put(kv):
-            return (lax.dynamic_update_slice(kv[0], ks.astype(kv[0].dtype), i),
-                    lax.dynamic_update_slice(kv[1], vs.astype(kv[1].dtype), i))
-        return lax.cond(pos[0, 0] < Kc.shape[2], put, lambda kv: kv, (Kc, Vc))
-    return (Kc.at[:n, slots[:, None], pos].set(ks, mode="drop"), Vc.at[:n, slots[:, None], pos].set(vs, mode="drop"))
+    """Write this call's K/V (NG, B, T, KV, HD) at (slot, position) of the model's groups, in place; positions past the
+    cache are dropped (an MTP group after them is written by its own layer). runtime/kvcache.write: one
+    dynamic_update_slice per row, no lax.cond, no dropping scatter."""
+    return kvcache.write(Kc, Vc, slots, pos, ks, vs)
 
 
 def gated_delta_commit(R, rec, n, rep):
@@ -506,7 +487,7 @@ def make_forward(c, decode_kernels=None):
 
         def attend(g, q, k, v):
             if Tc:
-                kc, vc = kv_read(Kc, Vc, g, slots, Tc, contig)
+                kc, vc = kv_read(Kc, Vc, g, slots, Tc, contig, KV, HD)
                 kk, vv = jnp.concatenate([kc, k], 1), jnp.concatenate([vc, v], 1)
             else:
                 kk, vv = k, v
