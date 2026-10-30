@@ -149,6 +149,40 @@ GGUF_LINE = ("GGUF files from other publishers, run as they are by mashbox. Leve
              "been checked; a speed shows only where a chip run measured it on our kernels.")
 
 
+ELSEWHERE = "Listed, not in mashbox run"
+ELSEWHERE_LINE = ("Models we publish that `mashbox run` does not start in this version. Each names the device its files are "
+                  "made for and links the page that shows how to use them.")
+ELSEWHERE_HEAD = ["Model", "What it does", "Made for", "Files", "How to use"]
+
+
+def elsewhere(reg):
+    """models.json elsewhere[] (models `mashbox run` does not start: a weights-only repo, a port to another device), by
+    name; [] when the list is absent."""
+    return sorted(reg.get("elsewhere") or [], key=lambda r: (r["name"].casefold(), r["id"]))
+
+
+def elsewhere_row(r):
+    """One elsewhere[] row as every list prints it: name by maker, what it does, the device its files are made for, its
+    Hugging Face repo and the how-to-run link. No run line: `mashbox run` does not start it."""
+    return [f"**{r['name']}**<br>by {r['upstream']['maker']}", r["summary"], r["device"],
+            f"[{r['hf_repo'].split('/', 1)[1]}](https://huggingface.co/{r['hf_repo']})", f"[How to use]({r['how_to_run']})"]
+
+
+def elsewhere_block(reg, level="**"):
+    """The tier of every elsewhere[] row (README: a bold label; the docs catalog: a heading), "" when there is none."""
+    rows = elsewhere(reg)
+    if not rows:
+        return ""
+    head = f"**{ELSEWHERE}**" if level == "**" else f"{level} {ELSEWHERE}"
+    return "\n".join([head, "", ELSEWHERE_LINE, "", _table(ELSEWHERE_HEAD, [elsewhere_row(r) for r in rows])])
+
+
+def elsewhere_llms(reg):
+    """llms.txt lines for the elsewhere[] tier, one per row: what it is, the device, the repo and the how-to-run link."""
+    return [f"- {r['name']} by {r['upstream']['maker']}: {r['summary']} Made for {r['device']}; `mashbox run` does not "
+            f"start it. Files: https://huggingface.co/{r['hf_repo']}. How to use: {r['how_to_run']}" for r in elsewhere(reg)]
+
+
 def chip_note(chip):
     """The chip after a number, bracketed once: "(TPU v6e-1)", and "(CPU, AMD EPYC 7502P)" for a chip that carries its own
     brackets ("CPU (AMD EPYC 7502P)"), never "(CPU (AMD EPYC 7502P))"."""
@@ -186,11 +220,12 @@ GGUF_HEAD = ["Model", "GGUF file", "Architecture", "Quant", "Level", "Runs on", 
 
 
 def render_markdown(reg, src=None):
-    """The docs catalog (the block between <!-- catalog:start --> and <!-- catalog:end -->), one page in two labelled
+    """The docs catalog (the block between <!-- catalog:start --> and <!-- catalog:end -->), one page in labelled
     tiers: the count line; "MASHBOX builds" (models[]: our ports and models, each measured against its baseline);
     "GGUF files that run in our engine" (gguf[]: every file with maker, architecture, quant, level and chips, one
     section per family, Qwen, Gemma, Llama ..., each row linking the exact file on Hugging Face), or one line saying
-    the version lists none; then the GGUF architectures with a passing chip test (catalog.ARCH_LINE's words)."""
+    the version lists none; then the GGUF architectures with a passing chip test (catalog.ARCH_LINE's words); then,
+    when models.json has any, the models `mashbox run` does not start (elsewhere[], ELSEWHERE)."""
     cat = catalog()
     out, speed = [f"**{count_line(reg)}.**", "", f"## {BUILDS}", "", BUILDS_LINE, ""], cat._speed
     rows = []
@@ -214,6 +249,8 @@ def render_markdown(reg, src=None):
     if archs:
         out += ["", f"{cat.ARCH_LINE[:-1]} (`general.architecture`): "
                 + ", ".join(f"`{a['arch']}`" + (f" ({a['models']})" if a["models"] else "") for a in archs) + "."]
+    if elsewhere(reg):
+        out += ["", elsewhere_block(reg, "##")]
     return "\n".join(out)
 
 

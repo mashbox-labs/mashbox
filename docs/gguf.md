@@ -117,10 +117,13 @@ comes on top.
 <!-- archs:start -->
 | Architecture (`general.architecture`) | Models | Files in the catalog |
 |---|---|---|
-| `qwen35` | Qwen3.5, Qwen3.6, Qwen3.8 (dense) | unsloth-qwen3-5-4b-q4-k-m, unsloth-qwen3-5-9b-q4-k-m, lmstudio-community-qwen3-5-9b-q4-k-m, peculiar-ragdoll-qwen3-8-27b-q4-k-m, lmstudio-community-qwen3-8-27b-q4-k-m, unsloth-qwen3-8-27b-q4-k-m, huihui-ai-qwen3-8-27b-q4-k-m, ggml-org-qwen3-8-27b-q4-k-m |
+| `qwen35` | Qwen3.5, Qwen3.6, Qwen3.8 (dense) | unsloth-qwen3-5-4b-q4-k-m, unsloth-qwen3-5-9b-q4-k-m, lmstudio-community-qwen3-5-9b-q4-k-m, peculiar-ragdoll-qwen3-8-27b-q4-k-m, lmstudio-community-qwen3-8-27b-q4-k-m, unsloth-qwen3-8-27b-q4-k-m, huihui-ai-qwen3-8-27b-q4-k-m, ggml-org-qwen3-8-27b-q4-k-m, hauhaucs-qwen3-8-27b-q4-k-p, jonathancoletti-qwen3-8-27b-q4-k-m, 0bserverx-qwen3-8-27b-q4-k-m, davidau-qwen3-5-9b-the-defiant-fable-uncensored-heretic-neo-imatrix-max-mtp-q4-k-m, davidau-qwen3-8-27b-turbo-fable-cold-fusion-735-882-heretic-uncensored-nm-dau-q4-k-m, cdiamond-qwen3-8-27b-mtp, byteshape-qwen3-8-27b-iq2-xxs |
 | `llama` | Llama 3.x | bartowski-falcon3-1b-instruct-q8-0, bartowski-llama-3-2-3b-instruct-iq4-xs, bartowski-mistral-7b-instruct-v0-3-gguf-q3-k-m, bartowski-llama-3-2-1b-instruct-q4-k-m |
 | `qwen2` | Qwen2.5 | bartowski-qwen2-5-0-5b-instruct-q4-k-m, bartowski-qwen2-5-1-5b-instruct-q4-k-m, bartowski-qwen2-5-1-5b-instruct-q5-k-m, qwen-qwen2-5-0-5b-instruct-q4-k-m, qwen-qwen2-5-1-5b-instruct-q4-k-m, bartowski-qwen2-5-7b-instruct-q4-k-m, qwen-qwen2-5-coder-1-5b-instruct-q4-k-m |
 | `qwen3` | Qwen3 | unsloth-qwen3-0-6b-q8-0, unsloth-qwen3-1-7b-q4-0, qwen-qwen3-4b-q4-k-m, qwen-qwen3-14b-q4-k-m, unsloth-qwen3-4b-instruct-2507-q4-k-m |
+| `gemma3` | Gemma 3 | unsloth-gemma-3-1b-it-q4-k-m |
+| `exaone` | EXAONE 3.5 | lgai-exaone-exaone-3-5-2-4b-instruct-q4-k-m |
+| `granite` | Granite 3.3 | bartowski-granite-3-3-2b-instruct-q4-k-m, ibm-granite-granite-3-3-2b-instruct-q4-k-m |
 <!-- archs:end -->
 
 ## Tokenizer note

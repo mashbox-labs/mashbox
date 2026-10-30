@@ -271,6 +271,20 @@ def test_page_says_auto_turns_nothing_on_exactly_when_no_gate_passed():
     assert (NOTHING_ON in PAGE) == (not passed), passed
 
 
+def test_page_names_every_gate_auto_turns_on():
+    """the page names each passed drafter gate of models.json (its file or model and its chip), so what `auto` turns on
+    is read from the catalog, never typed (tools/hf_github_sync_check.py gated_block renders it)"""
+    for g in REG.get("gguf") or []:
+        for kind, chips in (g.get("speculation") or {}).items():
+            for chip, e in chips.items():
+                if e.get("status") == "passed":
+                    assert f"`{g['repo']}` `{g['file']}` on " in PAGE, (g["id"], kind, chip)
+    for m in REG["models"]:
+        for chip, e in ((m.get("drafter") or {}).get("gate") or {}).items():
+            if e.get("status") == "passed":
+                assert f"for {m['name']} on" in PAGE, (m["id"], chip)
+
+
 @pytest.mark.parametrize("line", ["Speculation decodes 40% quicker.", "Speculation decodes 40 % quicker.",
                                   "It raises throughput on one chip.", "It doubles throughput.", "It triples the speed.",
                                   "It runs 1.98x faster.", "About 2x the tokens."])

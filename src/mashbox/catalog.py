@@ -21,8 +21,25 @@ KIND_LABEL = {"llm-gguf": "LLM, GGUF", "llm-tpu": "LLM", "world": "World model",
 FORMAT_LABEL = {"bshj-build": "BSHJ build", "port": "TPU port", "own-model": "MASHBOX model"}
 LEVELS = ("MASHBOX build", "Tuned", "Tested", "Quick check", "Checked on CPU", "Architecture supported")
 # a QUICK chip record (record_kind "quick"): QUICK_PROMPTS zero-flag `mashbox run` greedy runs of QUICK_TOKENS tokens each,
-# compared with llama.cpp; its row says only that, with the decode speed for one request it measured
+# compared with llama.cpp; its row says only that (pass/fail). Its runs' own timing is each fresh process's first request,
+# first-call cost in it, so no view shows it as a speed
 QUICK_KIND, QUICK_PROMPTS, QUICK_TOKENS = "quick", 4, 32
+# a QUICK row's speed: measured.steady_decode_tok_s_1_user with its steady_condition, from its own sealed record: one
+# `mashbox run` process on one chip, one warm request, then STEADY_ROUNDS timed requests of STEADY_TOKENS new tokens at 1
+# user, greedy; the number is 1000 / the median ms per new token, and the rounds' spread (max / min - 1) is at most
+# STEADY_SPREAD. The condition says whether another job held a chip of the same host during the run.
+STEADY_ROUNDS, STEADY_TOKENS, STEADY_SPREAD = 5, 128, 0.02
+STEADY_LABEL = "steady decode, 1 user"
+STEADY_CONDITIONS = {
+    "alone": ("steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one "
+              "chip, no other job on the host's chips"),
+    "shared": ("steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one "
+               "chip, another job on another chip of the same host"),
+}
+# why a QUICK did not pass, the class its sealed compare gives (the record guard recomputes it), first match: "run" (a
+# run did not load and print), "first token" (a difference at the first token where llama.cpp's own top-two gap is not a
+# near tie), "divergence" (such a difference later), "near tie" (only near ties, one at the first token)
+QUICK_FAIL_REASONS = ("run", "first token", "divergence", "near tie")
 MASHBOX = "MASHBOX Labs"
 CHIPS = ("v5e", "v6e", "v5p-8", "v6e-4")
 KERNEL_PATHS = ("bundle", "exact")
@@ -76,14 +93,24 @@ def live(reg):
     return [m for m in reg["models"] if not m.get("launch")]
 
 
+def chip_name(r, c):
+    """The chip a chip row ran on, in words: "TPU v6e-1"; "one chip of a TPU v6e-4" when the row ran on fewer chips
+    (chip_count) than its host has (the number in the accelerator name)."""
+    acc = r.get("accelerator") or c
+    n, host = r.get("chip_count"), str(acc).rsplit("-", 1)[-1]
+    if isinstance(n, int) and not isinstance(n, bool) and host.isdigit() and 0 < n < int(host):
+        return f"{'one chip' if n == 1 else f'{n} chips'} of a TPU {acc}"
+    return f"TPU {acc}"
+
+
 def chips_run(row):
-    """["CPU", "TPU v6e-1", ...]: CPU when the cpu row passes, then the accelerator of every passing chip row, in CHIPS
-    order, each named once."""
+    """["CPU", "TPU v6e-1", ...]: CPU when the cpu row passes, then the chip of every passing chip row (chip_name), in
+    CHIPS order, each named once."""
     out = ["CPU"] if ((row.get("chips") or {}).get("cpu") or {}).get("status") == "passing" else []
     for c in CHIPS:
         r = (row.get("chips") or {}).get(c) or {}
         if r.get("status") == "passing":
-            name = f"TPU {r.get('accelerator') or c}"
+            name = chip_name(r, c)
             if name not in out:
                 out.append(name)
     return out
@@ -146,10 +173,14 @@ def cpu_line(row):
 
 def tpu_line(row):
     """What a gguf[] row says about TPUs: the chips it passed on, else the arch x block-type smoke that covers it with
-    that smoke's own number, else "TPU: Not tested yet"."""
+    that smoke's own number, else "TPU: QUICK check did not pass" when a chip QUICK ran and did not pass (its reason
+    class stays in the record), else "TPU: Not tested yet"."""
     run = chips_run(row)
     if run:
         return "Runs on: " + ", ".join(run)
+    if any((r or {}).get("status") == "failing" and (r or {}).get("record_kind") == QUICK_KIND
+           for r in (row.get("chips") or {}).values()):
+        return "TPU: QUICK check did not pass"
     for c in CHIPS:
         sm = ((row.get("chips") or {}).get(c) or {}).get("smoke")
         if sm:
@@ -166,16 +197,17 @@ def quick_only(row):
 
 def quick_line(row):
     """What a gguf[] row's QUICK records say, and nothing more, one clause per passing QUICK chip in CHIPS order:
-    "Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens), 0.52 tok/s for one request" ("Runs on TPU
-    v6e-1 with the engine's TPU kernels: ..." when that run ran on the kernels); None when the row has none."""
+    "Runs on TPU v6e-1: short check against llama.cpp (4 prompts x 32 tokens)" ("Runs on TPU v6e-1 with the engine's TPU
+    kernels: ..." when that run ran on the kernels; "Runs on one chip of a TPU v6e-4 ..." for one chip of a larger host,
+    chip_name); None when the row has none. No number: the row's speed is its steady-decode one (speed)."""
     out = []
     for c in CHIPS:
         r = (row.get("chips") or {}).get(c) or {}
         if r.get("status") != "passing" or r.get("record_kind") != QUICK_KIND:
             continue
         on = " with the engine's TPU kernels" if r.get("kernel_path") == "bundle" else ""
-        out.append(f"Runs on TPU {r.get('accelerator') or c}{on}: short check against llama.cpp ({QUICK_PROMPTS} prompts x "
-                   f"{QUICK_TOKENS} tokens), {r['measured']['decode_tok_s_1_user']:g} tok/s for one request")
+        out.append(f"Runs on {chip_name(r, c)}{on}: short check against llama.cpp ({QUICK_PROMPTS} prompts x "
+                   f"{QUICK_TOKENS} tokens)")
     return "; ".join(out) or None
 
 
@@ -215,15 +247,33 @@ def ours(reg):
     return rows
 
 
+def _speed_of(r):
+    """(tok/s at 1 user, its condition or None) of one passing kernel-path chip row: a QUICK row's steady-decode number
+    with its steady_condition (never its runs' first-request number), another chip record's decode_tok_s_1_user"""
+    m = r.get("measured") or {}
+    if "record_kind" in r:
+        return m.get("steady_decode_tok_s_1_user"), m.get("steady_condition")
+    return m.get("decode_tok_s_1_user"), None
+
+
 def speed(g):
-    """(tok/s for one request, chip) from the first passing chip row of a gguf[] entry that ran on the kernel bundle,
-    else (None, None). An exact-path row's number is the reference path's; no catalog view shows it as the file's speed."""
+    """(tok/s at 1 user, chip) from the first passing chip row of a gguf[] entry that ran on the kernel bundle and has a
+    speed (_speed_of), else (None, None). An exact-path row's number is the reference path's and a QUICK run's own number
+    is a fresh process's first request: no catalog view shows either as the file's speed."""
     for c in CHIPS:
         r = (g.get("chips") or {}).get(c) or {}
-        if (r.get("status") == "passing" and r.get("kernel_path") == "bundle"
-                and (r.get("measured") or {}).get("decode_tok_s_1_user") is not None):
-            return r["measured"]["decode_tok_s_1_user"], f"TPU {r.get('accelerator') or c}"
+        if r.get("status") == "passing" and r.get("kernel_path") == "bundle" and _speed_of(r)[0] is not None:
+            return _speed_of(r)[0], chip_name(r, c)
     return None, None
+
+
+def speed_condition(g):
+    """the steady_condition of the chip row speed() reads, else None"""
+    for c in CHIPS:
+        r = (g.get("chips") or {}).get(c) or {}
+        if r.get("status") == "passing" and r.get("kernel_path") == "bundle" and _speed_of(r)[0] is not None:
+            return _speed_of(r)[1]
+    return None
 
 
 def gguf_rows(reg):
@@ -236,7 +286,8 @@ def gguf_rows(reg):
             "repo": g["repo"], "revision": g["revision"], "sha256": g["sha256"], "gb": round(g["bytes"] / 1e9, 2),
             "params": _params(g.get("params_b")), "arch": g["arch"], "moe": g["moe"], "types": g["types"],
             "format": "GGUF", "level": level(g), "experimental": bool(g.get("experimental")), "chips": chips_run(g),
-            "tok_s_1_user": tok, "tok_s_chip": chip, "run": g["run"], "cpu": cpu_line(g),
+            "tok_s_1_user": tok, "tok_s_chip": chip, "tok_s_condition": speed_condition(g), "run": g["run"],
+            "cpu": cpu_line(g),
             "tpu": quick_line(g) or (None if chips_run(g) else tpu_line(g)),
             "file_url": f"https://huggingface.co/{g['repo']}/blob/{g['revision']}/{g['file']}",
             "license": g["license"], "license_link": g.get("license_link"), "base": g.get("base"),
@@ -302,6 +353,8 @@ def entries(reg, src=None):
 def _speed(r):
     if r.get("number"):
         return f"{r['number']['big']} on {r['number']['chip']}, {r['number']['label']}"
+    if r.get("tok_s_1_user") is not None and r.get("tok_s_condition"):
+        return f"{r['tok_s_1_user']:g} tok/s, {STEADY_LABEL}, on {r['tok_s_chip']}"
     if r.get("tok_s_1_user") is not None:
         return f"{r['tok_s_1_user']:g} tok/s for one request on {r['tok_s_chip']}"
     return ""

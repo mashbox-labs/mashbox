@@ -102,11 +102,15 @@ def test_new_row_reaches_every_list():
 
 def test_docs_catalog_is_one_page_in_two_tiers():
     """MASHBOX builds first (every models[] row, its measured lines), then GGUF files that run in our engine, one
-    section per family with maker, architecture and quant; the README and llms.txt carry the same tiers"""
+    section per family with maker, architecture and quant, then (when models.json has any) the models `mashbox run`
+    does not start (elsewhere[]); the README and llms.txt carry the same tiers"""
     md = ML.render_markdown(REG)
     heads = [line for line in md.splitlines() if line.startswith("## ")]
-    assert heads == [f"## {ML.BUILDS}", f"## {ML.GGUF}"]
+    assert heads == [f"## {ML.BUILDS}", f"## {ML.GGUF}"] + ([f"## {ML.ELSEWHERE}"] if ML.elsewhere(REG) else [])
     builds, gguf = md.split(f"## {ML.GGUF}")
+    gguf, _, listed = gguf.partition(f"## {ML.ELSEWHERE}")
+    for r in ML.elsewhere(REG):
+        assert r["how_to_run"] in listed and r["how_to_run"] not in builds + gguf
     for m in catalog.live(REG):
         assert f"(models/{m['id']}.md)" in builds and f"(models/{m['id']}.md)" not in gguf
         for line in ML.measured(REG, m["id"]):
@@ -120,6 +124,7 @@ def test_docs_catalog_is_one_page_in_two_tiers():
         assert r["file_url"] not in builds
     for text in (SC.readme_block(REG), SC.llms_block(REG)):
         assert text.index(ML.BUILDS) < text.index(ML.GGUF)
+        assert not ML.elsewhere(REG) or text.index(ML.GGUF) < text.index(ML.ELSEWHERE)
     q = next(m for m in REG["models"] if m["id"] == "qwen3-8-27b")
     spec = next(h for h in q["headline"] if q["results"][h["results"][0]]["short"]["ours"] == h["big"] == "74.84 tok/s")
     assert spec.get("readme") and "37.77" in q["results"][spec["results"][0]]["baseline"]
@@ -153,7 +158,7 @@ def test_readme_on_disk_has_the_rendered_block():
 # import lines and docstrings, as the record guard compares it; empty fields left out, so the hash is the same on every
 # Python version the package supports). Model lists live in tools/model_lists.py, so a page
 # layout never voids a measured record; a change to catalog.py's code fails here first.
-CATALOG_CODE_SHA256 = "1e2894dbe624921cf156b7a151cba83719c0a2162ee9ae03f009b55d73e7c68b"
+CATALOG_CODE_SHA256 = "a073217a76511c0716d61fe9248e8fae88c352845d49fafe1d2ce173232db167"
 
 
 def code_only(data):
@@ -258,7 +263,7 @@ def test_llms_txt_lists_every_row():
     that render."""
     for reg in (REG, with_new_row(REG), many_rows(REG)):
         text, rows = SC.llms_block(reg), catalog.gguf_rows(reg)
-        gguf = text.split(f"{ML.GGUF}:", 1)[1]
+        gguf = text.split(f"{ML.GGUF}:", 1)[1].split(f"\n{ML.ELSEWHERE}:", 1)[0]    # the next tier, when there is one
         lines = [x for x in gguf.splitlines() if x.startswith("- ") and "[Full catalog]" not in x]
         assert len(lines) == len(rows) == len(reg["gguf"]), (len(lines), len(rows))
         got = []

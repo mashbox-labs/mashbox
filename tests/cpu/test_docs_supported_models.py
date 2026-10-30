@@ -33,11 +33,16 @@ def test_every_level_the_catalog_prints_is_defined_in_the_levels_table():
 
 
 def test_a_printed_level_missing_from_the_levels_table_is_named(tmp_path):
+    """the level dropped from the Levels table is one the page's rows print (which levels they reach follows
+    models.json, so the test takes the first GGUF level the page prints)"""
     text = PAGE.read_text()
-    assert "| Tested |" in text.split("## Levels", 1)[1]
+    printed = [lv for lv in ("Tuned", "Tested", "Quick check", "Checked on CPU") if f"| {lv}<br>" in text]
+    assert printed, "the page prints no GGUF level"
+    lv = printed[0]
+    assert f"| {lv} |" in text.split("## Levels", 1)[1]
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "supported-models.md").write_text(
-        "\n".join(x for x in text.splitlines() if not x.startswith("| Tested |")) + "\n")
+        "\n".join(x for x in text.splitlines() if not x.startswith(f"| {lv} |")) + "\n")
     p = SC.Problems()
     SC.check_levels(tmp_path, p)
-    assert len(p) == 1 and "level 'Tested'" in p[0], p
+    assert len(p) == 1 and f"level '{lv}'" in p[0], p
