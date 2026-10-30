@@ -1359,7 +1359,16 @@ def card_vars(reg, m, repo=None):
         "gated_note": gated_note(m), "component_files": component_files(m),
         "component_licences": component_licences(m), "licence_file_source": licence_file_source(m),
         "credit_lines": credit_lines(m),
+        "status": status_line(reg, m),
     }
+
+
+def status_line(reg, m):
+    """The card's first line under its title: the command that runs the model and the package release the card's links
+    point at (reg version = card_release in card_vars), linked to that release on PyPI. One source: the row's id and
+    card_release, so a reader who lands on Hugging Face first knows the CLI runs this repo and from which release."""
+    v = reg["version"]
+    return f"Runs with `mashbox run {m['id']}` in the `mashbox` package, [release {v}](https://pypi.org/project/mashbox/{v}/)."
 
 
 def default_weights(m):

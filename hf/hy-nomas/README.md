@@ -12,10 +12,12 @@ tags:
 
 # Hy-Nomas on Google Cloud TPU
 
+Runs with `mashbox run hy-nomas` in the `mashbox` package, [release 0.1.10](https://pypi.org/project/mashbox/0.1.10/).
+
 <p>
   <a href="https://github.com/mashbox-labs/mashbox"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-mashbox--labs%2Fmashbox-181717?logo=github"></a>
   <a href="https://mashbox.gg/docs/models/hy-nomas"><img alt="Docs" src="https://img.shields.io/badge/Docs-mashbox.gg-ff5a1f"></a>
-  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.5/AGENTS.md"><img alt="AGENTS.md" src="https://img.shields.io/badge/For%20coding%20agents-AGENTS.md-555555"></a>
+  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.10/AGENTS.md"><img alt="AGENTS.md" src="https://img.shields.io/badge/For%20coding%20agents-AGENTS.md-555555"></a>
   <a href="https://x.com/mashboxgg"><img alt="X" src="https://img.shields.io/badge/X-%40mashboxgg-000000?logo=x"></a>
 </p>
 
@@ -36,7 +38,7 @@ Tencent's open video world model, playable in the browser from a TPU v6e-4. The 
 
 ## Quickstart
 
-On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.5/AGENTS.md)):
+On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/AGENTS.md)):
 
 ```bash
 python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu,hy-nomas]" --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
@@ -89,7 +91,7 @@ Compiled TPU kernels for this model only. `mashbox run` picks the file that matc
 
 |  |  |
 |---|---|
-| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/hy_nomas) |
+| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.10/src/mashbox/models/hy_nomas) |
 | Guide | [mashbox.gg/docs/models/hy-nomas](https://mashbox.gg/docs/models/hy-nomas) |
 | Original model | [tencent/Hy-Nomas](https://huggingface.co/tencent/Hy-Nomas) by Tencent Hunyuan |
 | Setup from a new Google account | [mashbox.gg/docs/google-cloud](https://mashbox.gg/docs/google-cloud) |
@@ -97,4 +99,4 @@ Compiled TPU kernels for this model only. `mashbox run` picks the file that matc
 
 ## Licence
 
-Weights: Apache-2.0 licence, from [tencent/Hy-Nomas@4b8b4ed8](https://huggingface.co/tencent/Hy-Nomas/tree/4b8b4ed8ac67bf7ed82a5b80e953af548d82bd8f); code: Apache-2.0 (MASHBOX Labs). [LICENSE](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU/blob/main/LICENSE) in this repo is Tencent Hunyuan's licence file from [tencent/Hy-Nomas](https://huggingface.co/tencent/Hy-Nomas) on Hugging Face, unchanged. Our own weights in this repo: `decoders/hy-nomas-fast-decoder-v1.safetensors` (the MASHBOX Fast Decoder): Apache-2.0. The compiled kernels in `kernels/` are under their own licence: [LICENSE-KERNELS](https://github.com/mashbox-labs/mashbox/blob/v0.1.5/LICENSE-KERNELS). The compile cache in `xla-cache/` is under the same licence.
+Weights: Apache-2.0 licence, from [tencent/Hy-Nomas@4b8b4ed8](https://huggingface.co/tencent/Hy-Nomas/tree/4b8b4ed8ac67bf7ed82a5b80e953af548d82bd8f); code: Apache-2.0 (MASHBOX Labs). [LICENSE](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU/blob/main/LICENSE) in this repo is Tencent Hunyuan's licence file from [tencent/Hy-Nomas](https://huggingface.co/tencent/Hy-Nomas) on Hugging Face, unchanged. Our own weights in this repo: `decoders/hy-nomas-fast-decoder-v1.safetensors` (the MASHBOX Fast Decoder): Apache-2.0. The compiled kernels in `kernels/` are under their own licence: [LICENSE-KERNELS](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/LICENSE-KERNELS). The compile cache in `xla-cache/` is under the same licence.

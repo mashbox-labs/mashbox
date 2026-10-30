@@ -8,6 +8,8 @@ ${front_matter}
 
 **${maturity_label}**
 
+${status}
+
 ### Read the guide: [${name} docs](${docs_url})
 
 ${summary} Trained from scratch by MASHBOX Labs. Code and weights: Apache-2.0.
@@ -19,7 +21,7 @@ ${hero}
 On a CPU, with Python 3.12 (tested on x86-64 Linux). If your `python3` is older, as on a Google Cloud TPU VM, use the uv steps in the [install guide](${docs_url}#install). The first run downloads `track2rig-v2.safetensors` (11 MB) from this repo at the revision pinned in `models.json` and checks its sha256.
 
 ```bash
-git clone https://github.com/mashbox-labs/mashbox && cd mashbox
+git clone --branch v${version} https://github.com/mashbox-labs/mashbox && cd mashbox
 python3 -m venv .venv && . .venv/bin/activate
 pip install ".[cpu,track2rig]"
 ${run}

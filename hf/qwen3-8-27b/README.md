@@ -13,10 +13,12 @@ tags:
 
 # Qwen3.8-27B on Google Cloud TPU
 
+Runs with `mashbox run qwen3-8-27b` in the `mashbox` package, [release 0.1.10](https://pypi.org/project/mashbox/0.1.10/).
+
 <p>
   <a href="https://github.com/mashbox-labs/mashbox"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-mashbox--labs%2Fmashbox-181717?logo=github"></a>
   <a href="https://mashbox.gg/docs/models/qwen3-8-27b"><img alt="Docs" src="https://img.shields.io/badge/Docs-mashbox.gg-ff5a1f"></a>
-  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.5/AGENTS.md"><img alt="AGENTS.md" src="https://img.shields.io/badge/For%20coding%20agents-AGENTS.md-555555"></a>
+  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.10/AGENTS.md"><img alt="AGENTS.md" src="https://img.shields.io/badge/For%20coding%20agents-AGENTS.md-555555"></a>
   <a href="https://x.com/mashboxgg"><img alt="X" src="https://img.shields.io/badge/X-%40mashboxgg-000000?logo=x"></a>
 </p>
 
@@ -45,7 +47,7 @@ Qwen's 27B hybrid-attention language model on one Google Cloud TPU v6e chip, wit
 
 ## Quickstart
 
-On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.5/AGENTS.md)):
+On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/AGENTS.md)):
 
 ```bash
 python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"
@@ -134,7 +136,7 @@ Compiled TPU kernels for this model only. `mashbox run` picks the file that matc
 
 |  |  |
 |---|---|
-| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/qwen3_8_27b) |
+| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.10/src/mashbox/models/qwen3_8_27b) |
 | Guide | [mashbox.gg/docs/models/qwen3-8-27b](https://mashbox.gg/docs/models/qwen3-8-27b) |
 | Original model | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) by Qwen |
 | Setup from a new Google account | [mashbox.gg/docs/google-cloud](https://mashbox.gg/docs/google-cloud) |
@@ -142,4 +144,4 @@ Compiled TPU kernels for this model only. `mashbox run` picks the file that matc
 
 ## Licence
 
-Weights: Apache-2.0 licence, from [Qwen/Qwen3.8-27B@1d4bf0f2](https://huggingface.co/Qwen/Qwen3.8-27B/tree/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0); code: Apache-2.0 (MASHBOX Labs). Qwen's LICENSE file is in this repo, unchanged: [LICENSE](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/blob/main/LICENSE). The compiled kernels in `kernels/` are under their own licence: [LICENSE-KERNELS](https://github.com/mashbox-labs/mashbox/blob/v0.1.5/LICENSE-KERNELS). The compile cache in `xla-cache/` is under the same licence.
+Weights: Apache-2.0 licence, from [Qwen/Qwen3.8-27B@1d4bf0f2](https://huggingface.co/Qwen/Qwen3.8-27B/tree/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0); code: Apache-2.0 (MASHBOX Labs). Qwen's LICENSE file is in this repo, unchanged: [LICENSE](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU/blob/main/LICENSE). The compiled kernels in `kernels/` are under their own licence: [LICENSE-KERNELS](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/LICENSE-KERNELS). The compile cache in `xla-cache/` is under the same licence.
