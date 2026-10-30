@@ -1,0 +1,118 @@
+{
+ "note": "Upstream files this model downloads, pinned by revision and checked by sha256 before use. Nothing here is re-uploaded. The two 1024 configs are read only to resolve the pipeline file; the 512 pipeline never loads their weights.",
+ "code": {
+  "repo": "microsoft/TRELLIS.2",
+  "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+  "license": "MIT"
+ },
+ "repos": {
+  "trellis2": {
+   "hf": "microsoft/TRELLIS.2-4B",
+   "revision": "af44b45f2e35a493886929c6d786e563ec68364d",
+   "license": "mit",
+   "files": [
+    {
+     "name": "pipeline.json",
+     "bytes": 4186,
+     "sha256": "222c359ab1ed9bc6735a640a34f95d47f8681b9bc4aaa101bfb80274676253c6"
+    },
+    {
+     "name": "ckpts/ss_flow_img_dit_1_3B_64_bf16.json",
+     "bytes": 467,
+     "sha256": "6cdfb636854f60ffcadd8c49244169cd449f34c5ccdb55b5ff7c04678f9c399e"
+    },
+    {
+     "name": "ckpts/ss_flow_img_dit_1_3B_64_bf16.safetensors",
+     "bytes": 2584426920,
+     "sha256": "ca01377c485bec418076d38ee80166d32dc776d744f2553b835cba1e97a7abf6"
+    },
+    {
+     "name": "ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.json",
+     "bytes": 458,
+     "sha256": "ddbd7a1d34ce9a8e7af2f6ef9ae686d9ab49f69e62dacb98d8409b511cdbd5e2"
+    },
+    {
+     "name": "ckpts/slat_flow_img2shape_dit_1_3B_512_bf16.safetensors",
+     "bytes": 2584574424,
+     "sha256": "ec5e0917ef9b7e25ad51dffc7d19687a42019871f94239f2fa7f86264c55b70f"
+    },
+    {
+     "name": "ckpts/slat_flow_imgshape2tex_dit_1_3B_512_bf16.json",
+     "bytes": 458,
+     "sha256": "3093796257a62f838d2e5578ac4580ca3b7d88d10b87d348065d3fdfcc4c2077"
+    },
+    {
+     "name": "ckpts/slat_flow_imgshape2tex_dit_1_3B_512_bf16.safetensors",
+     "bytes": 2584672728,
+     "sha256": "8371aa1c5d13be79dcd5ddfd2cf3835e902e204dc34427169a1c702828e1a94d"
+    },
+    {
+     "name": "ckpts/shape_dec_next_dc_f16c32_fp16.json",
+     "bytes": 678,
+     "sha256": "5f1b856dffce79466fb18f5f0eefc08f08c673b24b3c05b20359c0b6d318a209"
+    },
+    {
+     "name": "ckpts/shape_dec_next_dc_f16c32_fp16.safetensors",
+     "bytes": 948490494,
+     "sha256": "e3b718d3e43e4f8780e9a24ac6fff231811a67e3b058e336e10fe654c911d581"
+    },
+    {
+     "name": "ckpts/tex_dec_next_dc_f16c32_fp16.json",
+     "bytes": 705,
+     "sha256": "22074e4ab5b28e2b72d33a3fe61bf416134b89e12d0fc5c729f37da75da0c4d1"
+    },
+    {
+     "name": "ckpts/tex_dec_next_dc_f16c32_fp16.safetensors",
+     "bytes": 948458812,
+     "sha256": "97ea69addea2ecd9312910f5f548234665eef51c088386180b7cd5b258645e3c"
+    },
+    {
+     "name": "ckpts/slat_flow_img2shape_dit_1_3B_1024_bf16.json",
+     "bytes": 458,
+     "sha256": "7ebd6d367393f52fee9e92c2b3d727a9026a338549c6a6fa84c7ea122140ffdd"
+    },
+    {
+     "name": "ckpts/slat_flow_imgshape2tex_dit_1_3B_1024_bf16.json",
+     "bytes": 458,
+     "sha256": "31f4fdad9974930e5e9324ac9dfb6ef7de6b30cea51854ba515ef827a8d353b2"
+    }
+   ]
+  },
+  "trellis_image_large": {
+   "hf": "microsoft/TRELLIS-image-large",
+   "revision": "25e0d31ffbebe4b5a97464dd851910efc3002d96",
+   "license": "mit",
+   "files": [
+    {
+     "name": "ckpts/ss_dec_conv3d_16l8_fp16.json",
+     "bytes": 245,
+     "sha256": "646781293f1cda74720de85d1cef50a957fb4aebd9a4bd014e454e32f2330ac5"
+    },
+    {
+     "name": "ckpts/ss_dec_conv3d_16l8_fp16.safetensors",
+     "bytes": 147591972,
+     "sha256": "1c76d4a40519aa2d711cc263a8404105231ac26db31d946bed48b84fee79009a"
+    }
+   ]
+  },
+  "dinov3": {
+   "hf": "facebook/dinov3-vitl16-pretrain-lvd1689m",
+   "revision": "ea8dc2863c51be0a264bab82070e3e8836b02d51",
+   "license": "other",
+   "license_name": "dinov3-license",
+   "gated": true,
+   "files": [
+    {
+     "name": "config.json",
+     "bytes": 745,
+     "sha256": "135ecd23e34a70b6fbed8b083fdecb319b7e3a54e3d849258bbe4ddcf1783bb5"
+    },
+    {
+     "name": "model.safetensors",
+     "bytes": 1212559808,
+     "sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179"
+    }
+   ]
+  }
+ }
+}

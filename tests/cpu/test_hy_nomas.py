@@ -130,24 +130,79 @@ def test_app_server_answers_only_its_route_table():
 
 def test_kernel_download_error_stops_with_one_plain_line(monkeypatch):
     """A kernel bundle download that the Hub refuses (a private or missing repo answers 401) or that cannot reach the Hub
-    stops the run with one line naming the repo and the way out (--no-kernels), not a traceback."""
+    stops the run with one line naming the repo and the way out (--no-kernels), not a traceback. The line is hub.fetch's
+    (tests/cpu/test_hub_fetch.py, for every download); the Model reaches it through hub.kernel_bundle."""
     requests = pytest.importorskip("requests")
     errors = pytest.importorskip("huggingface_hub.errors")
     import inspect
-    from mashbox import hub
+    import huggingface_hub
+    from mashbox import hub, kernels as K
     from mashbox.models.hy_nomas import app
     m = hub.model_entry('hy-nomas')
+    row = m['kernels'][0]
+    monkeypatch.setattr(K, 'chip_family', lambda: row['chips'][0])
+    monkeypatch.setattr(K, 'versions', lambda: dict(jax=row['jax'], jaxlib=None, libtpu=None))
     r = requests.Response()
     r.status_code = 401
     for err in (errors.RepositoryNotFoundError('401 Client Error. Repository Not Found', response=r),
                 requests.exceptions.ConnectionError('Max retries exceeded with url')):
-        def refuse(m, log, err=err):
+        def refuse(*a, err=err, **k):
             raise err
-        monkeypatch.setattr(hub, 'kernel_bundle', refuse)
-        with pytest.raises(SystemExit) as e:
-            app.kernel_bundle(m, print)
-        msg = str(e.value.code)
+        monkeypatch.setattr(huggingface_hub, 'hf_hub_download', refuse)
+        with pytest.raises(hub.DownloadError) as e:
+            hub.kernel_bundle(m, print)
+        msg = str(e.value)
         assert 'https://huggingface.co/mashbox-labs/Hy-Nomas-TPU' in msg and '--no-kernels' in msg
         assert ('HTTP 401' in msg) == (err.__class__.__name__ == 'RepositoryNotFoundError')
         assert '\n' not in msg and 'Traceback' not in msg
-    assert 'kernel_bundle(m, log)' in inspect.getsource(app.Model) and 'hub.kernel_bundle' not in inspect.getsource(app.Model)
+    assert 'hub.kernel_bundle(m, log)' in inspect.getsource(app.Model)
+
+
+def hy_nomas_extra():
+    """the distributions pyproject's hy-nomas extra adds, in its order"""
+    import pathlib
+    import re
+    import tomllib
+    proj = tomllib.loads((pathlib.Path(__file__).resolve().parents[2] / "pyproject.toml").read_text())["project"]
+    return [re.match(r"[A-Za-z0-9._-]+", r).group(0) for r in proj["optional-dependencies"]["hy-nomas"]]
+
+
+@pytest.mark.parametrize("uv", [True, False], ids=["uv tool", "pip"])
+def test_run_without_the_hy_nomas_extra_stops_before_any_download(monkeypatch, capsys, uv):
+    """On a Cloud TPU VM installed with mashbox[tpu] only (install.sh's TPU default), `run hy-nomas` passed the chip check
+    and the downloads, then ended in ModuleNotFoundError: torch (upstream.TencentText). It stops first: one line naming
+    the distributions the hy-nomas extra adds and the line that installs them (install.sh with MASHBOX_EXTRAS in a uv tool,
+    else the models.json install line), exit 2; nothing is fetched and no chip is opened. --stub (no model) and download
+    (files only) still run without them."""
+    from mashbox import cli, hub
+    from mashbox.models.hy_nomas import app, upstream, weights
+    missing = hy_nomas_extra()
+    monkeypatch.setattr(cli, "installed", lambda d: d not in missing, raising=False)
+    monkeypatch.setattr(cli, "uv_tool", lambda: uv, raising=False)
+
+    def ran(*a, **k):
+        raise AssertionError("reached the chip check or a download")
+    monkeypatch.setattr(hub, "fetch", ran)
+    monkeypatch.setattr(app, "run", ran)                   # Model(a): the chip check, then every download
+    assert cli.main(["run", "hy-nomas", "--ui"]) == 2
+    err = capsys.readouterr().err.strip().splitlines()
+    fix = ("curl -fsSL https://mashbox.gg/install.sh | MASHBOX_EXTRAS=tpu,hy-nomas sh" if uv
+           else hub.model_entry("hy-nomas")["install"])
+    assert err == ["mashbox: run hy-nomas needs " + ", ".join(missing[:-1]) + f" and {missing[-1]} (mashbox[tpu,hy-nomas]), "
+                   f"which this install does not have. Install them, then run the same command again: {fix}"], err
+    monkeypatch.setattr(app, "run_stub", lambda a: 0)
+    assert cli.main(["run", "hy-nomas", "--stub"]) == 0
+    monkeypatch.setattr(weights, "check_disk", lambda log: None)
+    monkeypatch.setattr(weights, "download_all", lambda log: {})
+    monkeypatch.setattr(upstream, "source_dir", lambda log: "src")
+    assert cli.main(["download", "hy-nomas"]) == 0
+
+
+def test_run_with_the_hy_nomas_extra_installed_goes_on_to_the_model(monkeypatch):
+    """With every distribution of the extra installed, the check passes and `run` reaches the model as before."""
+    from mashbox import cli
+    from mashbox.models.hy_nomas import app
+    monkeypatch.setattr(cli, "installed", lambda d: True, raising=False)
+    seen = []
+    monkeypatch.setattr(app, "run", lambda a: seen.append(a.ui) or 0)
+    assert cli.main(["run", "hy-nomas", "--ui"]) == 0 and seen == [True]

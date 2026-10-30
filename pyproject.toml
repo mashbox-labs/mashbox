@@ -21,9 +21,10 @@ Issues = "https://github.com/mashbox-labs/mashbox/issues"
 [project.optional-dependencies]
 tpu = ["jax[tpu]==0.11.2"]
 cpu = ["jax==0.11.2"]
-dev = ["pytest", "jax==0.11.2", "torch", "transformers", "safetensors"]
+dev = ["pytest", "jax==0.11.2", "torch", "transformers", "safetensors", "pillow", "scipy", "trimesh", "xatlas==0.0.11", "opencv-python-headless"]
 track2rig = ["scipy"]
 hy-nomas = ["torch>=2.5", "transformers==4.57.1", "pyyaml", "scipy", "imageio-ffmpeg", "pillow"]
+trellis-2 = ["torch>=2.5", "pillow", "scipy", "trimesh", "xatlas==0.0.11", "opencv-python-headless"]
 
 [project.scripts]
 mashbox = "mashbox.cli:main"
@@ -35,7 +36,7 @@ version = {attr = "mashbox.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-mashbox = ["models.json", "models/*/*.json", "models/*/*.html", "tpu/*.sh", "tpu/*.sha256",
+mashbox = ["models.json", "models/*/*.json", "models/*/*.html", "models/trellis_2/*.txt", "models/trellis_2/LICENSE-*", "models/trellis_2/glb_bake/LICENSE-*", "tpu/*.sh", "tpu/*.sha256",
            "ui/shell/*.css", "ui/shell/*.js", "ui/shell/*.svg", "ui/shell/*.html", "ui/shell/*.md", "ui/shell/fonts/*",
            "ui/chat/*.html", "ui/chat/*.js",
            "ui/app/*.html", "ui/app/*.js", "ui/app/*.css", "ui/app/window/*.html", "ui/app/window/*.js",

@@ -116,7 +116,7 @@ def fetch(spec, dl):
     """REPO[:TAG] -> (local primary path, dict of the pin: repo, revision, file, lfs sha256, bytes, card, seconds)"""
     import urllib.request
     from huggingface_hub import hf_hub_download
-    from mashbox.gguf import resolve as GR
+    from mashbox import gguf as GR
     import gguf_scan as S
     repo, tag = (spec.split(":", 1) + [None])[:2] if ":" in spec else (spec, None)
     info = json.loads(S.get(f"{S.HF}/api/models/{repo}?blobs=true"))
@@ -436,7 +436,7 @@ def main(argv=None):
     json.dump(rec, open(os.path.join(d, "record.json"), "w"), indent=1, ensure_ascii=False)
     seal(d)
     if downloaded and not a.keep:       # only the file this run downloaded, after its record is sealed
-        from mashbox.gguf import resolve as GR
+        from mashbox import gguf as GR
         base = os.path.dirname(path)
         for p in GR.shards(os.path.basename(pin["file"])):
             q = os.path.join(base, p)

@@ -11,7 +11,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 ALLOWED = {"numpy", "jax", "jaxlib", "ml_dtypes", "tokenizers", "jinja2", "huggingface_hub", "mashbox",
            "gguf"}                                  # gguf: llama.cpp's GGUF reader, pinned in pyproject (NOTICE)
-IMPORT_NAME = {"pyyaml": "yaml", "imageio-ffmpeg": "imageio_ffmpeg", "pillow": "PIL"}     # pip name -> import name
+IMPORT_NAME = {"pyyaml": "yaml", "imageio-ffmpeg": "imageio_ffmpeg", "pillow": "PIL", "opencv-python-headless": "cv2"}     # pip name -> import name
 
 
 def extras():
@@ -806,6 +806,53 @@ def test_chip_note_replaces_not_supported():
         "One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized.")
 
 
+def test_highlight_keeps_an_acronym_that_starts_the_metric():
+    """A card bullet lowercases the metric's first letter to run on after the value, but not when the metric starts with
+    an all-capitals word: "GLB export" printed as "gLB export" on the TRELLIS.2 card."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+
+    def card(metric):
+        return sc.highlights({"results": [{"chip": "TPU v6e-1", "metric": metric, "value": "9 s"}], "files": []})
+
+    assert card("GLB export on the VM CPU") == "- **9 s**: GLB export on the VM CPU, on TPU v6e-1"
+    assert card("MTP draft speed") == "- **9 s**: MTP draft speed, on TPU v6e-1"
+    assert card("Chip memory peak") == "- **9 s**: chip memory peak, on TPU v6e-1"
+    assert card("A picture in") == "- **9 s**: a picture in, on TPU v6e-1"
+
+
+
+def test_a_card_only_hf_repo_needs_every_weights_source_pinned_at_its_maker():
+    """An HF repo holds the full-precision weights or the kernel bundle, except a card-only repo (card and LICENSE) for a
+    row whose every weights source is its maker's repo pinned in the model's upstream.json (TRELLIS.2 re-hosts no
+    weights). A weights-less row with an unpinned or differently pinned weights source still fails."""
+    import copy
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
+    sc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sc)
+    rule = "an HF repo holds at least the full-precision weights or the kernel bundle"
+
+    def hits(reg):
+        p = sc.Problems()
+        sc.validate(reg, ROOT, p)
+        return [x for x in p if rule in str(x) and "trellis-2" in str(x)]
+
+    ok = json.loads((ROOT / "models.json").read_text())
+    row = next(m for m in ok["models"] if m["id"] == "trellis-2")
+    row["hf_repo"] = "mashbox-labs/TRELLIS.2-TPU"
+    assert not row["files"] and not row.get("kernels") and hits(ok) == []
+    moved = copy.deepcopy(ok)
+    next(c for c in next(m for m in moved["models"] if m["id"] == "trellis-2")["upstream"]["components"]
+         if c.get("hf"))["revision"] = "0" * 40
+    assert hits(moved)
+    unpinned = copy.deepcopy(ok)
+    next(m for m in unpinned["models"] if m["id"] == "trellis-2")["upstream"]["hf"] = "someone/not-pinned"
+    assert hits(unpinned)
+
+
 def test_runs_only_on_claim_follows_measured_rows(tmp_path):
     """A page or docstring that says a model runs only on one chip is wrong when the model was measured on another chip
     (a results row or a passing chips row) or has a chip row nobody has run it on yet ("Not tested yet"). AGENTS.md said
@@ -1011,3 +1058,61 @@ def test_the_docs_modules_import_without_jax():
     p = subprocess.run([sys.executable, "-c", code, *mods], capture_output=True, text=True, timeout=300, cwd=ROOT,
                        env={**__import__("os").environ, "PYTHONPATH": str(ROOT / "src")})
     assert p.returncode == 0 and p.stdout.strip() == "imported", p.stderr[-1500:]
+
+
+# The client install: install.sh off a Cloud TPU VM installs `mashbox` with no extras, so there is no JAX. `--help`,
+# `models` and `tpu` worked there, but run, download, inspect and env ended in a traceback (ModuleNotFoundError: No module
+# named 'jax') before any check. argv[1] picks how this Python was installed: "uv" (a uv tool, as install.sh makes) or "pip".
+CLIENT = ("import sys\nsys.modules['jax'] = None\nsys.modules['jaxlib'] = None\n"
+          "import mashbox.cli as C\nC.uv_tool = lambda: sys.argv[1] == 'uv'\nsys.exit(C.main(sys.argv[2:]))\n")
+CLIENT_RUNS = [   # (argv, how mashbox was installed, what the one line must say to do)
+    (["run", "qwen3-8-27b", "--prompt", "Hi"], "uv", "From this machine: mashbox tpu up qwen3-8-27b"),
+    (["download", "qwen3-8-27b"], "uv", "From this machine: mashbox tpu up qwen3-8-27b"),
+    (["run", "hy-nomas"], "uv", "From this machine: mashbox tpu up hy-nomas"),
+    (["download", "hy-nomas"], "uv", "From this machine: mashbox tpu up hy-nomas"),
+    (["run", "track2rig", "tracks.npz", "-o", "out"], "uv", "curl -fsSL https://mashbox.gg/install.sh | MASHBOX_EXTRAS=cpu,track2rig sh"),
+    (["run", "track2rig", "tracks.npz", "-o", "out"], "pip", 'python3 -m pip install "mashbox[cpu,track2rig]"'),
+    (["inspect", "unsloth/Qwen3-0.6B-GGUF", "--no-download"], "uv", "curl -fsSL https://mashbox.gg/install.sh | MASHBOX_EXTRAS=cpu sh"),
+    (["run", "unsloth/Qwen3-0.6B-GGUF", "--prompt", "Hi"], "pip", ' -m pip install "mashbox[cpu]"'),
+    (["download", "./model.gguf"], "uv", "MASHBOX_EXTRAS=cpu sh"),
+    (["run", "not-a-model", "--prompt", "Hi"], "uv", "This version's models: mashbox models"),
+]
+
+
+def client_run(tmp_path, how, argv):
+    """`mashbox <argv>` on a Python without JAX, offline, with empty caches under tmp_path: any download would fail (HOME
+    stays: a user-site numpy lives under it)"""
+    env = {**__import__("os").environ, "PYTHONPATH": str(ROOT / "src"), "HF_HUB_OFFLINE": "1",
+           "HF_HOME": str(tmp_path / "hf"), "MASHBOX_CACHE": str(tmp_path / "cache")}
+    return subprocess.run([sys.executable, "-c", CLIENT, how, *argv], capture_output=True, text=True, timeout=300,
+                          cwd=tmp_path, env=env)
+
+
+@pytest.mark.parametrize("argv,how,fix", CLIENT_RUNS, ids=[f"{' '.join(a[:2])} ({h})" for a, h, _ in CLIENT_RUNS])
+def test_the_client_install_answers_run_download_and_inspect_in_one_line(tmp_path, argv, how, fix):
+    """Without JAX, run, download and inspect stop with one line (exit 2) that names JAX and what to do: a models.json
+    model that runs on a TPU says `mashbox tpu up <model>` and its Cloud TPU VM install line; a CPU model gives the line that
+    installs it here; a GGUF file, a Hugging Face repo or another name gives the CPU install and `mashbox models`. The line
+    comes before any download (nothing written to the caches) and is never a traceback."""
+    p = client_run(tmp_path, how, argv)
+    err = p.stderr.strip().splitlines()
+    assert p.returncode == 2 and len(err) == 1, p.stderr[-2000:]
+    assert err[0].startswith("mashbox: ") and "needs JAX, which this install does not have" in err[0] and fix in err[0], err
+    assert p.stdout == "" and not any(p for d in ("hf", "cache") for p in (tmp_path / d).rglob("*") if p.is_file())
+
+
+def test_the_client_install_still_answers_help(tmp_path):
+    """A model's own options parse without JAX: `run hy-nomas --help` prints its options and exits 0."""
+    p = client_run(tmp_path, "uv", ["run", "hy-nomas", "--help"])
+    assert p.returncode == 0 and "--stub" in p.stdout and "Traceback" not in p.stderr, p.stderr[-2000:]
+
+
+def test_env_never_crashes_without_jax(tmp_path):
+    """`mashbox env` is what a person runs for a bug report: without JAX it prints mashbox's and Python's versions, jax
+    null and why there are no devices (exit 0), not a traceback."""
+    import mashbox
+    p = client_run(tmp_path, "uv", ["env"])
+    assert p.returncode in (0, None) and "Traceback" not in p.stderr, p.stderr[-2000:]
+    out = json.loads(p.stdout)
+    assert out["mashbox"] == mashbox.__version__ and out["python"] == ".".join(map(str, sys.version_info[:3]))
+    assert out["jax"] is None and out["devices"] == "none: this install has no JAX (it is the client for mashbox tpu)", out

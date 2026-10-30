@@ -63,30 +63,12 @@ def main(cmd, argv):
         return 0
     if a.stub:
         return run_stub(a)
+    from ...cli import extras_refusal
+    stop = extras_refusal('hy-nomas', cmd)                 # no torch etc. (a mashbox[tpu] install): one line, before the chip check and downloads
+    if stop:
+        log(stop)
+        return 2
     return run(a)
-
-
-# ------------------------------------------------------------------ downloads
-def kernel_bundle(m, log):
-    """hub.kernel_bundle, except that a download the Hub refuses (401, 403, 404) or that cannot reach it stops the run with
-    one plain line saying what failed and what to do, instead of a traceback."""
-    from ... import hub
-    try:
-        from huggingface_hub.errors import HfHubHTTPError
-    except ImportError:                                    # older huggingface_hub: its HTTP errors are OSErrors
-        HfHubHTTPError = OSError
-    try:
-        return hub.kernel_bundle(m, log)
-    except (OSError, HfHubHTTPError) as e:
-        raise SystemExit(download_error('the kernel bundle', m, e)) from None
-
-
-def download_error(what, m, e):
-    code = getattr(getattr(e, 'response', None), 'status_code', None)
-    first = (str(e).strip().splitlines() or [''])[0][:200]
-    why = 'Hugging Face answered HTTP %d' % code if code else '%s%s' % (type(e).__name__, ': ' + first if first else '')
-    return ('could not download %s from https://huggingface.co/%s (revision %s): %s. Check the network and run again, '
-            'or start with --no-kernels to run without it, in plain JAX (slower).' % (what, m['hf_repo'], m['hf_revision'][:8], why))
 
 
 # ------------------------------------------------------------------ model
@@ -114,7 +96,7 @@ class Model:
         hub.compile_cache(m, self.cache, log)              # our compiled programs for this chip and jax, when they match
         bundle = None
         if not a.no_kernels:
-            path, row = kernel_bundle(m, log)
+            path, row = hub.kernel_bundle(m, log)        # a download that fails: hub.DownloadError, one line naming --no-kernels
             if path is not None:
                 b = KB.open_bundle(path, row['sha256'])
                 bundle = b if (b.usable() and fam in row['chips']) else None

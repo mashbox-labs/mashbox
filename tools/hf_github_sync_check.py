@@ -81,6 +81,8 @@ KINDS = {
     "image": {"suffix": "-TPU", "label": "Image"},
     "voice": {"suffix": "-TPU", "label": "Voice"},
     "rig": {"suffix": "", "label": "Rigging"},   # our own CPU models (Track2Rig): HF repo = the model name
+    # no label of its own: catalog.py (code the chip records ran) has none for it, so `mashbox models` prints the id
+    "image-to-3d": {"suffix": "-TPU", "label": "image-to-3d"},
 }
 CHIPS = ("v5e", "v6e", "v5p-8", "v6e-4")      # the chip types people rent: v5e, v6e, a v5p slice and a v6e slice
 CHIP_LABEL = {"v5e": "TPU v5e", "v6e": "TPU v6e", "v5p-8": "TPU v5p slice (v5p-8)", "v6e-4": "TPU v6e slice (v6e-4)"}
@@ -175,7 +177,7 @@ def validate(reg, repo_root, problems, release=False):
                 problems.add(where, f"hf_repo for kind {m['kind']} must end with {KINDS[m['kind']]['suffix']}")
             if m["hf_revision"] is not None and not SHA_RE.match(m["hf_revision"]):
                 problems.add(where, "hf_revision must be a 40-character commit sha or null")
-            if not m["files"] and not m.get("kernels"):
+            if not m["files"] and not m.get("kernels") and not card_only_repo(repo_root, m):
                 problems.add(where, "an HF repo holds at least the full-precision weights or the kernel bundle")
         if m["kind"] == "llm-gguf" and m["hf_repo"] is None:
             problems.add(where, "a GGUF entry needs its HF repo")
@@ -1118,6 +1120,61 @@ def weights_licence(m):
     return f"Weights: {name} licence, from [{pin}]({url})"
 
 
+def _licence_name(c):
+    """A licence's name as the row records it: the SPDX spelling of a plain id, else the recorded name."""
+    return SPDX.get(str(c["license"]).lower(), c.get("license_name") or c["license"])
+
+
+def component_files(m):
+    """The image-to-3d card's Files line: every weights repo the port downloads unchanged (the row's own and each
+    component's), when the row ships no files of its own."""
+    if m["files"]:
+        return files_table(m)
+    repos = [m["upstream"]["hf"]] + [c["hf"] for c in m["upstream"].get("components", []) if c.get("hf")]
+    links = ", ".join(f"[{r}](https://huggingface.co/{r})" for r in repos)
+    return f"This port loads the original weights unchanged from their makers' repos: {links}. This repo holds none of them."
+
+
+def component_licences(m):
+    """The image-to-3d card's weights line: the row's weights licence, then each weights component's, as recorded."""
+    out = [weights_licence(m)]
+    for c in m["upstream"].get("components", []):
+        if c.get("hf"):
+            rev = c.get("revision")
+            pin, url = (f"{c['hf']}@{rev[:8]}", f"https://huggingface.co/{c['hf']}/tree/{rev}") if rev else (
+                c["hf"], f"https://huggingface.co/{c['hf']}")
+            name = _licence_name(c)
+            out.append(f"[{pin}]({url}): " + (f"[{name}]({c['license_link']})" if c.get("license_link") else name))
+    return "; ".join(out)
+
+
+def licence_file_source(m):
+    """Where the LICENSE in the HF repo comes from: the component whose licence file has the row's licence sha256 (a
+    GitHub file at a pinned commit), else the row's own HF repo (upstream_licence_file)."""
+    up = m["upstream"]
+    src = next((c for c in up.get("components", []) if c.get("github") and up.get("license_sha256")
+                and c.get("license_sha256") == up["license_sha256"]), None)
+    if src is None or not m["hf_repo"]:
+        return upstream_licence_file(m, source=True)
+    rev = src["revision"]
+    return (f"[LICENSE](https://huggingface.co/{m['hf_repo']}/blob/main/LICENSE) in this repo is {up['maker']}'s licence "
+            f"file from [{src['github']}@{rev[:8]}](https://github.com/{src['github']}/blob/{rev}/LICENSE) on GitHub, "
+            f"unchanged. ")
+
+
+def credit_lines(m):
+    """One credit per component with a notice: code the port carries over from another project, named with its licence
+    as the row records it, and its own LICENSE shipped unchanged beside that code (the notice path)."""
+    out = []
+    for c in m["upstream"].get("components", []):
+        if (c.get("notice") or c.get("reference")) and c.get("github"):
+            rev = c["revision"]
+            out.append(f"Credit: [{c['github']}@{rev[:8]}](https://github.com/{c['github']}/tree/{rev}), "
+                       f"{_licence_name(c)}, {c['role']}" + (f"; its LICENSE ships unchanged in the package as "
+                       f"`{Path(c['notice']).name}` beside that code. " if c.get("notice") else ". "))
+    return "".join(out)
+
+
 def upstream_licence_file(m, source=False):
     """The line that says the upstream LICENSE file travels with our repo, unchanged. source=True also names where it
     comes from (the world card); the LLM cards keep their words until their next card upload."""
@@ -1147,8 +1204,14 @@ def own_files_licence(repo, m):
     return ("Our own weights in this repo: " + "; ".join(rows) + ". ") if rows else ""
 
 
+def run_on(metric):
+    """A metric as it reads after "value: ": its first letter lowercased, unless its first word is all capitals (GLB, MTP)."""
+    word = metric.split(" ", 1)[0]
+    return metric if len(word) > 1 and word[:2].isupper() else metric[0].lower() + metric[1:]
+
+
 def highlights(m):
-    out = [f"- **{r['value']}**: " + (r["highlight"] if r.get("highlight") else f"{r['metric'][0].lower() + r['metric'][1:]}, on {r['chip']}")
+    out = [f"- **{r['value']}**: " + (r["highlight"] if r.get("highlight") else f"{run_on(r['metric'])}, on {r['chip']}")
            for r in m["results"]]
     for f in m["files"]:
         if f.get("quality") and f.get("default"):
@@ -1285,12 +1348,38 @@ def card_vars(reg, m, repo=None):
         "default_tag": (m.get("default_tag") or ""),
         "weights_version": weights_version(m),
         "maturity_label": experimental_note(m, ""),
+        "maturity_line": f"**{experimental_note(m, '')}**\n\n" if experimental(m) else "",
+        "login_line": "~/.local/bin/hf auth login\n" if gated(m) else "",
+        "gated_note": gated_note(m), "component_files": component_files(m),
+        "component_licences": component_licences(m), "licence_file_source": licence_file_source(m),
+        "credit_lines": credit_lines(m),
     }
 
 
 def default_weights(m):
     """The default weights file row of files[] (kind weights, default true), or None."""
     return next((f for f in m.get("files") or [] if f.get("kind") == "weights" and f.get("default")), None)
+
+
+def gated_note(m):
+    """One line per gated upstream component (e.g. an image encoder its maker gates): the user accepts its licence on its
+    Hugging Face page first, named and linked as the row records it (the row copies those values from the pin); mashbox
+    downloads it with the user's own token and our repo never hosts it. "" when nothing is gated."""
+    out = []
+    for c in m["upstream"].get("components", []):
+        if c.get("gated") and c.get("hf"):
+            name = c.get("license_name") or c["license"]
+            lic = f"[{name}]({c['license_link']})" if c.get("license_link") else f"`{name}`"
+            out.append(f"Before the first run, open [{c['hf']}](https://huggingface.co/{c['hf']}) on Hugging Face and "
+                       f"accept its licence ({lic}) with your account. `mashbox run` downloads it with your own token: "
+                       f"the `hf auth login` line above signs the VM in (or set `HF_TOKEN`), and this repo does not "
+                       f"host it.")
+    return "\n\n".join(out)
+
+
+def gated(m):
+    """True when an upstream component is gated (each user downloads it with their own Hugging Face token)."""
+    return any(c.get("gated") and c.get("hf") for c in m["upstream"].get("components", []))
 
 
 def weights_version(m):
@@ -2833,6 +2922,18 @@ def _sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def card_only_repo(repo, m):
+    """True when a row's HF repo may hold only the card and LICENSE: no weights or kernels of ours, and every weights
+    source (the row's own and each component's) is its maker's repo, outside our org, pinned at that revision in the
+    model's upstream.json. Each user downloads the weights from their makers; nothing is re-hosted."""
+    pins = _upstream_pins(repo, m) if repo is not None else None
+    if not pins or not m.get("hf_repo"):
+        return False
+    ours = m["hf_repo"].split("/")[0] + "/"
+    srcs = [m["upstream"]] + [c for c in m["upstream"].get("components", []) if c.get("hf")]
+    return all(c.get("revision") and pins.get(c["hf"]) == c["revision"] and not c["hf"].startswith(ours) for c in srcs)
+
+
 def _upstream_pins(repo, m):
     """{repo: revision} pinned by the model's upstream.json (its code commit and every repo it downloads), or None."""
     f = repo / m["path"] / "upstream.json"
@@ -2885,6 +2986,15 @@ def check_licences(reg, repo, problems):
             for key in ("license", "revision"):
                 if str(c.get(key) or "").strip().lower() in UNCONFIRMED:
                     problems.add(where, f"upstream.components {src}: {key} is empty")
+            if c.get("reference"):   # read, not copied: a credit line only, nothing downloaded or shipped
+                continue
+            if c.get("notice"):   # code carried over from another project: pinned by its own LICENSE, shipped unchanged
+                f = repo / c["notice"]
+                if not f.is_file():
+                    problems.add(where, f"upstream.components {src}: notice {c['notice']} missing (its LICENSE, unchanged)")
+                elif _sha256(f) != c.get("license_sha256"):
+                    problems.add(c["notice"], "differs from the pinned upstream LICENSE (license_sha256); never edit it")
+                continue
             if pins is not None and pins.get(src) != c.get("revision"):
                 problems.add(where, f"upstream.components {src}: revision differs from upstream.json ({str(pins.get(src))[:12]})")
     for f in _prose(repo) + sorted((repo / "templates" / "hf").glob("*.md")):

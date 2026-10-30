@@ -79,7 +79,7 @@ Wait 10 s before you start it again ([why](../faq.md#how-do-i-stop-a-server-and-
 <!-- cli:start run -->
 | Option | Default | What it does |
 |---|---|---|
-| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or a Hugging Face safetensors repo or model folder (e.g. Qwen/Qwen3-4B) |
+| `MODEL` |  | a model in `mashbox models` by its id, name or Hugging Face repo (e.g. qwen3-8-27b or mashbox-labs/Qwen3.8-27B-TPU), a .gguf file, a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or a model folder or Hugging Face repo with config.json and safetensors weights (e.g. Qwen/Qwen3-4B) |
 | `--weights FILE` |  | a local .bshj file instead of the download (its sha256 is still checked) |
 | `--no-kernels` | off | plain JAX only: a catalog model runs without its TPU kernels (slower decode, same outputs within rounding) |
 | `--prompt TEXT` |  | answer one chat turn, print it and exit; without it, start the server |

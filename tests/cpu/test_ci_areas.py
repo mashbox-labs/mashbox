@@ -189,8 +189,10 @@ def test_a_change_to_gguf_rows_only_runs_the_gguf_tests_and_the_tests_that_read_
     model = CS.model_areas()[0]                                    # models[0] is the row the "model" commit changed
     assert pick(reg, "model") == sorted({model, "core"})           # a models[] row: that model plus core, as before
     assert pick(reg + views, "model") == sorted({model, "core"})
-    both = pick(reg, "both")                                       # core runs every rows reader, so no extra leg
-    assert set(both) == {model, "core", "gguf"}, both
+    both = pick(reg, "both")                                       # core runs the rows readers in its area; a rows reader
+    outside = {CS.test_area(f.rsplit("/", 1)[-1], areas)           # in another model's area (one that reads the catalog)
+               for f in CS.area_files(CS.ROWS, areas)} - {model, "core", "gguf"}    # keeps the rows leg, which runs it
+    assert set(both) == {model, "core", "gguf"} | ({CS.ROWS} if outside else set()), (both, outside)
     assert pick(reg, "top") == []                                  # top-level fields feed the views only (T0)
     for code in ("src/mashbox/cli.py", "src/mashbox/catalog.py", "tools/gguf_rows.py", "tools/hf_github_sync_check.py",
                  "tests/cpu/test_catalog.py", "some/new/kind/of/file.cfg"):

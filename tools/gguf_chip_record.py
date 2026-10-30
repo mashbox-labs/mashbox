@@ -23,9 +23,8 @@ import time
 def load(path, slots=None):
     """(model, engine, chat, info, t0) for a GGUF file, as cli.load_gguf returns them, from the loader below its hold"""
     from mashbox import cli, gguf as G
-    from mashbox.gguf import resolve as GR
     a = cli.build_parser().parse_args(["run", path] + (["--slots", str(slots)] if slots else []))
-    a = argparse.Namespace(**{**vars(a), "gguf": GR.resolve(a.model, log=cli.log)})   # run's args and resolve, one call
+    a = argparse.Namespace(**{**vars(a), "gguf": G.fetch_file(a.model, log=cli.log)})   # run's args and resolve, one call
     t0 = time.time()
     r = a.gguf
     f, A, c = G.open_model(r["path"], repo=r["repo"], quant=r["tag"])

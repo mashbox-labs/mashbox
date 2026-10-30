@@ -101,3 +101,59 @@ def test_the_hub_scan_probe_gives_the_same_line_and_files_it_as_not_a_model(kind
     pr = S.probe(hdr, len(open(p, "rb").read()), p)
     assert pr == dict(supported=False, stage="load", why=str(e.value)), pr
     assert S.blocked_by(S.parse(hdr)[0], pr) == "not-a-model"
+
+
+def _without_tokenizer(src, dst, model=None):
+    """a copy of the GGUF file src with every tokenizer.* key left out (as maya1's GGUF: 15 keys, none of them
+    tokenizer.*), or with tokenizer.ggml.model set to `model` and no vocabulary"""
+    r = gguf.GGUFReader(src)
+    w = gguf.GGUFWriter(dst, r.fields["general.architecture"].contents())
+    for name, fd in r.fields.items():
+        if name.startswith("GGUF.") or name == "general.architecture" or name.startswith("tokenizer."):
+            continue
+        if fd.types[0] == gguf.GGUFValueType.ARRAY:
+            w.add_key_value(name, fd.contents(), fd.types[0], sub_type=fd.types[-1])
+        else:
+            w.add_key_value(name, fd.contents(), fd.types[0])
+    if model is not None:
+        w.add_tokenizer_model(model)
+    for t in r.tensors:
+        w.add_tensor(t.name, np.array(t.data), raw_dtype=t.tensor_type)
+    w.write_header_to_file()
+    w.write_kv_data_to_file()
+    w.write_tensors_to_file()
+    w.close()
+    return dst
+
+
+@pytest.mark.parametrize("model", [None, "none", "no_vocab"], ids=["no tokenizer keys", "model none", "model no_vocab"])
+def test_a_model_file_with_no_tokenizer_is_one_true_line(model, tmp_path, capsys, monkeypatch):
+    """A model file with no tokenizer (maya1's GGUF) stopped `run` with 'the tokenizer in this file (model "None", ...) is
+    not read by this version. llama.cpp runs it: llama-server ...', and inspect said runs_here. llama.cpp a37cc46 does not
+    load such a file either: tokenizer.ggml.model is a key it requires (src/llama-vocab.cpp:2201; "error loading model
+    vocabulary: key not found in model: tokenizer.ggml.model"); "none" and "no_vocab" mean a file with no vocabulary,
+    which takes no text. One line says the file has no tokenizer and mashbox does not run it, never that llama.cpp runs
+    it; `run` stops before the weights load and inspect gives the same line."""
+    import importlib.util
+    import os
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    spec = importlib.util.spec_from_file_location("gguf_fixtures", os.path.join(root, "tools", "gguf_fixtures", "fixtures.py"))
+    FXT = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(FXT)
+    monkeypatch.setenv("MASHBOX_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("MASHBOX_GGUF_KERNELS", "off")
+    p = _without_tokenizer(FXT.build("llama-f32", str(tmp_path)), str(tmp_path / "maya-like.gguf"), model)
+    G.open_model(p)                                   # a whole llama model file in every other way
+    assert cli.main(["run", p, "--prompt", "Hi", "--ctx", "64", "--slots", "2", "--cache-dir", str(tmp_path / "xla")]) == 2
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1, err                         # nothing before it: no plan, no kernels, no weights
+    line = err[0]
+    head = ('mashbox: maya-like.gguf has no tokenizer (no tokenizer.ggml.model key)' if model is None else
+            f'mashbox: maya-like.gguf has no tokenizer (tokenizer.ggml.model is "{model}")')
+    assert line.startswith(head + ", so mashbox cannot turn text into its tokens and does not run it."), line
+    assert ("llama.cpp does not load it either" in line) == (model is None), line
+    for wrong in ("llama.cpp runs it", "It runs in llama.cpp", "llama-server", "is not read by this version"):
+        assert wrong not in line, (wrong, line)
+    assert cli.main(["inspect", p]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["runs_here"] is False and out["why"] == line, out

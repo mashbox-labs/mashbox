@@ -19,6 +19,7 @@ MASHBOX builds:
 - [Hy-Nomas](https://mashbox.gg/docs/models/hy-nomas): text and movement keys in, video out. World model. Runs on: TPU v6e (v6e-1): 2.46 s of compute per second of video, main model quantized (this version of `mashbox run` starts on a v6e-4); TPU v6e slice (v6e-4).
 - [Qwen3.8-27B](https://mashbox.gg/docs/models/qwen3-8-27b): text in, text out. LLM. Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1), TPU v6e slice (v6e-4).
 - [Track2Rig](https://mashbox.gg/docs/models/track2rig): 3D point tracks in, rig (JSON and glTF) out. Rigging. Experimental. Runs on: CPU, TPU v6e.
+- [TRELLIS.2](https://mashbox.gg/docs/models/trellis-2): an RGBA image (background cut out) in, a textured 3D mesh (GLB) out. image-to-3d. Experimental. Runs on: TPU v6e (v6e-1).
 
 GGUF files that run in our engine:
 - Falcon3-1B-Instruct Q8_0 by Technology Innovation Institute (llama, GGUF from bartowski): Checked on CPU. `mashbox run bartowski/Falcon3-1B-Instruct-GGUF:Q8_0`
@@ -49,7 +50,7 @@ GGUF files that run in our engine:
 - Qwen3.5-4B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-4B-GGUF:Q4_K_M`
 - Qwen3.5-9B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Tested, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-9B-GGUF:Q4_K_M`
 - Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.8-27B-GGUF:Q4_K_M`
-- [Full catalog](https://mashbox.gg/docs/supported-models): 31 entries: 2 MASHBOX ports, 1 MASHBOX model and 28 GGUF files of 19 models.
+- [Full catalog](https://mashbox.gg/docs/supported-models): 32 entries: 3 MASHBOX ports, 1 MASHBOX model and 28 GGUF files of 19 models.
 <!-- models:end -->
 
 ## Optional

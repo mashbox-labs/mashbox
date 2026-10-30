@@ -12,6 +12,11 @@ sampling defaults and every tensor's block type, and hands the blocks to mashbox
 """
 from .reader import File, GGUFError, llama_cpp_command, reader_version  # noqa: F401
 from . import archs
+# the file pick (llama.cpp's -hf rule, gguf/resolve.py): only the one resolver (mashbox/resolve.py) and this package
+# import it; other code uses these names. fetch_file(model, log, download) = the pick, downloaded (resolve.resolve)
+from .resolve import (NoGGUF, file_identity, identity, is_gguf_request, pick, shards, split_info,  # noqa: F401
+                      split_repo_tag)
+from .resolve import resolve as fetch_file  # noqa: F401
 
 # device memory per chip: v5e and v6e = JAX memory_stats()["bytes_limit"] MEASURED on our chips (16,909,334,528 and
 # 33,546,041,344); v5p = the 95 GB HBM of Google's spec (not measured here)
@@ -214,6 +219,9 @@ def inspect(path, repo=None, quant=None):
         held = archs.held(f.arch, path, repo, quant, moe=archs.moe_file(f))   # as `run`: a MoE file with no passing row of its own does not run here
         if held:
             raise GGUFError(held)
+        from .tokenizer import no_tokenizer
+        if no_tokenizer(f, path):                   # as `run`: a file with no tokenizer does not run here
+            raise GGUFError(no_tokenizer(f, path))
         from .. import ops
         ops.load_kernels()                          # which types this install runs on a kernel (none without the package)
         line, warn = plan(f, c)

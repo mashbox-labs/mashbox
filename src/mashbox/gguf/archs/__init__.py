@@ -84,7 +84,7 @@ def held(arch, path=None, repo=None, quant=None, moe=False):
     if not rows:
         return unsupported(arch, path, repo, quant) if named else unsupported_moe(arch, path, repo, quant)
     if path:
-        from ..resolve import identity
+        from .. import identity
         sha = identity(path)[0]
         if sha is not None and any(g.get("sha256") == sha for g in rows):
             return None
