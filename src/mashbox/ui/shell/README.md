@@ -87,36 +87,63 @@ python -m mashbox.ui.shell check [PAGE ...]           # the rules above, every m
 
 ## Tokens
 
-Dark is the default; light swaps the same names. Use them; never redefine them.
+Dark is the default; light swaps the same names (`data-theme="light"` on the root, or a light system setting when the
+page sets no theme). Use them; never redefine them.
 
 | Token | Dark | Light | Use |
 |---|---|---|---|
-| `--mbx-bg` | #0b0908 | #fbf3e8 | page |
-| `--mbx-panel`, `--mbx-panel-2` | #141110, #1c1714 | #fffaf3, #f6ebdc | panels, raised controls |
-| `--mbx-field` | #0e0b0a | #fffdf9 | inputs |
-| `--mbx-line`, `-2`, `-3` | orange at 16 / 30 / 60 % | brown at 18 / 32 %, orange 70 % | borders, hover, focus |
-| `--mbx-ink`, `--mbx-dim`, `--mbx-faint` | #f3ebe1, #c9b9a7, #8f8070 | #1d140e, #5e4c3c, #8f7b68 | text |
-| `--mbx-up` | #ff5a1f | #e5480f | the MASHBOX orange: primary buttons, names, live |
-| `--mbx-ok`, `--mbx-down` | #ffb347, #6d84b4 | #c77800, #4f67a0 | second accent, errors |
-| `--mbx-hard` | #3a1a08 | #e4c8aa | the hard offset shadow |
-| `--mbx-brick`, `--mbx-mortar`, `--mbx-plate` | | | the screen band behind a plate |
+| `--mbx-bg` | #0b0a09 | #f6f3ed | page |
+| `--mbx-panel`, `--mbx-panel-2` | #171411, #201c19 | #ece7dd, #e6e0d4 | tiles and bars, the segmented control's track |
+| `--mbx-sel` | #211d19 | #e2dccf | the picked tab, hover fills; `--mbx-tag` (tags) is `--mbx-sel` |
+| `--mbx-field` | #0b0a09 | #f6f3ed | inputs |
+| `--mbx-line`, `-2`, `-3` | #24201c, #37312b, #ff5a1f | #e0dacd, #cdc5b6, #ff5a1f | strokes: rule, field and badge, ember |
+| `--mbx-ink`, `--mbx-dim`, `--mbx-faint` | #ece6da, #b3ab9e, #857d71 | #0b0a09, #4d4740, #776f65 | text |
+| `--mbx-up` | #ff5a1f | #ff5a1f | ember, the one accent: the live light, the "Made by" stroke, focus rings |
+| `--mbx-accent` | #ff8a5c | #b8400f | ember text and links |
+| `--mbx-ok`, `--mbx-down`, `--mbx-good` | #fbbf24, #f87171, #4ade80 | #a16207, #b91c1c, #15803d | busy, error, good |
+| `--mbx-btn`, `--mbx-on-btn` | #ece6da, #0b0a09 | #0b0a09, #f6f3ed | the primary pill button and its text |
+| `--mbx-btn-2`, `--mbx-btn-in` | #201c19, #211d19 | #e6e0d4, #e2dccf | other buttons; a button on a tile |
+| `--mbx-shadow` | soft drop shadow | the same | the top bar |
+| `--mbx-hard` | transparent | transparent | no hard shadows: a shadow drawn in it is invisible |
+| `--mbx-brick`, `--mbx-mortar`, `--mbx-plate` | #171411, #171411, #0b0a09 | #ece7dd, #ece7dd, #f6f3ed | the screen band behind a plate |
+| `--mbx-stage` | #000000 | #000000 | behind video and canvas |
 | `--mbx-acc` | `--mbx-up` | | a screen's accent (set it on a tab and its section) |
-| `--mbx-font`, `--mbx-mono`, `--mbx-pixel` | Chakra Petch, Share Tech Mono, Lab3x5 | | text, numbers, tiny status labels |
+| `--mbx-font`, `--mbx-mono` | Outfit, Geist Mono ASCII | | text; numbers and code |
+| `--mbx-pixel`, `--mbx-disp` | `--mbx-mono`, Big Shoulders Display | | tiny labels; a display title (no shell part uses it) |
+| `--mbx-r-pill`, `--mbx-r-lg`, `--mbx-r`, `--mbx-r-sm` | 999px, 18px, 14px, 8px | | pills; tiles and bars; small tiles; fields |
 
-Type: body 15.5px (14px on phones); headings, tabs and the brand in Chakra Petch 700 uppercase (17 / 13 / 12.5px);
-numbers in Share Tech Mono; the 3x5 pixel face only for short status labels. Frames are square with 2px borders and a
-4px hard shadow; buttons have a 3px shadow and press in.
+Hover fills (`--mbx-btn-h`, `--mbx-btn-2h`, `--mbx-btn-inh`), `--mbx-on-up` (text on ember), `--mbx-soft` (a
+translucent ember) and `--mbx-cold` (the same as `--mbx-faint`) complete the colours. Layout: `--mbx-max`
+1440px, `--mbx-gutter` 20px, `--mbx-gap` 14px.
 
-Blocks: `mbx-panel` (h3 inside is the panel title), `mbx-room` + `mbx-plate` + `mbx-room-line` (a screen's band),
-`mbx-tabs` + `mbx-tab`, `mbx-how` (How this works), `mbx-cols`, `mbx-panels` (`--mbx-cols`), `mbx-fit` + `mbx-stage`
-(`--mbx-ar`, `--mbx-reserve`), `mbx-badge`, `mbx-chip`, `mbx-seg` (the chosen button carries `.on` or `.sel`), `mbx-field`, `mbx-check`, `mbx-label`, `mbx-note`,
-`mbx-pxl`, and plain `button` (`.pri`, `.sel`, `.sm`, `.ghost`), inputs, selects, textareas, checkboxes and range
-sliders inside `.mbx-ui`.
+Type: Outfit for text, with no uppercase: body 400 15.5px (14.5px under 480px wide), panel headings 700 16.5px, the model
+name in the model bar 700 20px, tabs, site links and buttons 500 15px (the picked tab 600), the brand 650 15px. Numbers
+and code in Geist Mono ASCII (`mbx-mono`, tabular figures); `mbx-pxl` is a 13px Geist Mono label in the screen's
+accent. The pixel mark is the one 8-bit touch.
 
-Phones: under 900px columns stack and the site links get their own row; under 700px the model bar scrolls with the
-page; under 480px everything packs tighter; on touch screens every field is 16px so iOS never zooms.
+Shapes: an element has a full, thin (1px), rounded stroke or no stroke at all, never one side. Buttons, tags and the top
+bar are pills. Buttons have no stroke and no shadow (the primary in `--mbx-btn`, the others a warm fill) and move down
+1px when pressed. Panels, cards, the model bar and the footer are filled rounded tiles (18px) with no stroke. Fields
+have a 1px `--mbx-line-2` stroke at radius 8 and a 2px ember focus ring; a badge is a 1px `--mbx-line-2` pill with no
+fill; the "Made by MASHBOX Labs" label and a room's plate are 1px ember pills. The top bar carries the soft
+`--mbx-shadow`; nothing has a hard offset shadow.
+
+Blocks: `mbx-panel` and `mbx-card` (an h2 or h3 inside is the title), `mbx-room` + `mbx-plate` + `mbx-room-line` (a
+screen's band), `mbx-tabs` + `mbx-tab`, `mbx-how` (How this works), `mbx-cols`, `mbx-panels` (`--mbx-cols`), `mbx-fit` +
+`mbx-stage` (`--mbx-ar`, `--mbx-reserve`), `mbx-badge`, `mbx-chip`, `mbx-seg` (the chosen button carries `.on` or `.sel`),
+`mbx-field`, `mbx-check`, `mbx-label`, `mbx-note`, `mbx-pxl`, and plain `button` or `.mbx-btn` (`.pri` or `.primary`,
+`.sel`, `.sm`, `.ghost`), inputs, selects, textareas, checkboxes and range sliders inside `.mbx-ui`.
+
+Phones: under 1100px panels take at most two columns; under 900px columns stack and the site links get their own row;
+under 700px the model bar scrolls with the page; under 480px everything packs tighter; on touch screens every field is
+16px so iOS never zooms.
 
 ## Fonts
 
-Bundled in `fonts/`: Chakra Petch 400 to 700 and Share Tech Mono 400 (Latin, SIL Open Font License 1.1, licence texts
-next to them), and Lab3x5, the MASHBOX 3x5 pixel face.
+`shell.css` loads three faces from `fonts/`, each under the SIL Open Font License, Version 1.1, with its licence text
+next to it: Outfit (variable, weights 100 to 900; `OFL-Outfit.txt`), Geist Mono ASCII (`OFL-Geist.txt`) and Big
+Shoulders Display 900 (`OFL-BigShoulders.txt`).
+
+The folder also holds Chakra Petch 400 to 700 and Share Tech Mono 400 (SIL Open Font License, Version 1.1;
+`OFL-ChakraPetch.txt`, `OFL-ShareTechMono.txt`) and Lab3x5, the MASHBOX 3x5 pixel face. The shell's stylesheet does not
+load them.

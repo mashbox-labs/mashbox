@@ -89,7 +89,6 @@ docs/models/qwen3-8-27b.md | 790-token prompts, greedy | the long-prompt speed t
 docs/models/qwen3-8-27b.md | the head proposes 2 tokens | drafts per verify pass with --mtp 2 (a setting)
 docs/models/qwen3-8-27b.md | a pass that checks 3 tokens | tokens one verify pass reads with --mtp 2: the current token and its 2 drafts (a setting)
 docs/tpu-vs-gpu.md | 64-token prompts, 128 new tokens | the speed test's prompt and answer length (a test setting)
-src/mashbox/ui/shell/README.md | orange at 16 / 30 / 60 % | brown at 18 / 32 %, orange 70 % | colour mix percentages of the shell's palette (design values)
 docs/models/hy-nomas.md | 34.2 + 6.1 + 31.6 on disk | Hy-Nomas file sizes in GB (main model, LoRA, video decoder) as downloaded, not a measurement
 docs/server-api.md | integer | | 1, 2, 3, ... | generated from the spec: the values a counter field takes
 docs/server-api.md | reads nothing from the stream for 30 s is disconnected | the server's write timeout for a client that stops reading, a setting, not a measurement
