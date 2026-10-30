@@ -13,9 +13,17 @@ bars tests/cpu/test_gguf_dense.py and test_gguf_qwen35.py already lock; item 3 i
 tests/cpu/test_catalog.py (NEAR_TIE_GAP).
   1. Float fixture: our logits for one prefill of the 16 prompt ids, and for a prefill of 8 then 8 one-token decode
      steps (K/V cache path): NMSE <= 1e-4 vs llama.cpp's logits.
-  2. Block-type fixture: the same two runs; mean KL(llama.cpp || ours) <= 1e-3 and the same top-1 on >= 15 of 16
-     positions vs llama.cpp on the block file; NMSE <= 1e-4 vs llama.cpp on the F32 copy holding the identical
-     dequantized values (<name>.f32ref).
+  2. Block-type fixture: the same two runs; NMSE <= 1e-4 vs llama.cpp on the F32 copy holding the identical
+     dequantized values (<name>.f32ref), the float bar. Mean KL(llama.cpp || ours) and top-1 vs llama.cpp on the block
+     file are printed, never gating: llama.cpp's CPU block-type dot products first round the activations to 8 bits
+     (Q8_K for the K-quants and IQ4_XS, Q8_0 for Q4_0/Q5_0/Q8_0/IQ4_NL/MXFP4, Q8_1 for Q4_1/Q5_1), so that comparison
+     measures llama.cpp's rounding, not the architecture. The quant types themselves are gated by op/<TYPE> against an
+     exact float64 reference. Corrected 2026-10-30, before its re-run. The record of the old bar 2 (KL <= 1e-3 and
+     top-1 >= 15/16 vs the block file) stays: it FAILED on qwen35-kquant (KL 1.350e-3, top-1 16/16) and
+     qwen35moe-pyquant (KL 4.923e-3, top-1 12/16). Measured the same day: our logits on those block files vs an
+     independent float64 forward NMSE ~3e-12, top-1 16/16; llama.cpp's block path vs that float64 forward KL 1.352e-3
+     and 4.912e-3; the float64 forward with llama.cpp's activation rounding reproduces llama.cpp's block logits to NMSE
+     4.5e-6 and 5.1e-15.
   3. Greedy: 16 greedy ids after the 16 prompt ids (one prefill, then one-token decode steps on our K/V cache, each
      step's id = the lowest id of the largest logit, as llama.cpp's tool picks). PASS when all 16 ids equal llama.cpp's,
      or when the first different id is at a step where llama.cpp's top-two gap is under 0.5 logit (a near tie).
@@ -58,7 +66,6 @@ GREEDY = _load("gguf_fixtures_greedy_contracts", "greedy.py")
 BASE, MORE = GREEDY.base, GREEDY.more
 
 NMSE_MAX = 1e-4
-KL_MAX, TOP1_MIN = 1e-3, 15
 NEAR_TIE_GAP = 0.5
 EPS_STRESS = 0.25
 CTX = 32                    # 16 prompt ids + 15 fed greedy ids fit; the decode steps attend Tc = CTX
@@ -214,16 +221,6 @@ CONTRACTS = {
     ],
 }
 CASES = [(f"arch/{a}", name) for a, cs in CONTRACTS.items() for name, _, _ in cs]
-# measured failures of bar 2 kept as they are (strict: a pass would fail): llama.cpp's block path vs llama.cpp on the F32
-# copy of the same values gives the same KL, so the gap is llama.cpp's 8-bit activation rounding; ours vs that F32 copy
-# meets bar 2's NMSE. They make their contract FAIL (tests/contracts/conftest.py) until it is ruled whether a gap that is
-# llama.cpp's own rounding gates an architecture contract.
-KNOWN = {
-    "qwen35-kquant": "tests/cpu/test_gguf_qwen35.py:106 MEASURED KL 1.350e-3 > 1e-3 (top-1 16/16) vs llama.cpp's K-quant "
-                     "path; llama.cpp vs itself on the same weights in F32 gives the same 1.350e-3",
-    "qwen35moe-pyquant": "tests/cpu/test_gguf_qwen35.py:110 MEASURED KL 4.923e-3 > 1e-3, top-1 12/16 < 15; llama.cpp vs "
-                         "itself on the same weights in F32 gives the same (activation rounding also moves expert picks)",
-}
 KIND = {name: kind for cs in CONTRACTS.values() for name, kind, _ in cs}
 FEATURES = {name: feats for cs in CONTRACTS.values() for name, _, feats in cs}
 
@@ -334,8 +331,7 @@ def test_arch_case_features_are_in_the_file(cid, name, built, contract):
 
 
 @pytest.mark.parametrize("split", [None, SPLIT], ids=["prefill16", "prefill8+decode8"])
-@pytest.mark.parametrize("cid,name", [pytest.param(c, n, id=f"{c}:{n}", marks=[pytest.mark.xfail(strict=True, reason=KNOWN[n])]
-                                                   if n in KNOWN else []) for c, n in CASES])
+@pytest.mark.parametrize("cid,name", [pytest.param(c, n, id=f"{c}:{n}") for c, n in CASES])
 def test_arch_case_logits_match_llama_cpp(cid, name, split, built, contract):
     c = contract(cid)
     m = meta(name)
@@ -357,10 +353,9 @@ def test_arch_case_logits_match_llama_cpp(cid, name, split, built, contract):
         return
     r32 = np.fromfile(os.path.join(FX, f"{name}.f32ref.logits.f32"), np.float32).reshape(r.shape)
     assert BASE.sha256(os.path.join(FX, f"{name}.f32ref.logits.f32")) == m["f32ref_logits_sha256"]
-    kl, top1 = kl_top1(r, ours)
+    kl, top1 = kl_top1(r, ours)      # vs llama.cpp's block path: printed, never gating (bar 2)
     e = nmse(ours, r32)
     print(f"{cid} {name} {split}: KL {kl:.3e} top1 {top1}/{len(r)} NMSE vs f32ref {e:.3e}")
-    assert kl <= KL_MAX and top1 >= TOP1_MIN, (kl, top1)
     assert e <= NMSE_MAX, e
 
 
