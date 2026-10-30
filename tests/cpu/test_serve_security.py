@@ -272,7 +272,7 @@ def test_f17_api_keys_and_their_own_prefix_cache_scope(model_dir):
     assert call(port, "/v1/models", headers={"Authorization": "Bearer key-a"})[0] == 200
     assert call(port, "/v1/chat/completions", CHAT, {"Authorization": "Bearer key-a"})[0] == 200
     assert call(port, "/v1/messages", dict(CHAT, max_tokens=8), {"x-api-key": "key-b"})[0] == 200
-    from mashbox.runtime import tenancy as T                     # each key is its own cache scope: its tenant id (A10)
+    from mashbox.runtime import tenancy as T                     # each key is its own cache scope: its tenant id
     assert eng.scopes == [[T.current().tenant_id("key-a")], [T.current().tenant_id("key-b")]]
     assert call(port, "/v1/models", headers={"Host": "my-vm.example:8000", "Authorization": "Bearer key-b"})[0] == 200
     code, body, _ = call(port, "/v1/models", headers={"Authorization": "Bearer key-c"})
@@ -295,7 +295,7 @@ def test_f17_non_loopback_host_turns_a_key_on(tmp_path, monkeypatch, capsys):
     assert cli.api_keys(a) == ["k1", "k2"]
     f = tmp_path / "keys"
     f.write_text("k3\n\nk4\n")
-    f.chmod(0o600)                                             # a key file only its owner can read (R10 #4)
+    f.chmod(0o600)                                             # a key file only its owner can read
     a = cli.build_parser().parse_args(["run", "qwen3-8-27b", "--api-key-file", str(f)])
     assert cli.api_keys(a) == ["k3", "k4"]
 

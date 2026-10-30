@@ -3,7 +3,7 @@ Engine.generate; ST-B3 and ST-B5 run arrival schedules with tiny.drive, a fixed-
 replays its schedule through the real loop (Server.submit and Server.loop_live, tiny.serve); ST-B7 and ST-B8 go through
 the real server.
 
-ST-B1  one user alone, greedy: the same tokens run to run, and in a fresh engine (the CPU form of B6); a fixture whose
+ST-B1  one user alone, greedy: the same tokens run to run, and in a fresh engine (the CPU form of single-user determinism); a fixture whose
        runs each repeat one token is degenerate and fails
 ST-B2  batched rows equal the same requests alone, on the near-bigram weights (no near ties: exact; a degenerate fixture
        fails). On the random weights the comparison is printed (a JSON line in the log: per row, the first position that
@@ -27,8 +27,8 @@ ST-B4  prefix-cache owner isolation, on the near-bigram engine with the prefix c
        cache-off engine, and every resume passed the engine's owner check
 ST-B5  0 compiles after the warm-up (cli.warm: the request path, then Engine.warm's program list) over a mixed schedule:
        prompts of 1, 3, 9, 27, 81 and 200 tokens, joins mid-answer, greedy + sampled + penalised rows, a stop, a cancel,
-       a second turn served from the prefix cache, then a short row decoding alone (the smallest decode window) (the E14
-       counter: jax's backend compile events, counted by the tier's own listener, tiny.compile_count)
+       a second turn served from the prefix cache, then a short row decoding alone (the smallest decode window) (the
+       compile counter: jax's backend compile events, counted by the tier's own listener, tiny.compile_count)
 ST-B6  tensor parallel 4 == 1 on 4 forced CPU devices, where tp applies (models.json models; tests/standards/tp_split.py in
        its own process, the BSHJ architecture with the 4-chip head layout, cli.load's tp path): the same tokens and
        finish for every row of a schedule with joins, a stop, a cancel, a penalised greedy row and a seeded sampled row
@@ -211,7 +211,7 @@ def _slots_reused_never_shared(rows, eng):
 @pytest.mark.slow
 def test_b3_fresh_engine_replays(family, engines, request):
     """ST-B3's near-bigram schedule on a fresh engine (a new tiny.engine, no history) gives the module engine's tokens,
-    slot and finish row for row (the CPU form of B6 for a schedule).
+    slot and finish row for row (the CPU form of single-user determinism for a schedule).
 
     Slow (CI.md: over 10 s, marked `slow`; the tier still runs it): the fresh engine compiles every program the
     schedule reaches. Sealed: qwen38-bshj 19.89 s on the gate VM (r4 pre-check, 2-3 cores per family process)."""

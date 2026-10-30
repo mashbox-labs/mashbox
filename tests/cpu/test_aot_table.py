@@ -520,7 +520,7 @@ def test_memory_that_does_not_fit_runs_the_program(tmp_path, monkeypatch):
 
 def test_a_loaded_program_that_fails_in_the_warm_up_is_a_table_failure(tmp_path):
     """A canary (a loaded program the warm-up runs) that raises: Engine.warm raises programs.TableFailed with the table
-    quarantined and dropped, and never warms a second time in this process (A13: the process ends, and the next start
+    quarantined and dropped, and never warms a second time in this process (the process ends, and the next start
     compiles without the table). Old code: the warm-up dropped the table and warmed again here."""
     e, _ = loaded_engine(tmp_path)
     B, T, Tc = e.prefill_shapes()[0]
@@ -545,7 +545,7 @@ def test_a_loaded_program_that_fails_in_the_warm_up_is_a_table_failure(tmp_path)
 
 def test_a_table_failure_in_the_start_requests_leaves_cli_warm(tmp_path, capsys):
     """cli.warm's two requests reach a loaded program that fails: programs.TableFailed leaves cli.warm with the table
-    quarantined and dropped, and nothing runs again in this process: no second request, no Engine.warm, no save (A13).
+    quarantined and dropped, and nothing runs again in this process: no second request, no Engine.warm, no save (the process ends).
     Old code: cli.warm logged it, ran the request again and warmed on."""
     from mashbox import cli
     d = tmp_path / "table"

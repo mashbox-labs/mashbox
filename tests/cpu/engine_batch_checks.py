@@ -1,4 +1,4 @@
-"""Engine batching checks (skill mashbox-engine-batching, edge cases E2-E33) on the tiny Qwen3.8 model (CPU).
+"""Engine batching checks (edge cases E2-E33) on the tiny Qwen3.8 model (CPU).
 Usage: engine_batch_checks.py WD   (WD = the work folder of a qwen3_8_27b_checks.py run: tiny/ and tiny-bf16.bshj)
 Prints one JSON line; exit 0 when every gate passes. Lines marked _info are reported, never gates.
 
@@ -9,10 +9,10 @@ E18 a row finishing inside a K-step call: same tokens at K=1 and K=8 (engine); s
     string through the server at K=1 and K=8 (usage at the finish point).
 E6  a request longer than the context gets 400 at once and nothing else is affected.
 E7  the waiting count returns to 0 after requests ran through the continuous-batching loop.
-E7_owner / E7_lqd / E7_hangup (amended spec): with every slot busy, owner A submits 300 and B 5: A is refused after 32
+E7_owner / E7_lqd / E7_hangup (waiting limits): with every slot busy, owner A submits 300 and B 5: A is refused after 32
     (429), B never; the legacy streaming route answers 429 itself; with the overall limit full an owner under its share
     gets in by dropping the newest waiting request of the longest queue, an owner over its share gets 429 (Anthropic
-    529; A1); 256 waiting
+    529); 256 waiting
     clients that hang up free their count within 0.5 s.
 E_connect 256 clients connecting at the same moment all get their answer (accept queue).
 E8  three bad rows (top_k = 2^31, a NaN temperature sent as the raw JSON literal, a token id past the vocabulary) sent
@@ -36,7 +36,7 @@ E33 "merge": false with max_tokens = room changes nothing for others: B's first 
     and without the warm-up a join at a window no earlier pair visited compiled inside the measured runs. The single
     pair measured right after one warm-up run (the earlier form of this check) is reported as E33_first_pair_info with
     its compiles.
-ID_info identity (spec section 1, gate E25 is on chip): per-step logit hashes of rows batched vs alone, and cached-prefill
+ID_info identity (the chip runs the gate; here it is information): per-step logit hashes of rows batched vs alone, and cached-prefill
     budgets 64 vs 1024; the first differing step is reported with its top-1/top-2 gap (known FAIL class: bucket rounding).
 """
 import hashlib
@@ -356,7 +356,7 @@ R["E33"] = dict(b_ttft_with=[round(x[0], 3) for x in runs[True]], b_ttft_without
 G["E33"] = (R["E33"]["b_first_before_a_end"] and R["E33"]["compiles_measured"] == 0
             and p95(runs[True]) <= 2 * max(p95(runs[False]), 0.05))
 
-# E7 waiting limits (amended spec): A submits 300, B 5 while every slot is busy: B gets 0 rejections, A is refused after
+# E7 waiting limits: A submits 300, B 5 while every slot is busy: B gets 0 rejections, A is refused after
 # 32 with 429; the legacy streaming route answers 429 itself (before any 200); hung-up waiters free their count within 0.5 s
 from mashbox.runtime import server as SV   # noqa: E402
 from mashbox.runtime.server import knobs_of, Busy, Overloaded   # noqa: E402
@@ -384,7 +384,7 @@ try:
 except urllib.error.HTTPError as x:
     code_legacy, ra = x.code, x.headers.get("Retry-After")
 # overall limit full: an owner under its share gets in by dropping the newest waiting request of the longest queue;
-# an owner over its share (under its own limit) gets Overloaded (429, Anthropic route 529; A1)
+# an owner over its share (under its own limit) gets Overloaded (429, Anthropic route 529)
 SV.MAX_WAITING, SV.MAX_WAITING_OWNER = srv.waiting, 100
 before = {o: list(js) for o, js in srv.wait_by.items()}
 try:

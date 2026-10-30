@@ -9,7 +9,7 @@ fault, and checks what clients see and that the server comes back by itself:
 - while no worker is ready, requests get 503 (Anthropic route 529) with Retry-After and x-should-retry: true;
 - after the fault the server is ready again with no step by hand, and answers new requests in full.
 Crashes covered: mid-stream (raise, oom, kill -9 from inside and from outside, hang) and during the compile warm-up.
-A client that stops reading a stream is ended after MASHBOX_STALL_S (INTERFACES §3.3 P6, consumer_stalled) and its row
+A client that stops reading a stream is ended after MASHBOX_STALL_S (consumer_stalled) and its row
 is freed, while other clients keep being answered.
 """
 import json
@@ -238,7 +238,7 @@ def tokens_seen(fr):
 
 
 def test_non_streamed_request_whose_worker_made_tokens_is_sent_again_and_completes(tmp_path):
-    """A13: a request whose client has received no bytes is sent once more. Not streamed, the client receives nothing
+    """A request whose client has received no bytes is sent once more. Not streamed, the client receives nothing
     until the answer ends, so the worker's first tokens (here 5, then kill -9 in step 6) leave the request eligible: it
     runs again from the start on the restarted worker and its client gets the whole answer, once. Old code: 500 (the
     front counted the worker's tokens as output the client had)."""
@@ -449,7 +449,7 @@ def test_close_returns_after_the_fronts_threads_wrote_their_last_line(tmp_path):
     assert not fr.supervisor.is_alive()
 
 
-# ---- P6 consumer_stalled (INTERFACES §3.3): a client that stops reading a stream ---------------------------------------
+# ---- consumer_stalled: a client that stops reading a stream ---------------------------------------
 W_BIG, N_BIG = 8192, 2000
 BIG = ("y" * (W_BIG - 1) + " ") * N_BIG
 
@@ -469,7 +469,7 @@ STALL_ROUTES = {"chat": (CHAT[0], dict(CHAT[1], max_tokens=N_BIG)),
 
 @pytest.mark.parametrize("route", sorted(STALL_ROUTES))
 def test_client_that_stops_reading_is_ended_and_its_row_freed(tmp_path, monkeypatch, route):
-    """P6: a client asks for a long stream with a 4 KiB receive window and never reads. Once a write cannot finish for
+    """A client asks for a long stream with a 4 KiB receive window and never reads. Once a write cannot finish for
     MASHBOX_STALL_S seconds, the request ends as a hang-up (log event consumer_stalled), the worker cancels its row at
     the next step (long before max_tokens), the server closes that connection, and another client is answered in full
     the whole time."""
@@ -613,7 +613,7 @@ def admit_lines(err):
 @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
 def test_admit_trace_line_names_the_clients_response_id_behind_the_worker(tmp_path, capfd, stream):
     """MASHBOX_TRACE=1 behind the front: the worker's loop admits the rows, so its admit line must name the id each
-    client receives, as the one-process server's line does (CERT B1 order arm). The id crosses the SUBMIT frame. One
+    client receives, as the one-process server's line does. The id crosses the SUBMIT frame. One
     request per generating route (chat, text completions, Anthropic messages, Responses), one after another: one line
     each, in that order, seq 1..4, tenant null for the one local owner."""
     fr, port, log, logs = start(tmp_path, S=2, extra_env=dict(MASHBOX_TRACE="1"))
@@ -631,7 +631,7 @@ def test_admit_trace_line_names_the_clients_response_id_behind_the_worker(tmp_pa
 
 
 def test_admit_trace_line_of_a_retried_request_names_the_same_response_id(tmp_path, capfd):
-    """A request with no output is sent again after the worker restarts (A13); its admit line in the new worker's life
+    """A request with no output is sent again after the worker restarts; its admit line in the new worker's life
     names the same id its client receives, so a trace reader can follow it across the restart."""
     fr, port, log, logs = start(tmp_path, fault="admit:2:raise", S=2, step_s=0.05, extra_env=dict(MASHBOX_TRACE="1"))
     wait_ready(fr)
@@ -777,7 +777,7 @@ def test_idle_and_half_sent_requests_are_closed_after_the_read_timeout(tmp_path,
 
 # ------------------------------------------------------------------------------- a worker that never gets ready
 def test_a_load_that_fails_every_time_ends_the_server(tmp_path):
-    """INTERFACES §3.5: a load that fails in every worker life (a wrong path, too small a chip) ends the server after
+    """A load that fails in every worker life (a wrong path, too small a chip) ends the server after
     START_TRIES lives instead of answering 503 forever: the front gives up with the worker's own error (code
     load_failed), ends what waits, and stops serving HTTP."""
     from mashbox.runtime import protocol as P
@@ -819,7 +819,7 @@ def test_serve_split_exits_non_zero_with_the_workers_error(tmp_path):
 
 
 def test_a_restart_slower_than_twice_the_first_start_ends_the_server(tmp_path):
-    """INTERFACES §3.5: after a fault, a worker that takes longer than START_SLOW_X x the first start to get ready
+    """After a fault, a worker that takes longer than START_SLOW_X x the first start to get ready
     (MASHBOX_START_FLOOR_S lowered to 1 s here) ends the server with that reason, instead of hanging in 503."""
     fr, port, log, logs = start(tmp_path, fault="step:1:kill", extra_env=dict(MASHBOX_START_FLOOR_S="1"),
                                 kw=dict(life_dir=str(tmp_path / "lives"), slow_from_life=2, slow_s=60))

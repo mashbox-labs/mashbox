@@ -6,7 +6,7 @@ none). It never holds another row's or another tenant's tokens. The host writes 
 before the row's first speculation call and after any plain decode call; inside the step after_commit writes only
 committed tokens, so rejected drafts leave no trace.
 
-Match (POLICY, the start values): for n
+Match (the start values): for n
 from N_MAX down to N_MIN, the last n tokens of the row (ending at the token being fed, at pos) against every earlier
 window; the most recent window whose continuation starts at or before pos wins; up to K tokens of that continuation that
 lie at or before pos are the drafts (found = how many; 0 without a match). match() is the host reference of the device's

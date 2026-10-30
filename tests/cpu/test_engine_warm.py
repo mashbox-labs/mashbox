@@ -2,7 +2,7 @@
 greedy and sampled, 1..S rows, continued turns (prefix cache) and host-cache restores add no compiled program (the jit
 caches of the prefill and decode programs keep their size). The model is a stand-in with the real engine's state layout
 (K/V per slot and position, a linear-attention state per slot), so the test needs only JAX on CPU.
-Spec: mashbox-engine-batching E14 (no compile at serve time)."""
+The rule it checks: no compile at serve time."""
 import types
 
 import numpy as np

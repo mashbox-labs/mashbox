@@ -214,7 +214,7 @@ def test_a_representative_failure_reported_after_it_returned_is_a_table_failure_
             raise RuntimeError("device fault reported at the barrier")
         return barrier(x)
     monkeypatch.setattr(jax, "block_until_ready", bur)
-    with pytest.raises(programs.TableFailed) as ex:          # the process ends (A13); old code warmed again here
+    with pytest.raises(programs.TableFailed) as ex:          # the process ends; old code warmed again here
         e.warm(workers=2)
     assert "reported at the barrier" in ex.value.info["error"] and ex.value.info["closed"] is True, ex.value.info
     assert not e.aot.loaded and not e.aot.ex

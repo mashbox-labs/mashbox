@@ -1,20 +1,20 @@
 """CPU checks of the batched engine under tensor parallel: 4 forced host devices (the v6e-4 / v5e-4 layout, one KV head per
-chip) against one device, on a tiny random Qwen3.8 of the same architecture (as T11 in qwen3_8_27b_checks.py).
+chip) against one device, on a tiny random Qwen3.8 of the same architecture (as the 4-device check in qwen3_8_27b_checks.py).
 
   python3 tests/cpu/tp_batched_checks.py <workdir>          -> prints one JSON line per gate, then ALL_PASS or FAILED
 
   TP1 noise        the sharded sampler's noise, made from the global token id, is bit-equal to sampler.py's draw noise
   TP2 sampler      sharded sampler == sampler.py on the same logits: greedy, temperature, top_k, top_p, min_p, mixes,
-                   ties across a shard boundary; small candidate lists so the fallback runs too (E48 on CPU)
-  TP3 collectives  the sampler's compiled program: 2 collectives on its main path, 1 more inside the fallback (A11);
-                   the decode programs' collectives per pass are recorded (E29, not a gate)
+                   ties across a shard boundary; small candidate lists so the fallback runs too
+  TP3 collectives  the sampler's compiled program: 2 collectives on its main path, 1 more inside the fallback;
+                   the decode programs' collectives per pass are recorded (not a gate)
   TP4 greedy       continuous batching (rows join mid-answer, chunked prefill) under tp 4 == tp 1, token for token
   TP5 sampled      sampled and penalised rows next to greedy rows under tp 4 == tp 1, and a tp 4 rerun repeats
   TP6 cache        prefix cache + host cache (more conversations than slots: saves, restores, slot swaps) under tp 4 ==
                    tp 1, same cached and restored counts, and a continued turn == the same prompt cold
   TP7 shares       after all of it each chip holds its own share of the slot state (K/V heads / 4, value heads / 4), and
-                   the decode program's temp memory per chip is below the whole K/V (no chip gathers the cache: P2)
-  TP8 compiles     after Engine.warm on the mesh, requests compile NOTHING under tp 4 (E14 on the mesh), and no more than
+                   the decode program's temp memory per chip is below the whole K/V (no chip gathers the cache)
+  TP8 compiles     after Engine.warm on the mesh, requests compile NOTHING under tp 4 (no compile at serve time, on the mesh), and no more than
                    under tp 1; the requests include sampled first tokens at every prefill row bucket (alone, 2 and 4 rows at
                    once), whose logits-by-slot buffer must keep one placement (on chip it compiled once more under tp 4)
   TP9 ctx reads    the decode (1 and 8 rows) and prefill programs under tp 4 read only the cache positions they attend: no
@@ -66,7 +66,7 @@ def emit(name, ok, **rec):
     print(json.dumps(dict(gate=name, ok=bool(ok), **rec), default=str), flush=True)
 
 
-# ---- tiny model (the T11 layout: 8 q / 4 KV / 4 linear key / 8 linear value heads, so each of 4 chips holds one KV head)
+# ---- tiny model (the 4-device layout of qwen3_8_27b_checks.py: 8 q / 4 KV / 4 linear key / 8 linear value heads, so each of 4 chips holds one KV head)
 def build(md):
     from transformers import Qwen3_5TextConfig, Qwen3_5ForCausalLM
     cfg = Qwen3_5TextConfig(vocab_size=512, hidden_size=64, intermediate_size=96, num_hidden_layers=8, num_attention_heads=8,

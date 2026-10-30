@@ -1134,7 +1134,7 @@ class Engine:
             res["lh"] = [r["lh"] for r in rows]
         return res
 
-    # per-row backoff (POLICY, the row's own history only): after BO_MISS rounds in a row with 0 accepted drafts the row
+    # per-row backoff (the row's own history only): after BO_MISS rounds in a row with 0 accepted drafts the row
     # waits BO_WAIT rounds, then tries again: a call that starts during the wait gives it no drafts, the rest of the call
     # in which the wait began still drafts, and every round counts down the wait (a plain call's K rounds too, in
     # _spec_call); each further failure doubles the wait up to BO_MAX; an accepted draft outside a wait resets it. Only

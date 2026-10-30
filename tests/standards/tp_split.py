@@ -1,4 +1,4 @@
-"""ST-B6's own process: tensor parallel 4 against 1 on 4 forced CPU devices, through the engine cli.load builds for a
+"""The tensor parallel check's own process: 4 against 1 on 4 forced CPU devices, through the engine cli.load builds for a
 models.json model with --tensor-parallel-size N (shard.mesh_for, shard.load, shard.TPModel, then Engine).
 
   XLA_FLAGS=--xla_force_host_platform_device_count=4 python3 tests/standards/tp_split.py <workdir>   -> one JSON line
@@ -90,7 +90,7 @@ def main(wd):
         eng = Engine(cfg, W, model, CTX=256, S=4, K=4, prefix_cache=False, cache_ram=64 << 20)
         ps = tiny.prompts(eng, lengths=(5, 17, 9, 30, 3, 12), seed=21)
         a0 = tiny.alone(eng, ps[0], 10)               # before the warm-up, so its programs are not counted after it
-        if tp == 1:                                   # the stop: tp 1's first fresh token of row 0's alone run (B3's rule)
+        if tp == 1:                                   # the stop: tp 1's first fresh token of row 0's alone run
             stop = next((t for k, t in enumerate(a0) if k >= 2 and t not in a0[:k]), None)
         c0 = tiny.compile_count()
         log, cli.log = cli.log, (lambda s: None)

@@ -27,8 +27,8 @@ C4 prefix cache: the second turn of a conversation admitted while another row is
    turn 1 prompt length, gated, also in the replay); its tokens vs an engine that served the two turns back to back are
    recorded (serial_equal), information only.
 C5 per-row max_new and stop: rows of one admit end at their own limits; a stop token ends a row without the token (alone).
-C6 server: 6 requests on 2 slots, sent 0.05 s apart, each answers exactly the tokens it decodes ALONE (spec section 1: same
-   answer batched or alone); a late request gets its first token before the first request ends (it did not wait for the
+C6 server: 6 requests on 2 slots, sent 0.05 s apart, each answers exactly the tokens it decodes ALONE (the
+   same answer batched or alone); a late request gets its first token before the first request ends (it did not wait for the
    batch in flight), and the slots never hold more than 2 rows. Also reported (information, not the gate): equality with the
    same row decoded in decode bucket 2, and the solo top-1/top-2 logit gap where a row first differs. KNOWN FAIL: one row
    of 6 flips at a near tie (gap 0.0078) because greedy rows decode on buckets 1/4/S and the bucket changes the rounding;

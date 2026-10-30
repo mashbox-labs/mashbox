@@ -60,7 +60,7 @@ from .protocol import READ_S, STALL_S, raise_open_files
 GATHER_S = 0.02      # how long the first request of a batch waits for others sent at the same time
 MAX_WAITING = 256         # requests waiting for a slot at once, all owners (the queue is never unbounded)
 MAX_WAITING_OWNER = 32    # per owner (4x the largest measured agent fan-out of 7); more get 429
-SEND_BUFFER = 1 << 20     # bytes the kernel may hold for one streamed response (POLICY 1 MiB; capped by net.core.wmem_max)
+SEND_BUFFER = 1 << 20     # bytes the kernel may hold for one streamed response (1 MiB; capped by net.core.wmem_max)
 KNOBS = dict(max_tokens=512, temperature=0.0, top_p=1.0, top_k=0, min_p=0.0, seed=None, stop=None,
              repetition_penalty=1.0, frequency_penalty=0.0, presence_penalty=0.0)
 
@@ -1222,7 +1222,7 @@ POST_API = {"createChatCompletion": "chat", "createCompletion": "completions", "
             "countTokens": "count_tokens", "createResponse": "responses"}
 OPENAI_API = ("chat", "completions", "responses")      # the routes that check the request's model id
 
-DRAIN_S = 10.0       # a stop waits this long for the requests still being answered (stop_serving), POLICY
+DRAIN_S = 10.0       # a stop waits this long for the requests still being answered (stop_serving)
 
 class Listener(ThreadingHTTPServer):
     """The HTTP server. Its accept queue holds request_queue_size connections (the standard library's default is 5: with

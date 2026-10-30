@@ -632,7 +632,7 @@ def drive_hist(eng, plan):
 
 # ----------------------------------------------------------------------------------------------------------
 def test_st_s12_backoff_wait_sequence():
-    """the POLICY numbers: 4 rounds in a row with drafts and 0 accepted -> 16 rounds at k = 0; each further failure
+    """the back-off numbers: 4 rounds in a row with drafts and 0 accepted -> 16 rounds at k = 0; each further failure
     doubles the wait up to 256; an accepted draft resets it (Engine._backoff, the row's own record only)"""
     assert (Engine.BO_MISS, Engine.BO_WAIT, Engine.BO_MAX) == (4, 16, 256)
     eng = SimpleNamespace(drafter=SimpleNamespace(backoff=True), BO_MISS=Engine.BO_MISS, BO_WAIT=Engine.BO_WAIT,
@@ -858,7 +858,7 @@ def test_spec_call_error_replays_plain(fams, bshj, drafter):
 
 def test_spec_call_error_after_it_took_the_state_is_not_replayed(fams):
     """a speculation call that fails after the device took its donated slot state (deleted buffers), or after it was
-    dispatched, is never re-run in silence: the step raises (the A13 failure rules end the streams)"""
+    dispatched, is never re-run in silence: the step raises (the failure rules end the streams)"""
     c = fams["llama-f32"][0]
     plan = [(0, dict(ids=loop_prompts(c.V, 1, 33)[0], max_new=40))]
     _, eng = engines(fams["llama-f32"])

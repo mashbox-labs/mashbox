@@ -1,7 +1,7 @@
 """Qwen3.8-27B port: the CPU checks in qwen3_8_27b_checks.py (tiny model of the same architecture vs transformers), and on
-the same tiny model the engine checks that guard batching: prefix_cache_checks.py (P1-P6), continuous_batching_checks.py
-(C1-C6), engine_batch_checks.py (E2-E33, skill mashbox-engine-batching) and determinism_checks.py (D1-D3, the CPU
-form of the certified-base gate B6: one user alone, greedy, same tokens run to run, from its own cache and after a
+the same tiny model the engine checks that guard batching: prefix_cache_checks.py, continuous_batching_checks.py
+(each check its own label), engine_batch_checks.py (the edge cases) and determinism_checks.py (the CPU
+form of single-user determinism: one user alone, greedy, same tokens run to run, from its own cache and after a
 restart), each gate as its own test.
 
 All of these are slow (tiny-model builds and many compiles on CPU, minutes in all): the scripts run once per module
@@ -30,7 +30,7 @@ def tiny_wd(tmp_path_factory):
     if not hasattr(tr, "Qwen3_5TextConfig"):
         pytest.skip("transformers without qwen3_5")
     wd = tmp_path_factory.mktemp("qwen3_8_27b")
-    tok = os.environ.get("MASHBOX_QWEN_TOKENIZER_DIR")      # a Qwen tokenizer dir turns on T8 (template) and T9 (server)
+    tok = os.environ.get("MASHBOX_QWEN_TOKENIZER_DIR")      # a Qwen tokenizer dir turns on the template and server checks
     r = subprocess.run([sys.executable, str(CPU / "qwen3_8_27b_checks.py"), str(wd)] + ([tok] if tok else []),
                        capture_output=True, text=True, timeout=3600)
     return wd, r

@@ -584,7 +584,7 @@ def test_cli_dispatches_only_parsed_commands():
 
 def test_cli_model_lists_come_from_the_catalog():
     """The CLI's runnable models and the models with their own command line come from models.json rows, never from ids
-    typed into cli.py (ARCHITECTURE-v1 section 5): a row is runnable when the package its path names ships in this version,
+    typed into cli.py: a row is runnable when the package its path names ships in this version,
     and parses its own `run` / `download` options when that package's __init__ defines main(cmd, argv)."""
     from mashbox import cli
     fake = {"models": [
@@ -885,23 +885,71 @@ def test_sync_check_result_condition_never_dropped(tmp_path):
     assert not list(problems), list(problems)
 
 
-def test_package_comments_name_no_internal_spec_section():
-    """The package's comments and docstrings say what the code does, never where an internal spec says it (src/mashbox,
-    every .py file): no section signs; no "spec N", "spec section" or document names of the form NAME-vN or NAME-PLAN;
-    no rule or check ids (a capital letter and one or two digits, or one to three capitals, a dash, a capital and one or
-    two digits; the float types F16, F32 and F64 excepted)."""
+# words that point at a maintainers' document, guide, suite or rule label instead of saying what the code does
+_INTERNAL_WORDS = re.compile(r"§|\bINTERFACES(?:-v\d+)?\b|\bspec (?:\d|[A-Z]\d)|\bspec section\b|\b[A-Z]{2,}-v\d+\b|"
+                             r"\b[A-Z]{2,}-PLAN\b|\bSTANDARDS-PLAN\b|\bCHIPS-VERIFY\b|\bPOLICY\b|\bCERT\b|\bskill\b|"
+                             r"\bmashbox-(?:engine-batching|public)\b|\b[Ss]pec (?:section )?(?:\d|[A-Z]\d)|\bSpec:|"
+                             r"\bamended spec\b|\bspec LOCKED\b")
+_RULE_ID = r"(?:[A-Z]\d{1,2}|[A-Z]{1,3}-[A-Z]\d{1,2})"
+
+
+def _comment_lines(f):
+    """(line, text) of every comment and docstring line of a .py file, and the module docstring's lines"""
     import io
     import tokenize
-    bad_re = re.compile(r"§|\bINTERFACES(?:-v\d+)?\b|\bspec (?:\d|[A-Z]\d)|\bspec section\b|\b[A-Z]{2,}-v\d+\b|\b[A-Z]{2,}-PLAN\b|"
-                        r"(?<![\w.-])(?!F(?:16|32|64)(?![\w-]))(?:[A-Z]\d{1,2}|[A-Z]{1,3}-[A-Z]\d{1,2})(?![\w-])")   # F16/F32: types
+    text = f.read_text()
+    tree = ast.parse(text)
+    pieces = [(t.start[0], t.string) for t in tokenize.generate_tokens(io.StringIO(text).readline)
+              if t.type == tokenize.COMMENT]
+    module_doc = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and ast.get_docstring(node):
+            d = node.body[0]
+            lines = [(d.lineno + i, ln) for i, ln in enumerate(d.value.value.splitlines())]
+            pieces += lines
+            module_doc = lines if node is tree else module_doc
+    return pieces, module_doc, tree
+
+
+def test_package_comments_name_no_internal_spec_section():
+    """The package's comments and docstrings say what the code does, never where an internal document says it (src/mashbox,
+    every .py file): no section signs; no document, guide or suite names (named ones, and any of the form NAME-vN or
+    ending in -PLAN); no "spec" followed by a number, a rule id or the word section; no rule labels; no rule or check ids
+    (a capital letter and one or two digits, or one to three capitals, a dash, a capital and one or two digits; the
+    float types F16, F32 and F64 excepted)."""
+    bad_re = re.compile(_INTERNAL_WORDS.pattern + r"|(?<![\w.-])(?!F(?:16|32|64)(?![\w-]))" + _RULE_ID + r"(?![\w-])")
     bad = []
     for f in sorted((ROOT / "src" / "mashbox").rglob("*.py")):
-        text = f.read_text()
-        pieces = [(t.start[0], t.string) for t in tokenize.generate_tokens(io.StringIO(text).readline)
-                  if t.type == tokenize.COMMENT]
-        for node in ast.walk(ast.parse(text)):
-            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and ast.get_docstring(node):
-                d = node.body[0]
-                pieces += [(d.lineno + i, ln) for i, ln in enumerate(d.value.value.splitlines())]
+        pieces, _, _ = _comment_lines(f)
         bad += [f"{f.relative_to(ROOT)}:{n}: {m.group(0)!r}" for n, t in pieces for m in bad_re.finditer(t)]
+    assert not bad, bad
+
+
+def test_shipped_tests_comments_name_no_internal_spec_section():
+    """The tests' comments and docstrings say what a test checks, never where an internal document says it: the same
+    words as the package check, and no rule or review id unless the file's own module docstring defines it as a
+    label (a line that starts with it, or a column of such lines), the file's code uses it as a name, or it is a CI
+    tier (T0-T2) or a norm (L1, L2). Every .py under the test folders the public tree ships; a maintainers' tree
+    lists the files it never ships in internal/held_tests.txt (absent in a public tree, so everything is read)."""
+    held_file = ROOT / "internal" / "held_tests.txt"
+    held = [ln.strip() for ln in held_file.read_text().splitlines() if ln.strip() and not ln.startswith("#")] \
+        if held_file.exists() else []
+    files = [ROOT / "tests" / "conftest.py"]
+    for d in ("cpu", "tpu", "standards", "fixtures"):
+        files += sorted((ROOT / "tests" / d).rglob("*.py")) if (ROOT / "tests" / d).is_dir() else []
+    rels = [str(f.relative_to(ROOT)) for f in files if f.exists()]
+    assert all(any(r.startswith(h) for r in rels) for h in held), [h for h in held if not any(r.startswith(h) for r in rels)]
+    id_re = re.compile(r"(?<![\w.-])(?!(?:F16|F32|F64|L1|L2|T0|T1|T2)(?![\w-]))" + _RULE_ID + r"(?![\w-])")
+    label_re = re.compile(r"(?:^\s*|\s{3,})(" + _RULE_ID + r")(?=[\s:,/]|$)")
+    bad = []
+    for rel in rels:
+        if any(rel.startswith(h) for h in held):
+            continue
+        pieces, module_doc, tree = _comment_lines(ROOT / rel)
+        labels = {m.group(1) for _, ln in module_doc for m in label_re.finditer(ln)}
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | \
+                {a.arg for n in ast.walk(tree) if isinstance(n, ast.arg) for a in [n]}
+        for n, t in pieces:
+            bad += [f"{rel}:{n}: {m.group(0)!r}" for m in _INTERNAL_WORDS.finditer(t)]
+            bad += [f"{rel}:{n}: {m.group(0)!r}" for m in id_re.finditer(t) if m.group(0) not in labels | names]
     assert not bad, bad

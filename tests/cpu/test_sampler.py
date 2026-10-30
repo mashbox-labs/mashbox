@@ -1,6 +1,6 @@
 """The shared sampler keeps exactly the tokens top_k, top_p and min_p allow, no fewer and no more.
 
-Guards an off-by-one at a cut: keeping k - 1 tokens passed every other test (the Qwen T7 check only asks
+Guards an off-by-one at a cut: keeping k - 1 tokens passed every other test (the Qwen sampler check only asks
 that drawn tokens fall inside the allowed set). Reference: the allowed sets worked out by hand from the logits below;
 draws are seeded, so the drawn sets are fixed.
 """

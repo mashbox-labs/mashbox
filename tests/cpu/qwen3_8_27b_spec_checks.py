@@ -4,7 +4,7 @@
 
   S1 greedy with speculation, K = 1, 2, 3, batch of 4 and each prompt alone, on a random model (drafts mostly rejected)
      and a near-bigram model (drafts mostly accepted, so commits of 1..K+1 tokens all run): the tie-aware replay (the
-     drafter gate's G-D1 rule): every committed token, teacher-forced through the plain forward, is its argmax or within
+     drafter gate's rule): every committed token, teacher-forced through the plain forward, is its argmax or within
      one bf16 step of its top logit; near-tie counts recorded. Equality with greedy without speculation (equal_batch,
      equal_alone) is recorded as information, not gated (a bf16 tie can round differently at the verify width)
   S2 rejection sampling keeps the target distribution: 200,000 rows, V = 32, K = 2, temperature 0.8 and top_k 12;

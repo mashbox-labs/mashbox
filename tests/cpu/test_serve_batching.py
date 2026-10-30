@@ -1,4 +1,4 @@
-"""Server waiting limits and client hang-ups on the continuous-batching loop (skill mashbox-engine-batching E7, E8).
+"""Server waiting limits and client hang-ups on the continuous-batching loop (waiting limits, hang-ups and field edges).
 
 Guards these failures, each seen on this server:
 - a client that hangs up while its request waits for a slot keeps its owner's waiting count (the legacy streaming route
@@ -153,8 +153,8 @@ ROUTES = {
 @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
 @pytest.mark.parametrize("route", list(ROUTES))
 def test_waiting_client_that_hangs_up_frees_its_count(route, stream):
-    """E7: 8 clients send a request while the only slot is busy, then close their connection; every waiting count is
-    freed within 0.5 s (spec E7 bound), on every route, streamed or not, with the slot still busy."""
+    """8 clients send a request while the only slot is busy, then close their connection; every waiting count is
+    freed within 0.5 s, on every route, streamed or not, with the slot still busy."""
     eng, srv, port = start()
     held = hold(eng, srv)
     path, body = ROUTES[route]
@@ -182,10 +182,10 @@ def test_waiting_client_that_hangs_up_frees_its_count(route, stream):
 
 
 def test_waiting_limits_per_owner_and_overall(monkeypatch):
-    """E7: with the only slot busy, owner A (key-a's tenant) gets 32 waiting and then 429 with Retry-After; owner B (key-b's) is not
+    """With the only slot busy, owner A (key-a's tenant) gets 32 waiting and then 429 with Retry-After; owner B (key-b's) is not
     refused; the legacy streaming route answers 429 itself (no 200 first). With the overall limit full, owner C (under
     its share) gets in by dropping A's newest waiting request (that request ends with Overloaded), and A then gets 429 on
-    the OpenAI routes and 529 overloaded_error on the Anthropic route, both with Retry-After (A1: 503 only while not
+    the OpenAI routes and 529 overloaded_error on the Anthropic route, both with Retry-After (503 only while not
     ready)."""
     eng, srv, port = start(keys=["key-a", "key-b", "key-c"])
     from mashbox.runtime import tenancy as T
@@ -233,7 +233,7 @@ FIELDS = {"completions": ("max_tokens", "temperature", "top_p", "top_k", "min_p"
 
 
 def test_numeric_field_edges_get_400_never_500():
-    """E8: every numeric field of every generating route, sent as a raw JSON literal at float and integer edges
+    """Every numeric field of every generating route, sent as a raw JSON literal at float and integer edges
     (Infinity, NaN, 1e999, 2^31, 2^63, 2^64, ...), answers 400 or 200, never 500; non-finite numbers always 400."""
     eng, srv, port = start(S=2)
     bad = {}
@@ -283,7 +283,7 @@ def test_accept_queue_takes_256_clients_connecting_at_once():
     assert ok == 256, sorted(set(res))[:5]
 
 
-# ---------------------------------------------------------------------------- admit trace line (CERT B1 order arm)
+# ---------------------------------------------------------------------------- admit trace line (admission order)
 def body_for(route, text, n, stream):
     """The ROUTES request with its own prompt text and token limit."""
     path, body = ROUTES[route]
@@ -329,7 +329,7 @@ PREFIX = dict(completions="cmpl-", chat="chatcmpl-", anthropic="msg_", responses
 @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
 @pytest.mark.parametrize("route", list(ROUTES))
 def test_admit_trace_line_names_the_clients_response_id_and_slot_in_admission_order(route, stream, monkeypatch):
-    """CERT B1 order arm: under MASHBOX_TRACE=1 the server logs one line per admitted request when the
+    """Admission order: under MASHBOX_TRACE=1 the server logs one line per admitted request when the
     loop admits it, {"event": "admit", "rid": <the id this request's client receives>, "slot": <its slot>, "seq": n,
     "tenant": <short tenant id or null>}. Checked against the engine's own admit calls: 5 requests arrive one by one
     at a 2-slot engine whose steps are held, so 4 wait; one more client hangs up while waiting and is never admitted;

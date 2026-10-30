@@ -361,7 +361,7 @@ def test_f6_links_in_replies_never_run_script_in_the_window():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_connect_agent_page_gives_settings_only_for_a_server_that_answers():
-    """F18: the page rendered settings whenever /api/state had a row, even when the check in the same
+    """The page rendered settings whenever /api/state had a row, even when the check in the same
     breath said there was no server (a TPU row whose tunnel just ended). Settings only with a passing check."""
     srv = {"id": "tpu-c1", "name": "TPU c1", "url": "http://127.0.0.1:8000", "from": "tpu", "has_key": False}
     st = {"servers": [srv], "active": "tpu-c1"}
@@ -369,6 +369,6 @@ def test_connect_agent_page_gives_settings_only_for_a_server_that_answers():
     for chk in ({"ok": False, "error": "no server"}, {"ok": False, "error": "not running: TPU c1 stopped"}, {}):
         assert node("agents", view, json.dumps({"state": st, "check": chk})) == []
     other = {"ok": True, "url": "http://127.0.0.1:8001", "models": [{"id": "m1", "context": 32768}]}
-    assert node("agents", view, json.dumps({"state": st, "check": other})) == []     # a check of another server (F21)
+    assert node("agents", view, json.dumps({"state": st, "check": other})) == []     # a check of another server
     ok = node("agents", view, json.dumps({"state": st, "check": dict(other, url=srv["url"])}))
     assert ok and any("ANTHROPIC_BASE_URL" in b["text"] for b in ok)

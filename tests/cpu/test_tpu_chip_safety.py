@@ -46,7 +46,7 @@ def script_of(S):
     return c[c.index("--command") + 1]
 
 
-# ------------------------------------------------------------------ chips mashbox did not make (F7)
+# ------------------------------------------------------------------ chips mashbox did not make
 def test_up_name_never_uses_a_chip_made_outside_mashbox_in_any_zone(cloud, capsys):
     """A chip with that name made outside mashbox (plain gcloud, the console, someone else) is found in every zone, and
     `up` neither uses it (no install, no server restart) nor creates a second chip with that name in an earlier zone."""
@@ -72,7 +72,7 @@ def test_down_name_finds_a_chip_made_outside_mashbox_and_leaves_it(cloud, capsys
     assert not deletes(S) and list(S["nodes"]) == [f"{Z[3]}/handed-1"]
 
 
-# ------------------------------------------------------------------ the local list is not proof of ownership (F14)
+# ------------------------------------------------------------------ the local list is not proof of ownership
 @pytest.mark.parametrize("entry", [dict(project="other-project", zone=Z[5]),       # stale: another project and zone
                                    dict(project="p1", zone=Z[3])])                # same place: the name was reused since
 def test_a_name_in_the_local_list_never_makes_a_chip_ours(cloud, capsys, entry):
@@ -125,7 +125,7 @@ def test_a_zone_whose_list_raises_is_never_read_as_empty(cloud, monkeypatch, cap
     assert creates(S) == [] and not deletes(S)
 
 
-# ------------------------------------------------------------------ --zone, and one name in two zones (F9)
+# ------------------------------------------------------------------ --zone, and one name in two zones
 def test_zone_flag_searches_only_that_zone(cloud, capsys):
     """--zone: that zone only. A chip of the same name in another zone is not found, used or changed."""
     read = cloud(plain={Z[0]: "ok"})
@@ -151,7 +151,7 @@ def test_a_name_in_two_zones_is_never_guessed(cloud, capsys):
     assert list(read()["nodes"]) == [f"{Z[0]}/twin"]
 
 
-# ------------------------------------------------------------------ the local port opens after the guard check (F11)
+# ------------------------------------------------------------------ the local port opens after the guard check
 def unix_server(path, body=b"secret"):
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -229,7 +229,7 @@ def raw_unix_server(path, reply):
 
 @pytest.mark.parametrize("reopened_and_opened", [False, True])
 def test_a_relay_paused_across_a_reopen_never_reaches_the_new_forward(monkeypatch, reopened_and_opened):
-    """F15: a relay passes the open check, then pauses inside connect(). Meanwhile the forward drops, shut() runs and a
+    """A relay passes the open check, then pauses inside connect(). Meanwhile the forward drops, shut() runs and a
     new forward listens on the socket (before its guard check, or checked and opened again after this relay's own
     check). The paused relay must not pass a byte to it: closed, nothing sent, nothing answered."""
     lp = tpu.free_port(18640)
@@ -329,7 +329,7 @@ def test_guarded_server_gets_the_port(cloud, capsys):
     assert "Server ready" in capsys.readouterr().out
 
 
-# ------------------------------------------------------------------ the wheel the chip installs (F12, F13; F8 in the CLI)
+# ------------------------------------------------------------------ the wheel the chip installs (and the CLI's own check)
 def pkg_sha(script):
     return re.search(r"^pkg='wheel sha256=([0-9a-f]{64})'$", script, re.M).group(1)
 
@@ -437,7 +437,7 @@ def test_wheel_path_is_quoted_for_the_chips_shell(cloud, tmp_path, monkeypatch):
     assert out == "/home/u w/" + w.name
 
 
-# ------------------------------------------------------------------ an unclear create answer and a name taken meanwhile (F17)
+# ------------------------------------------------------------------ an unclear create answer and a name taken meanwhile
 def node_calls(S, verb, zone=None):
     return [c for c in S["calls"] if c[2:4] == ["tpu-vm", verb] and (zone is None or c[c.index("--zone") + 1] == zone)]
 
@@ -498,7 +498,7 @@ def test_a_queued_request_that_cannot_be_checked_is_named_not_deleted(cloud, cap
         f"queued-resources delete mashbox-qwen3-8-27b-q --zone {Z[0]} --project p1 --force --quiet" in out
 
 
-# ------------------------------------------------------------------ a long TMPDIR (F20)
+# ------------------------------------------------------------------ a long TMPDIR
 def a_free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -575,7 +575,7 @@ def test_the_port_stays_bound_after_the_session_until_the_process_exits():
     assert listener_could_bind(lp.port)
 
 
-# ------------------------------------------------------------------ a chip replaced after the list (F23)
+# ------------------------------------------------------------------ a chip replaced after the list
 SWAPPED = f"{Z[3]}/handed-1"
 
 
@@ -628,7 +628,7 @@ def test_down_of_a_chip_gone_since_the_list_says_gone(cloud, capsys):
     assert not deletes(read()) and "handed-1: gone" in capsys.readouterr().out
 
 
-# ------------------------------------------------------------------ replaced later: every call by name describes first (F24, F25)
+# ------------------------------------------------------------------ replaced later: every call by name describes first
 NAME = "mashbox-qwen3-8-27b"
 KEY = f"{Z[0]}/{NAME}"
 

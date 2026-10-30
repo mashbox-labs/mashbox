@@ -1,6 +1,6 @@
 """Speculative decoding inside the batched step (Engine._spec_step, runtime/spec_step.py make_step with the MTP drafter) on tiny random
-models of the Qwen3.8-27B architecture, CPU. The drafter gate's CPU forms (engine interfaces §10.3,
-batching spec §13.13):
+models of the Qwen3.8-27B architecture, CPU. The drafter gate's CPU forms
+(the same rules the chip gate applies):
   G-D1  one user alone, greedy, MTP on (K = 1, 2, 3), the tie-aware replay (the G-D1 rule; batched output may
         differ from alone): every committed token, teacher-forced through the plain forward, is its argmax
         or within one bf16 step of its top logit; the near-tie count (committed tokens that are not the argmax) is
@@ -15,8 +15,8 @@ batching spec §13.13):
         engines end idle with usage counted once, the cancelled row ends "cancel"; on the near-bigram model (no ties)
         drafts were accepted, a stop fired (8 and 64 users) and every row also equals the same schedule without
         speculation; on the random model that equality, the tokens per round and the tie-aware replay numbers
-        (speculation on and off) are recorded, not gated. Sampled and penalised rows equal the plain schedule (the coupled draw, spec §6:
-        no rejection sampling); E17 max_tokens and E10 stop tokens inside a draft; cancel mid-draft, then the freed slot
+        (speculation on and off) are recorded, not gated. Sampled and penalised rows equal the plain schedule (the coupled draw:
+        no rejection sampling); max_tokens and stop tokens inside a draft; cancel mid-draft, then the freed slot
         serves a new request correctly
   roll  rejected drafts leave no trace: the slot state after speculation equals the state after plain decode of the same
         tokens (linear-attention state, conv tail, full-attention K/V at every committed position); bit-equal on the
@@ -297,7 +297,7 @@ def test_gd2_batched_rows_base_rule(tiny, tag, users, S, ctx, record_property):
 
 def test_gd2_mixed_settings_one_step(tiny):
     """greedy rows, a draft=False row, penalised rows and seeded sampled rows in the same steps: every row equals the
-    same schedule without speculation (sampled rows by the coupled draw, spec §6), and a seeded row repeats"""
+    same schedule without speculation (sampled rows by the coupled draw), and a seeded row repeats"""
     base, spec = engines(tiny["bigram"], 3, CTX=256, S=8, K=4)
     ps = prompts(8, seed=9)
     smp = [None, None, dict(temperature=0.8, top_k=20, presence_penalty=1.5, seed=4), None,
@@ -320,7 +320,7 @@ SAMPLED = [dict(temperature=0.8, top_k=20, seed=4), dict(temperature=0.7, top_p=
 
 @pytest.mark.parametrize("k", [1, 3])
 def test_coupled_draw_sampled_and_penalised_rows_equal_plain(tiny, k):
-    """spec §6 coupled draw: the target at answer index j is the plain sampler's own draw there (same transform, Gumbel key
+    """The coupled draw: the target at answer index j is the plain sampler's own draw there (same transform, Gumbel key
     (seed, j), penalty counts that include the drafts before j), drafts are accepted while equal, so sampled and penalised
     rows (greedy or sampled) commit the same tokens as without speculation, and they speculate (k > 0, drafts accepted)"""
     base, spec = engines(tiny["bigram"], k, CTX=256, S=8, K=4)

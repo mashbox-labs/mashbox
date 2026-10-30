@@ -1,4 +1,4 @@
-"""Single-user greedy determinism (certified-base gate B6, skill mashbox-engine-batching section 13.13), the CPU form on the
+"""Single-user greedy determinism (one user alone, greedy, the same tokens run to run), the CPU form on the
 tiny Qwen3.8 model. Usage: determinism_checks.py WD   (WD = the work folder of a qwen3_8_27b_checks.py run: tiny/ and
 tiny-bf16.bshj). Prints one JSON line; exit 0 when every gate passes. Keys ending in _info are reported, never gates.
 

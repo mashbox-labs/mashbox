@@ -1,5 +1,5 @@
 """GET /metrics (runtime/metrics.py): the Prometheus text format, counts that equal what the clients got, live gauges,
-worker restarts, and no label that names a tenant, a key or a session (E41). In one process and through the worker."""
+worker restarts, and no label that names a tenant, a key or a session. In one process and through the worker."""
 import json
 import math
 import os
@@ -218,7 +218,7 @@ def _serve_with_keys(srv, keys):
 
 @pytest.mark.parametrize("mode", ["one_process", "worker"])
 def test_metrics_name_no_tenant_key_or_session(tmp_path, mode):
-    """E41: with two API keys, sessions and subagents sending, /metrics needs a key, and no label or value in it names
+    """With two API keys, sessions and subagents sending, /metrics needs a key, and no label or value in it names
     a key, a tenant, a session or an agent. Its labels are the server's own (finish reason, bucket bound, cache layout)."""
     keys = ["mbx-test-key-alpha-7f3a9c", "mbx-test-key-bravo-21d8e4"]  # gitleaks:allow
     if mode == "worker":
