@@ -54,3 +54,43 @@ def test_t1_shards_split_an_area_by_time():
         bound = max(max(sec.values()), 1.25 * sum(loads) / n)
         assert max(loads) <= bound, f"{area}: shard seconds {loads}, bound {bound:.0f}"
         assert max(loads) <= 0.6 * limit, f"{area}: slowest shard {max(loads)} s of a {limit} s T1 timeout"
+
+
+def test_views_workflow_checks_and_writes_nothing(tmp_path):
+    """The Views workflow renders every view of models.json into a temporary folder and fails when a committed view
+    differs from its render or is missing. It holds no secret, asks for no write permission, keeps no credential in its
+    checkout and commits or pushes nothing, so it runs the same on a pull request from a fork."""
+    import re
+    import subprocess
+    wf = (ROOT / ".github" / "workflows" / "views.yml").read_text()
+    code = "".join(line + "\n" for line in wf.splitlines() if not line.lstrip().startswith("#"))
+    assert "secrets." not in code and "ssh-key" not in code and "pull_request_target" not in code
+    assert not re.search(r"\bgit\b[^\n]*\b(add|commit|push)\b", code)
+    assert not re.search(r"python3 [^\n]*hf_github_sync_check\.py[^\n]*--write", code)   # it never renders in place
+    levels = re.findall(r"^\s+[a-z-]+: (read|write|none)$", code, re.M)
+    assert levels and "write" not in levels, levels
+    checkouts = code.count("uses: actions/checkout@")
+    assert checkouts and code.count("persist-credentials: false") == checkouts
+    assert re.search(r'hf_github_sync_check\.py render --repo \. --out "\$RUNNER_TEMP/views"', code)
+    step = re.search(r"\n( +)- name: Fail when a committed view differs from its render\n +run: \|\n((?:(?:\1    .*)?\n)+)", code)
+    assert step, "no compare step"
+    script = "\n".join(line[len(step.group(1)) + 4:] for line in step.group(2).splitlines())
+    assert script.rstrip().endswith('exit "$bad"'), script   # the whole step, to its last line
+
+    def compare(case, rendered, committed):
+        out, ws = tmp_path / case / "views", tmp_path / case / "ws"
+        for base, files in ((out, rendered), (ws, committed)):
+            for rel, text in files.items():
+                (base / rel).parent.mkdir(parents=True, exist_ok=True)
+                (base / rel).write_text(text)
+        env = {"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path / case), "GITHUB_WORKSPACE": str(ws)}
+        return subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
+
+    views = {"README.md": "models\n", "docs/models/a.md": "a\n", "hf/a/README.md": "card\n"}
+    same = compare("same", views, dict(views, **{"docs/other.md": "not a view\n"}))
+    assert same.returncode == 0, same.stdout + same.stderr
+    drift = compare("drift", views, dict(views, **{"docs/models/a.md": "a, edited by hand\n"}))
+    assert drift.returncode != 0 and "docs/models/a.md" in drift.stdout and "README.md" not in drift.stdout
+    gone = {k: v for k, v in views.items() if k != "hf/a/README.md"}
+    missing = compare("missing", views, gone)
+    assert missing.returncode != 0 and "hf/a/README.md" in missing.stdout

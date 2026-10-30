@@ -1,0 +1,44 @@
+name: Views
+# Every view of models.json (the README models block, llms.txt, the docs catalog and model pages, and the Hugging Face
+# card sources under hf/) is rendered from it into a temporary folder, and the run fails when a committed view differs
+# from its render or is missing. Nothing is written back: run
+#   PYTHONPATH=src python3 tools/hf_github_sync_check.py render --repo . --write
+# and commit the result. CI's T0 check that the views match models.json stays as well.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: views-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install -q numpy==2.5.4
+      - name: Render every view of models.json into a temporary folder
+        run: PYTHONPATH=src python3 tools/hf_github_sync_check.py render --repo . --out "$RUNNER_TEMP/views"
+      - name: Fail when a committed view differs from its render
+        run: |
+          cd "$RUNNER_TEMP/views"
+          bad=0
+          while IFS= read -r -d '' f; do
+            f=${f#./}
+            if [ ! -f "$GITHUB_WORKSPACE/$f" ]; then
+              echo "::error file=$f::missing: run tools/hf_github_sync_check.py render --repo . --write"; bad=1
+            elif ! cmp -s "$f" "$GITHUB_WORKSPACE/$f"; then
+              echo "::error file=$f::differs from its render from models.json: run tools/hf_github_sync_check.py render --repo . --write"; bad=1
+            fi
+          done < <(find . -type f -print0 | sort -z)
+          if [ "$bad" = 0 ]; then echo "every view matches models.json"; fi
+          exit "$bad"
