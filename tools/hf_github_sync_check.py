@@ -806,7 +806,7 @@ def measured_cell(m, n=2):
     """Headline results for the README table: the first n results of the model, chip named."""
     if not m["results"]:
         return "n/a"
-    return "<br>".join(f"{short_metric(r)}: **{r['value'].split(' (', 1)[0]}** ({r['chip']})" for r in m["results"][:n])
+    return "<br>".join(f"{short_metric(r)}: **{r['value'].split(' (', 1)[0]}** {_lists().chip_note(r['chip'])}" for r in m["results"][:n])
 
 
 def readme_measured(m):
@@ -815,17 +815,17 @@ def readme_measured(m):
     if not hl or not m["hf_repo"]:
         return measured_cell(m)
     r = m["results"][hl[0]["results"][0]]
-    return ("; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" ({r['chip']}). "
+    return ("; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" {_lists().chip_note(r['chip'])}. "
             f"[All results](https://huggingface.co/{m['hf_repo']})")
 
 
 def profile_measured(m):
-    """Profile cell: the README's lead number (first headline marked readme), chip named; else the first result."""
+    """Profile cell: every headline number marked readme, as the README prints them, chip named; else the first result."""
     hl = [h for h in m.get("headline") or [] if h.get("readme")]
     if not hl:
         return measured_cell(m, n=1)
     r = m["results"][hl[0]["results"][0]]
-    return f"**{hl[0]['big']}** {hl[0]['label']} ({r['chip']})"
+    return "; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" {_lists().chip_note(r['chip'])}"
 
 
 def profile_table(reg):
@@ -891,7 +891,7 @@ def org_card_measured(m):
     if not hl:
         return measured_cell(m)
     r = m["results"][hl[0]["results"][0]]
-    return "; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" ({r['chip']})"
+    return "; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" {_lists().chip_note(r['chip'])}"
 
 
 def org_card_table(reg):

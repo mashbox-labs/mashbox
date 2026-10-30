@@ -148,14 +148,20 @@ GGUF_LINE = ("GGUF files from other publishers, run as they are by mashbox. Leve
              "been checked; a speed shows only where a chip run measured it on our kernels.")
 
 
+def chip_note(chip):
+    """The chip after a number, bracketed once: "(TPU v6e-1)", and "(CPU, AMD EPYC 7502P)" for a chip that carries its own
+    brackets ("CPU (AMD EPYC 7502P)"), never "(CPU (AMD EPYC 7502P))"."""
+    return "(%s)" % (chip.replace(" (", ", ").rstrip(")") if " (" in chip else chip)
+
+
 def measured(reg, rid):
     """A MASHBOX build's measured lines: its headline numbers marked readme, each against its baseline with its chip
     (the README's Measured cell), else its first two results; [] when it has none."""
     m = next(x for x in reg["models"] if x["id"] == rid)
     hl = [h for h in m.get("headline") or [] if h.get("readme")]
     if hl:
-        return [f"**{h['big']}** {h['label']} ({m['results'][h['results'][0]]['chip']})" for h in hl]
-    return [f"{r['metric'].split(' (', 1)[0]}: **{r['value'].split(' (', 1)[0]}** ({r['chip']})"
+        return [f"**{h['big']}** {h['label']} {chip_note(m['results'][h['results'][0]]['chip'])}" for h in hl]
+    return [f"{r['metric'].split(' (', 1)[0]}: **{r['value'].split(' (', 1)[0]}** {chip_note(r['chip'])}"
             for r in (m.get("results") or [])[:2]]
 
 

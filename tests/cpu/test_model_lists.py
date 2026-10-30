@@ -186,3 +186,27 @@ def test_model_lists_only_read_the_catalog():
     src = (ROOT / "tools" / "model_lists.py").read_text()
     for name in ("def level", "def gguf_rows", "def _speed", "def ours", "LEVELS =", "MAKER_NAMES ="):
         assert name not in src, name
+
+
+def test_a_chip_with_its_own_brackets_prints_once_bracketed():
+    """a result's chip that carries its own brackets ("CPU (AMD EPYC 7502P)") prints as "(CPU, AMD EPYC 7502P)" after the
+    number on every list, never "(CPU (AMD EPYC 7502P))"; a plain chip keeps "(TPU v6e-1)" """
+    chips = {r["chip"] for m in REG["models"] for r in m.get("results") or [] if " (" in r["chip"]}
+    assert chips, "models.json has no chip with its own brackets: the case this test covers"
+    views = {"README": SC.readme_block(REG), "profile": SC.profile_block(REG), "org card": SC.org_card_block(REG),
+             "docs catalog": ML.render_markdown(REG)}
+    for name, text in views.items():
+        for c in chips:
+            assert f"({c})" not in text, (name, c)
+    assert "(CPU, AMD EPYC 7502P)" in views["README"]
+    assert "(TPU v6e-1)" in views["README"]
+
+
+def test_profile_row_carries_every_readme_headline():
+    """The org profile's row for a model prints every headline number the README prints for it, not only the first."""
+    rows = SC.profile_table(REG).splitlines()
+    for m in REG["models"]:
+        hl = [h for h in m.get("headline") or [] if h.get("readme")]
+        row = next(r for r in rows if f"[{m['name']}]" in r)
+        missing = [h["big"] for h in hl if f"**{h['big']}**" not in row]
+        assert not missing, (m["id"], missing)
