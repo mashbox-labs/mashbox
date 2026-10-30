@@ -631,8 +631,9 @@ def _pick(a, layer, ids):
 def expert_weights(h, ids, x, dtype=f32, layer=None):
     """experts `ids` (None: all) of a stacked (E, rows, cols) handle, rebuilt: (len(ids), rows, cols) in dtype. layer:
     the handle is the whole stack over layer groups (groups, E, rows, cols) and layer picks the group. Only the picked
-    experts' blocks are gathered: file blocks (Raw), kq planes (Packed, rebuilt per expert by the package's dequant) or
-    native planes (NB, gathered plane by plane and rebuilt by the package's nb_dequant, which takes any leading dims).
+    experts' blocks are gathered: file blocks (Raw), kq planes (Packed, rebuilt per expert by the package's dequant),
+    native planes (NB, gathered plane by plane and rebuilt by the package's nb_dequant, which takes any leading dims) or
+    BF16 values (Dense16, the stored bfloat16 values widened, so the same bits as the file blocks' dequant).
     The barrier ties the blocks to the activations x (see qmatmul) so an unrolled forward never rebuilds every layer up
     front. -> (weights, x)"""
     sel = lambda a: _pick(a, layer, ids)
@@ -644,6 +645,10 @@ def expert_weights(h, ids, x, dtype=f32, layer=None):
         sub = jax.tree_util.tree_map(sel, h.packed)
         x, sub = lax.optimization_barrier((x, sub))
         return jax.vmap(_KERNELS["module"].dequant)(sub).astype(dtype), x
+    if isinstance(h, dense16.Dense16):
+        w = sel(h.w)
+        x, w = lax.optimization_barrier((x, w))
+        return w.astype(dtype), x
     raw = sel(h.raw)
     x, raw = lax.optimization_barrier((x, raw))
     return R.dequant(_mat(raw, h.t, h.shape), h.t, h.shape[-1]).astype(dtype), x

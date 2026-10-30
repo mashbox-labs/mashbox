@@ -68,11 +68,6 @@ CASES = {
     "E4-r3-k1-experts": (3, 1, None, None, "experts"),   # 2 of 4 stacked experts gathered and rebuilt
     "r4-k2-randbytes": (4, 2, None, None, "dequant"),    # every scale value and code, NaN and inf included
 }
-# A known engine bug, kept as a FAILING case (strict: it turns red the day the fix lands, then this mark goes): BF16
-# expert stacks from ops.prepare (use_kernel=True, as the archs call it) are dense16 handles, and ops.expert_weights
-# reads h.raw, so a BF16 MoE on the exact path stops with AttributeError. The conftest counts it: op/BF16:experts FAIL.
-BF16_EXPERTS_XFAIL = pytest.mark.xfail(strict=True, raises=AttributeError,
-                                       reason="ops.expert_weights has no Dense16 case (ops/__init__.py:647)")
 PATHS = ["default", "dequantized"]   # dequantized: BF16's fallback (MASHBOX_DENSE16=off); other types have one path
 
 
@@ -86,8 +81,7 @@ def _params():
                     continue
                 if path == "dequantized" and CASES[case][4] in ("take_rows", "dequant"):
                     continue          # these already run use_kernel=False, the engine's embedding call
-                marks = [BF16_EXPERTS_XFAIL] if (t, path, CASES[case][4]) == (30, "default", "experts") else []
-                yield pytest.param(t, path, case, marks=marks,
+                yield pytest.param(t, path, case,
                                    id=f"{name}-{case}" + ("" if path == "default" else "-dequantized"))
 
 
