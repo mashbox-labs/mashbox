@@ -7,7 +7,7 @@
   "hf": {
     "org": "mashbox-labs"
   },
-  "version": "0.1.10",
+  "version": "0.1.11",
   "license": "Apache-2.0",
   "company_line": "MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.",
   "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]\"",
@@ -241,7 +241,7 @@
         "license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
       },
       "hf_repo": "mashbox-labs/Qwen3.8-27B-TPU",
-      "hf_revision": "69efeb48850bfc267a631966fc80e67a2d5a1c76",
+      "hf_revision": "98139d38b39dd1223c102ef008e6b0968a903aae",
       "card_release": "0.1.10",
       "base_model_relation": "quantized",
       "pipeline_tag": "text-generation",
@@ -635,9 +635,9 @@
           "format": "XLA compile cache (tar)",
           "default": false,
           "variant": false,
-          "bytes": 681932800,
-          "sha256": "b0704813808badb13165d05f6f6e234f592fe376005f8cd1d3c22b411f313b6d",
-          "gb": 0.68,
+          "bytes": 708259840,
+          "sha256": "aaeac778badb9743bddb92ba81d673a1e33cb71aae228fbfda061dbb1fa39c2a",
+          "gb": 0.71,
           "chips": [
             "v6e"
           ],
@@ -656,9 +656,9 @@
           "format": "XLA compile cache (tar)",
           "default": false,
           "variant": false,
-          "bytes": 982323200,
-          "sha256": "67b3bae3c960f54bc8123f00f0ab0d977c7e04bbf2018f0ef9510e6b94b453af",
-          "gb": 0.98,
+          "bytes": 993525760,
+          "sha256": "e5a4cde4ad3a3860376aece9a4b99b82ca74c1b0a0c262c62a9b1ff843239a66",
+          "gb": 0.99,
           "chips": [
             "v6e"
           ],
@@ -1104,12 +1104,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick",
-          "measured": {
-            "decode_tok_s_1_user": 14.75
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1146,12 +1144,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick",
-          "measured": {
-            "decode_tok_s_1_user": 3.98
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1187,12 +1183,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick",
-          "measured": {
-            "decode_tok_s_1_user": 16.31
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1231,11 +1225,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "decode_tok_s_1_user": 1.43
+            "steady_decode_tok_s_1_user": 143.49,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
       }
@@ -1295,8 +1291,15 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 578.3,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+          }
         }
       }
     },
@@ -1356,8 +1359,11 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1480,8 +1486,11 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1541,8 +1550,12 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "failing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick",
+          "reason": "divergence"
         }
       }
     },
@@ -1602,8 +1615,11 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1664,8 +1680,11 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1727,8 +1746,11 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1788,8 +1810,11 @@
       },
       "chips": {
         "v6e": {
-          "status": "pending",
-          "not_run_reason": "no chip run of this file"
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1852,12 +1877,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
-          "measured": {
-            "decode_tok_s_1_user": 15.42
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1918,12 +1941,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
-          "measured": {
-            "decode_tok_s_1_user": 8.23
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -1984,12 +2005,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
-          "measured": {
-            "decode_tok_s_1_user": 4.15
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2050,11 +2069,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick",
           "measured": {
-            "decode_tok_s_1_user": 1.77
+            "steady_decode_tok_s_1_user": 89.68,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
       }
@@ -2116,12 +2137,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
-          "measured": {
-            "decode_tok_s_1_user": 1.01
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2184,12 +2203,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
-          "measured": {
-            "decode_tok_s_1_user": 1.51
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2250,12 +2267,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
-          "measured": {
-            "decode_tok_s_1_user": 0.71
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2316,12 +2331,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
-          "measured": {
-            "decode_tok_s_1_user": 4.15
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2383,12 +2396,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick-check",
-          "measured": {
-            "decode_tok_s_1_user": 1.51
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2431,12 +2442,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick",
-          "measured": {
-            "decode_tok_s_1_user": 0.29
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2473,12 +2482,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick",
-          "measured": {
-            "decode_tok_s_1_user": 0.36
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2515,12 +2522,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick",
-          "measured": {
-            "decode_tok_s_1_user": 1.74
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2563,12 +2568,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick",
-          "measured": {
-            "decode_tok_s_1_user": 0.32
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2611,12 +2614,10 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
-          "record_kind": "quick",
-          "measured": {
-            "decode_tok_s_1_user": 0.32
-          }
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
         }
       }
     },
@@ -2654,13 +2655,411 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-1",
-          "kernel_path": "exact",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "decode_tok_s_1_user": 0.38
+            "steady_decode_tok_s_1_user": 30.36,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
+      }
+    },
+    {
+      "id": "hauhaucs-qwen3-8-27b-q4-k-p",
+      "model": "qwen3-8-27b",
+      "publisher": "HauhauCS",
+      "family": "Qwen3.8-27B",
+      "maker": "Qwen",
+      "repo": "HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF",
+      "revision": "993a5971fda8f30dd1b7eb2654792ba4415c7460",
+      "file": "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf",
+      "tag": "Q4_K_P",
+      "sha256": "ba36dc3c2b2ff5e0aa5d71092a8894546996a6a119ae391803dda07cdc08516d",
+      "bytes": 17923393664,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "IQ4_XS",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF/blob/993a5971fda8f30dd1b7eb2654792ba4415c7460/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF:Q4_K_P",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 28.17,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
+        }
+      }
+    },
+    {
+      "id": "jonathancoletti-qwen3-8-27b-q4-k-m",
+      "model": "qwen3-8-27b",
+      "publisher": "JonathanColetti",
+      "family": "abl",
+      "maker": "Qwen",
+      "repo": "JonathanColetti/Qwen3.8-27B-Uncensored-GGUF",
+      "revision": "45d0fc0ad6cfcf9eeee6008ddaea925536409b18",
+      "file": "Qwen3.8-27B-Uncensored-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "4c5e2db039e9325ac7724c8846c71356a24ad1cdfa28002d73ecb6be645f9675",
+      "bytes": 16810714528,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/blob/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run JonathanColetti/Qwen3.8-27B-Uncensored-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
+        }
+      }
+    },
+    {
+      "id": "0bserverx-qwen3-8-27b-q4-k-m",
+      "model": "qwen3-8-27b",
+      "publisher": "0bserverx",
+      "family": "Qwen3.8-27B",
+      "maker": "Qwen",
+      "repo": "0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF",
+      "revision": "ab8d7bd81d03117501e4da60cccdff4c80f0eea0",
+      "file": "Qwen3.8-27B-Heretic-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "5ae89d6720ba0a27f643e6fbb0d1b557870d17aeff23156e5981e863ec16985c",
+      "bytes": 16547400032,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF/blob/ab8d7bd81d03117501e4da60cccdff4c80f0eea0/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run 0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
+        }
+      }
+    },
+    {
+      "id": "davidau-qwen3-5-9b-the-defiant-fable-uncensored-heretic-neo-imatrix-max-mtp-q4-k-m",
+      "model": "qwen3-5-9b-the-defiant-fable-uncensored-heretic-neo-imatrix-max-mtp",
+      "publisher": "DavidAU",
+      "family": "Qwen3.5",
+      "maker": "DavidAU",
+      "repo": "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF",
+      "revision": "d5f3139249b7ee2535c20ab81125c9a6ab0c4915",
+      "file": "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "d7eb4fac9389d53fa576f64a6ff53e914a00bc7705dc354d1065887565147320",
+      "bytes": 6979975392,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 9.0,
+        "active": null
+      },
+      "types": [
+        "BF16",
+        "F32",
+        "Q4_K",
+        "Q6_K"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF/blob/d5f3139249b7ee2535c20ab81125c9a6ab0c4915/README.md",
+      "base": "DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
+        }
+      }
+    },
+    {
+      "id": "davidau-qwen3-8-27b-turbo-fable-cold-fusion-735-882-heretic-uncensored-nm-dau-q4-k-m",
+      "model": "qwen3-8-27b-turbo-fable-cold-fusion-735-882-heretic-uncensored-nm-dau",
+      "publisher": "DavidAU",
+      "family": "Qwen3.8",
+      "maker": "DavidAU",
+      "repo": "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF",
+      "revision": "b9bce7e859c9b5047aca884e5bff76f8a0443de1",
+      "file": "Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q4_K_M.gguf",
+      "tag": "Q4_K_M",
+      "sha256": "bc7a6cf2bcc78d1190aaf04d1ab1c5cb845b6ff23aa0e7d24fe0d2ea6d3a7c7c",
+      "bytes": 18498573856,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "BF16",
+        "F32",
+        "Q4_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF/blob/b9bce7e859c9b5047aca884e5bff76f8a0443de1/README.md",
+      "base": "DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF:Q4_K_M",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick",
+          "measured": {
+            "steady_decode_tok_s_1_user": 27.13,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+          }
+        }
+      }
+    },
+    {
+      "id": "cdiamond-qwen3-8-27b-mtp",
+      "model": "qwen3-8-27b",
+      "publisher": "cdiamond",
+      "family": "Qwen3.8-27B",
+      "maker": "Qwen",
+      "repo": "cdiamond/Qwen3.8-27B-iMatrix-NVFP4-MTP-GGUF",
+      "revision": "ac343e8f44caef0896f79d372ecc07ef7ab34ec8",
+      "file": "Qwen3.8-27B-iMatrix-NVFP4-MTP.gguf",
+      "tag": "MTP",
+      "sha256": "15b6bb8d0eb15cb6b081c562f8daea86330ec64174cb0f9e1655f3d467484007",
+      "bytes": 17125207136,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "NVFP4",
+        "Q5_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/cdiamond/Qwen3.8-27B-iMatrix-NVFP4-MTP-GGUF/blob/ac343e8f44caef0896f79d372ecc07ef7ab34ec8/README.md",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run cdiamond/Qwen3.8-27B-iMatrix-NVFP4-MTP-GGUF:MTP",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
+        }
+      }
+    },
+    {
+      "id": "byteshape-qwen3-8-27b-iq2-xxs",
+      "model": "qwen3-8-27b",
+      "publisher": "byteshape",
+      "family": "Qwen3.8",
+      "maker": "Qwen",
+      "repo": "byteshape/Qwen3.8-27B-GGUF",
+      "revision": "3fdfbd9b4a618303ad36edb151e95d134ece8c18",
+      "file": "Qwen3.8-27B-IQ2_XXS-2.56bpw.gguf",
+      "tag": "IQ2_XXS",
+      "sha256": "901905c4b623d78a5e06421bba0c2ccd1a9acbb3d2643f5b6a611f00da2f1615",
+      "bytes": 8843953536,
+      "arch": "qwen35",
+      "moe": false,
+      "params_b": {
+        "total": 27.0,
+        "active": null
+      },
+      "types": [
+        "F32",
+        "IQ2_XXS",
+        "IQ3_XXS",
+        "IQ4_XS",
+        "Q5_K",
+        "Q6_K",
+        "Q8_0"
+      ],
+      "license": "apache-2.0",
+      "license_link": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/LICENSE",
+      "base": "Qwen/Qwen3.8-27B",
+      "in": "text",
+      "out": "text",
+      "run": "mashbox run byteshape/Qwen3.8-27B-GGUF:IQ2_XXS",
+      "experimental": false,
+      "chips": {
+        "v6e": {
+          "status": "passing",
+          "accelerator": "v6e-4",
+          "chip_count": 1,
+          "kernel_path": "bundle",
+          "record_kind": "quick"
+        }
+      }
+    }
+  ],
+  "elsewhere": [
+    {
+      "id": "audio2face-3d-v3-0",
+      "name": "Audio2Face-3D v3.0",
+      "summary": "Speech audio to face motion for skin, tongue, jaw and eyes.",
+      "device": "TPU",
+      "how_to_run": "https://huggingface.co/mashbox-labs/Audio2Face-3D-v3.0-TPU#load",
+      "hf_repo": "mashbox-labs/Audio2Face-3D-v3.0-TPU",
+      "hf_revision": "c0414eb628d7ef74aaa51c4dbd240b327a782cb0",
+      "upstream": {
+        "name": "Audio2Face-3D v3.0",
+        "maker": "NVIDIA",
+        "hf": "nvidia/Audio2Face-3D-v3.0",
+        "revision": "b74132732fd9a9d29b237bec193ded64c9745e91",
+        "license": "other",
+        "license_name": "nvidia-open-model-license",
+        "license_link": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        "license_sha256": "81130b7682a8917fe7a90b3fe367c02817e2c51da9a8a41a1dd7d80ba8b4b5c4",
+        "notice_sha256": "5fc60716a9ba57f3792e71ed776b4065671c64d0c2db716698f4d646ad833eb1"
+      }
+    },
+    {
+      "id": "granite-speech-4-1-2b",
+      "name": "Granite Speech 4.1 2B",
+      "summary": "Speech recognition and speech translation.",
+      "device": "TPU",
+      "how_to_run": "https://huggingface.co/mashbox-labs/granite-speech-4.1-2b-TPU#load",
+      "hf_repo": "mashbox-labs/granite-speech-4.1-2b-TPU",
+      "hf_revision": "1c56c85074f91f1dec38de3936d8ea73bc149a69",
+      "upstream": {
+        "name": "Granite Speech 4.1 2B",
+        "maker": "IBM",
+        "hf": "ibm-granite/granite-speech-4.1-2b",
+        "revision": "de575db64086f84fdc79da4932d1076e965bc546",
+        "license": "apache-2.0"
+      }
+    },
+    {
+      "id": "maya1",
+      "name": "maya1 and the SNAC 24 kHz decoder",
+      "summary": "Text to speech from a voice description and the text to say.",
+      "device": "TPU",
+      "how_to_run": "https://huggingface.co/mashbox-labs/maya1-TPU#load",
+      "hf_repo": "mashbox-labs/maya1-TPU",
+      "hf_revision": "f9a6a372969f746ad1b1b989af2445c907a7ba98",
+      "upstream": {
+        "name": "maya1",
+        "maker": "Maya Research",
+        "hf": "maya-research/maya1",
+        "revision": "b1b9b38ca9decbfcfd6c98ea93dd502bfd0f9572",
+        "license": "apache-2.0",
+        "components": [
+          {
+            "role": "SNAC 24 kHz decoder",
+            "hf": "hubertsiuzdak/snac_24khz",
+            "revision": "d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec",
+            "license": "mit",
+            "license_file": "snac/LICENSE",
+            "license_sha256": "a82cc54b23e2fa07772629f94effa8abfb7e6bc8ebfd31cb7ae5c606520650de"
+          }
+        ]
+      }
+    },
+    {
+      "id": "real-esrgan",
+      "name": "Real-ESRGAN x2plus and x4plus",
+      "summary": "Image upscaling.",
+      "device": "TPU",
+      "how_to_run": "https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU#load",
+      "hf_repo": "mashbox-labs/Real-ESRGAN-TPU",
+      "hf_revision": "2d93af435f5642f30440bdc99234fe7527b766cf",
+      "upstream": {
+        "name": "Real-ESRGAN",
+        "maker": "Xintao Wang",
+        "github": "xinntao/Real-ESRGAN",
+        "revision": "a4abfb2979a7bbff3f69f58f58ae324608821e27",
+        "license": "bsd-3-clause",
+        "license_sha256": "4a699ec4863d96a91fc265948a0c90033f7e8735d515524dcf3444736406e0c2"
+      }
+    },
+    {
+      "id": "z-image-turbo",
+      "name": "Z-Image-Turbo",
+      "summary": "Text to image.",
+      "device": "TPU",
+      "how_to_run": "https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU#load",
+      "hf_repo": "mashbox-labs/Z-Image-Turbo-TPU",
+      "hf_revision": "209860bf8c6e7d7a1c9a9f57b794be40ac21e429",
+      "upstream": {
+        "name": "Z-Image-Turbo",
+        "maker": "Tongyi-MAI",
+        "hf": "Tongyi-MAI/Z-Image-Turbo",
+        "revision": "f332072aa78be7aecdf3ee76d5c247082da564a6",
+        "license": "apache-2.0"
       }
     }
   ],

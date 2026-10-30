@@ -136,8 +136,10 @@ def test_sync_check_refuses_a_smoke_on_a_not_run_chip():
     g = next(x for x in bad["gguf"] if x["id"] == pend["id"])
     g["arch"] = src["arch"]
     g["types"] = [t for t in src["types"] if t in sc.UNQUANTIZED] + [t for t in src["types"] if t not in sc.UNQUANTIZED][:1]
+    # any number: the check refuses a smoke on a pending chip whatever it holds (a QUICK row has no first-request
+    # number to copy)
     g["chips"]["v6e"]["smoke"] = dict(row=src["id"], accelerator=src["chips"]["v6e"]["accelerator"],
-                                      decode_tok_s_1_user=src["chips"]["v6e"]["measured"]["decode_tok_s_1_user"])
+                                      decode_tok_s_1_user=10.0)
     covered = copy.deepcopy(bad)
     del next(x for x in covered["gguf"] if x["id"] == pend["id"])["chips"]["v6e"]["smoke"]
     # the row change alone (arch, types) adds nothing the smoke check is about

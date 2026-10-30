@@ -22,6 +22,8 @@ Views:
   docs/gguf.md         the block between <!-- archs:start --> and <!-- archs:end -->: catalog.arch_rows (ARCHS with a passing chip row)
   docs/gguf.md         the block between <!-- kernels:start --> and <!-- kernels:end -->: engine_kernels[] (chips, JAX,
                        the block types on the kernels and the ones on the exact path)
+  docs/speculation.md  the block between <!-- gated:start --> and <!-- gated:end -->: what `auto` turns on, from the
+                       drafter gates of models.json (models[].drafter.gate, gguf[].speculation)
   README.md            the block between <!-- install:start --> and <!-- install:end -->: docs/install.md's install
                        block (its one source), links taken from docs/ to the repo root
   docs pages           blocks between <!-- cli:start CMD --> / <!-- cli:end --> (option table of `mashbox CMD`)
@@ -101,6 +103,12 @@ CHIP_STATUS = ("pending", "passing", "measured", "failing", "not supported")
 # does not start there; the pages print its note, llms.txt names the chip with its run_note, and the package's chip
 # lists (catalog, app, tpu up), which read "passing" only, never offer it
 UNCONFIRMED = {"", "unconfirmed", "todo", "tbd", "unknown"}
+# elsewhere[]: models `mashbox run` does not start (a weights-only repo, a port to another device), listed with the device
+# their files are made for and a how-to-run link instead of a run command. A row names one of DEVICES and holds no run
+# path, chip row or number (ELSEWHERE_NOT): how it runs, and how fast, is the linked page's to say.
+DEVICES = ("TPU", "Apple Neural Engine")
+ELSEWHERE_KEYS = ("id", "name", "summary", "device", "how_to_run", "hf_repo", "hf_revision", "upstream")
+ELSEWHERE_NOT = ("run", "path", "install", "chips", "results", "headline", "kernels", "launch")
 MARK_START, MARK_END = "<!-- models:start -->", "<!-- models:end -->"
 ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
@@ -127,6 +135,68 @@ def private_labels(obj, path="models.json"):
         return [x for j, v in enumerate(obj) for x in private_labels(v, f"{path}[{j}]")]
     return [(path, obj)] if isinstance(obj, str) and PRIVATE_RE.search(obj) else []
 
+
+
+def licence_field_problems(up):
+    """an upstream block's licence fields, copied as stated upstream: confirmed, and "other" with its name and link"""
+    out = []
+    if str(up.get("license", "")).strip().lower() in UNCONFIRMED:
+        out.append("upstream licence not confirmed (copy it as stated upstream)")
+    if up.get("license") == "other" and not (up.get("license_name") and up.get("license_link")):
+        out.append("licence 'other' needs license_name and license_link")
+    return out
+
+
+def validate_elsewhere(reg, problems):
+    """elsewhere[] (schema 2, optional): one row per model `mashbox run` does not start. Each names its device (DEVICES),
+    an https how-to-run link, its public repo in our org pinned at a 40-hex revision, and its upstream (name, maker, the
+    Hugging Face or GitHub repo) with the licence copied as stated there; each component's licence likewise. No run path,
+    chip row or number (ELSEWHERE_NOT). Ids are unique across models[], gguf[] and elsewhere[]. The release rule takes
+    the row's own device: no TPU chip run is asked of it."""
+    rows = reg.get("elsewhere", [])
+    if not isinstance(rows, list):
+        problems.add("models.json", "elsewhere must be a list")
+        return
+    org = reg["hf"].get("org", "")
+    ids = {m.get("id") for m in reg["models"]} | {g.get("id") for g in reg.get("gguf") or []}
+    for i, r in enumerate(rows):
+        where = f"elsewhere[{i}] {r.get('id', '?')}"
+        miss = [key for key in ELSEWHERE_KEYS if key not in r]
+        for key in miss:
+            problems.add(where, f"missing key {key!r}")
+        if miss:
+            continue
+        if not ID_RE.match(str(r["id"])):
+            problems.add(where, "id must be lower case words joined by hyphens")
+        if r["id"] in ids:
+            problems.add(where, "duplicate id (ids are unique across models[], gguf[] and elsewhere[])")
+        ids.add(r["id"])
+        for key in ("name", "summary"):
+            if not str(r[key]).strip():
+                problems.add(where, f"{key} is empty")
+        for key in ELSEWHERE_NOT:
+            if key in r:
+                problems.add(where, f"{key!r}: a model `mashbox run` does not start has no run path, chip row or number "
+                                    "(its how_to_run page says how it runs)")
+        if r["device"] not in DEVICES:
+            problems.add(where, f"device {r['device']!r} is not one of {DEVICES} (the device its files are made for)")
+        if not str(r["how_to_run"]).startswith("https://"):
+            problems.add(where, "how_to_run must be an https link to the page that shows how to use it")
+        if not str(r["hf_repo"]).startswith(f"{org}/"):
+            problems.add(where, f"hf_repo must be in the {org} org")
+        if not SHA_RE.match(str(r["hf_revision"] or "")):
+            problems.add(where, "hf_revision must be the 40-character commit of hf_repo the row describes")
+        up = r["upstream"] if isinstance(r["upstream"], dict) else {}
+        for key in ("name", "maker", "license"):
+            if not str(up.get(key, "")).strip():
+                problems.add(where, f"upstream.{key} is empty")
+        if not (up.get("hf") or up.get("github")):
+            problems.add(where, "upstream names its Hugging Face (hf) or GitHub (github) repo")
+        for msg in licence_field_problems(up):
+            problems.add(where, msg)
+        for j, c in enumerate(up.get("components") or []):
+            for msg in licence_field_problems(c):
+                problems.add(where, f"upstream.components[{j}]: {msg}")
 
 
 def validate(reg, repo_root, problems, release=False):
@@ -175,10 +245,8 @@ def validate(reg, repo_root, problems, release=False):
         for key in ("name", "maker", "hf", "license"):
             if not str(up.get(key, "")).strip():
                 problems.add(where, f"upstream.{key} is empty")
-        if str(up.get("license", "")).strip().lower() in UNCONFIRMED:
-            problems.add(where, "upstream licence not confirmed (copy it as stated upstream)")
-        if up.get("license") == "other" and not (up.get("license_name") and up.get("license_link")):
-            problems.add(where, "licence 'other' needs license_name and license_link")
+        for msg in licence_field_problems(up):
+            problems.add(where, msg)
         if m["hf_repo"] is not None:
             want = f"{hf_org}/"
             if not m["hf_repo"].startswith(want):
@@ -313,6 +381,8 @@ def validate(reg, repo_root, problems, release=False):
                 if f.get("variant") and not (f.get("quality") and f.get("speed") and f.get("date")):
                     problems.add(where, f"release: variant files[{j}] needs measured quality, speed and date")
     validate_catalog(reg, problems)
+    if reg["schema"] != 1:
+        validate_elsewhere(reg, problems)
 
 
 # ---------------------------------------------------------------- catalog (schema 2: catalog blocks, gguf[], engine_kernels[])
@@ -325,10 +395,29 @@ GGUF_KEYS = ("id", "model", "publisher", "family", "maker", "repo", "revision", 
              "types", "license", "license_link", "base", "in", "out", "run", "experimental", "chips")
 GGUF_CHIP_KEYS = ("status", "accelerator", "ctx", "slots", "kernel_path", "measured")
 # a quick-check chip run (record_kind "quick-check": four zero-flag `mashbox run REPO:TAG --prompt P --max-tokens 64
-# --temperature 0` runs compared with llama.cpp) measures decode tok/s at 1 user on the exact path, nothing else
-GGUF_QUICK_KEYS = ("status", "accelerator", "kernel_path", "measured", "record_kind")
+# --temperature 0` runs compared with llama.cpp) measures decode tok/s at 1 user, nothing else: on the exact path, or on
+# the kernel package the catalog names (kernel_path bundle; the record guard holds every weight to it). chip_count
+# (optional) = the chips the runs used, fewer than the accelerator's host has for one chip of a larger host
+GGUF_QUICK_KEYS = ("status", "accelerator", "kernel_path", "record_kind")      # measured is optional on a QUICK row
+# gguf[].speculation {kind: {engine chip key: gate entry}}: what `--speculation auto` reads for the file
+# (runtime/drafters/select.py). n-gram only: MTP is off for GGUF files and a draft model needs --draft-model. An entry
+# is sealed (record "gguf/<row id>/<kind>/<chip key>", the record's SHA256SUMS sha256), names the component set and
+# speculation step version its runs measured, and its k_table holds k > 0 only at the row bucket it measured ("1")
+GGUF_SPEC_KINDS = ("ngram",)
+GGUF_SPEC_KEYS = ("status", "record", "record_sha256", "component_set_sha", "spec_step_version", "k_table")
+GGUF_SPEC_BUCKETS = ("1", "4", "16", "64", "256")      # runtime/engine.py _rows
+CHIP_KEY_RE = re.compile(r"^(v\d+[a-z]*)-(\d+)$")
 RECORD_KINDS = ("quick-check", "quick")   # "quick": the same run with 32 tokens (catalog.QUICK_TOKENS)
-QUICK_MEASURED = ("decode_tok_s_1_user",)
+# a QUICK row's measured, when present: its runs' decode_tok_s_1_user (the record's number, never shown) and/or its
+# steady-decode speed steady_decode_tok_s_1_user with its steady_condition (one of STEADY_CONDITIONS), from its own record
+QUICK_MEASURED = ("decode_tok_s_1_user", "steady_decode_tok_s_1_user", "steady_condition")
+STEADY_CONDITIONS = {      # catalog.STEADY_CONDITIONS
+    "alone": ("steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one "
+              "chip, no other job on the host's chips"),
+    "shared": ("steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one "
+               "chip, another job on another chip of the same host"),
+}
+QUICK_FAIL_REASONS = ("run", "first token", "divergence", "near tie")    # catalog.QUICK_FAIL_REASONS
 UNQUANTIZED = ("F32", "F16", "BF16")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -359,7 +448,7 @@ def validate_catalog(reg, problems):
     (mashbox_engine_kernels), one row per (chip, JAX). No dates in any of them, as a key or in a value (the records
     behind a row are kept outside this repository)."""
     if reg["schema"] == 1:
-        for key in ("gguf", "engine_kernels"):
+        for key in ("gguf", "engine_kernels", "elsewhere"):
             if key in reg:
                 problems.add("models.json", f"{key} needs schema 2")
         return
@@ -480,18 +569,21 @@ def validate_catalog(reg, problems):
         chips = g["chips"] if isinstance(g["chips"], dict) else {}
         cpu_ok = "cpu_check" in g and not cpu_check_problems(g["cpu_check"], problems, where)
         pending = [ch for ch, r in chips.items() if isinstance(r, dict) and r.get("status") == "pending"]
+        failed = [ch for ch, r in chips.items() if isinstance(r, dict) and r.get("status") == "failing"
+                  and r.get("record_kind") == "quick"]
         if not chips or any(ch not in CHIPS for ch in chips):
             problems.add(where, f"chips must name at least one chip from {CHIPS}")
         elif not any(isinstance(r, dict) and r.get("status") == "passing" for r in chips.values()):
-            # Checked on CPU: no chip run, its CPU check against llama.cpp passed (sealed record), every chip pending
-            # with its not_run_reason; never a mixture of experts (no MoE without its routed experts on the kernel)
+            # Checked on CPU: its CPU check against llama.cpp passed (sealed record), and every chip is pending with its
+            # not_run_reason or a sealed QUICK that did not pass (with its reason class); never a mixture of experts (no
+            # MoE without its routed experts on the kernel)
             if moe:
                 problems.add(where, "a mixture of experts is only listed with a passing chip record of its routed experts "
                                     "on the kernel, never from a CPU check alone")
-            elif not cpu_ok or (g["cpu_check"] or {}).get("status") != "passing" or len(pending) != len(chips):
+            elif not cpu_ok or (g["cpu_check"] or {}).get("status") != "passing" or len(pending) + len(failed) != len(chips):
                 problems.add(where, "no passing chip: a row is only added from a passing run (a failing outcome sits only "
                                     "beside a passing one), or from a passing CPU check (cpu_check status passing) with "
-                                    "every chip pending and its not_run_reason")
+                                    "every chip pending and its not_run_reason, or a QUICK that did not pass")
         for ch in pending:
             # a not-run chip holds status and not_run_reason only: a row shows a speed only when measured on that exact
             # file, so no smoke from another row (same architecture or not) and nothing measured
@@ -512,34 +604,102 @@ def validate_catalog(reg, problems):
                     problems.add(where, f"chips.{ch}.record_kind must be one of {RECORD_KINDS}")
                 if "ctx" in r or "slots" in r:
                     problems.add(where, f"chips.{ch}: a quick-check run records no ctx or slots, so its row has none")
-                if r["kernel_path"] != "exact":
-                    problems.add(where, f"chips.{ch}: a quick-check run is the zero-flag run: kernel_path exact")
-                if sorted(r["measured"] or {}) != list(QUICK_MEASURED):
-                    problems.add(where, f"chips.{ch}: a quick-check run measures decode_tok_s_1_user only (1 user, no "
-                                        "8-user number)")
+                m = r.get("measured")
+                if m is not None and (not isinstance(m, dict) or not m or set(m) - set(QUICK_MEASURED)):
+                    problems.add(where, f"chips.{ch}: a QUICK row's measured, when present, holds {QUICK_MEASURED} only "
+                                        "(1 user, no 8-user number)")
+                m = m if isinstance(m, dict) else {}
+                one = m.get("decode_tok_s_1_user")
+                if "decode_tok_s_1_user" in m and (not isinstance(one, (int, float)) or isinstance(one, bool) or one <= 0):
+                    problems.add(where, f"chips.{ch}.measured.decode_tok_s_1_user must be the record's number")
+                if "steady_decode_tok_s_1_user" in m or "steady_condition" in m:
+                    st = m.get("steady_decode_tok_s_1_user")
+                    if (not isinstance(st, (int, float)) or isinstance(st, bool) or st <= 0
+                            or m.get("steady_condition") not in STEADY_CONDITIONS.values()
+                            or r["status"] != "passing" or r["kernel_path"] != "bundle"):
+                        problems.add(where, f"chips.{ch}: a steady-decode speed is measured.steady_decode_tok_s_1_user "
+                                            "(> 0) with its steady_condition (one of catalog.STEADY_CONDITIONS), on a "
+                                            "passing kernel-path row (its own sealed record)")
             if r["status"] not in ("passing", "failing"):
                 problems.add(where, f"chips.{ch}.status must be passing or failing (the outcome of the run's record)")
+            if quick and r["status"] == "failing" and r.get("reason") not in QUICK_FAIL_REASONS:
+                problems.add(where, f"chips.{ch}: a QUICK that did not pass names its reason class, one of "
+                                    f"{QUICK_FAIL_REASONS} (the record guard recomputes it from the sealed compare)")
+            if "chip_count" in r:
+                n, host = r["chip_count"], str(r["accelerator"]).rsplit("-", 1)[-1]
+                if (not isinstance(n, int) or isinstance(n, bool) or n < 1 or not host.isdigit()
+                        or n > int(host)):
+                    problems.add(where, f"chips.{ch}.chip_count {n!r}: the chips the run used, 1 to the {host} of "
+                                        f"{r['accelerator']}")
             if r["kernel_path"] not in ("bundle", "exact"):
                 problems.add(where, f"chips.{ch}.kernel_path must be bundle or exact")
             if moe and r["status"] == "passing":      # no mixture of experts without its experts on the kernel
                 if r.get("routed_experts") != "kernel":
                     problems.add(where, f"chips.{ch}: a mixture of experts passes only with a sealed chip record of its "
                                         "routed experts on the kernel (routed_experts \"kernel\")")
-                if not all(isinstance((r["measured"] or {}).get(f"goodput_roofline_pct_{n}"), (int, float))
+                if not all(isinstance((r.get("measured") or {}).get(f"goodput_roofline_pct_{n}"), (int, float))
                            for n in ("1_user", "8_users")):
                     problems.add(where, f"chips.{ch}: a mixture of experts passes only with its goodput as % of the "
                                         "roofline for 1 and 8 users (measured.goodput_roofline_pct_1_user and "
                                         "goodput_roofline_pct_8_users, from its record)")
             if not moe and "routed_experts" in r:
                 problems.add(where, f"chips.{ch}.routed_experts on a row whose file has no experts")
-            tok = (r["measured"] or {}).get("decode_tok_s_1_user")
-            if not isinstance(tok, (int, float)) or tok <= 0:
+            tok = (r.get("measured") or {}).get("decode_tok_s_1_user")
+            if not quick and (not isinstance(tok, (int, float)) or tok <= 0):
                 problems.add(where, f"chips.{ch}.measured.decode_tok_s_1_user must be the record's number")
             if r["kernel_path"] == "bundle":
                 need = {t for t in g["types"] if t not in UNQUANTIZED}
                 lack = sorted(need - kern_types.get(ch, set()))
                 if lack:
                     problems.add(where, f"chips.{ch}: kernel_path bundle, but no engine_kernels row for {ch} has {lack}")
+        if "speculation" in g:
+            gguf_spec_problems(g, chips, problems, where)
+
+
+def gguf_spec_problems(g, chips, problems, where):
+    """gguf[].speculation in form (the record guard reads each entry's sealed runs): n-gram only; per engine chip key
+    ("v6e-1": family-devices) an entry with status passed or not_passed, its record named "gguf/<row id>/<kind>/<chip
+    key>" with that record's SHA256SUMS sha256, the runs' component_set_sha (64 hex) and speculation step version, and a
+    k_table of the engine's row buckets with k > 0 at the 1-row bucket it measured and 0 at every other. A passed entry
+    stands only beside the row's passing kernel-path QUICK on that chip family and chip count."""
+    sp = g["speculation"]
+    if not isinstance(sp, dict) or not sp or set(sp) - set(GGUF_SPEC_KINDS):
+        problems.add(where, f"speculation kinds: {sorted(sp) if isinstance(sp, dict) else sp!r}; a GGUF row's gate "
+                            f"entries are {list(GGUF_SPEC_KINDS)} only (MTP is off for GGUF files)")
+        return
+    for kind, per in sp.items():
+        for ck, e in (per.items() if isinstance(per, dict) else ()):
+            w = f"speculation.{kind}.{ck}"
+            m = CHIP_KEY_RE.match(str(ck))
+            if not m:
+                problems.add(where, f"{w}: the chip key is the engine's chip_key (family-devices, e.g. v6e-1)")
+                continue
+            if not isinstance(e, dict) or any(k not in e for k in GGUF_SPEC_KEYS):
+                problems.add(where, f"{w} needs {GGUF_SPEC_KEYS}")
+                continue
+            if e["status"] not in ("passed", "not_passed"):
+                problems.add(where, f"{w}: status passed or not_passed (the outcome of its sealed runs)")
+            if e["record"] != f"gguf/{g['id']}/{kind}/{ck}":
+                problems.add(where, f"{w}: record gguf/{g['id']}/{kind}/{ck} (the record catalog-evidence.json seals)")
+            for k in ("record_sha256", "component_set_sha"):
+                if not isinstance(e[k], str) or not HEX64_RE.match(e[k]):
+                    problems.add(where, f"{w}: {k} must be 64 hex")
+            if not isinstance(e["spec_step_version"], int) or isinstance(e["spec_step_version"], bool):
+                problems.add(where, f"{w}: spec_step_version must be the runs' integer version")
+            kt = e["k_table"]
+            if (not isinstance(kt, dict) or set(kt) != set(GGUF_SPEC_BUCKETS)
+                    or any(not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 8 for v in kt.values())
+                    or not kt.get("1") or any(kt[b] for b in GGUF_SPEC_BUCKETS[1:])):
+                problems.add(where, f"{w}: k_table {kt!r}: every row bucket {list(GGUF_SPEC_BUCKETS)}, k 1-8 at the "
+                                    "1-row bucket it measured and 0 at every other")
+            if e["status"] == "passed":
+                fam, n = m.group(1), int(m.group(2))
+                r = chips.get(fam) if isinstance(chips.get(fam), dict) else {}
+                count = r.get("chip_count") or int(str(r.get("accelerator") or "x-0").rsplit("-", 1)[-1] or 0)
+                if (r.get("status") != "passing" or r.get("kernel_path") != "bundle" or "record_kind" not in r
+                        or count != n):
+                    problems.add(where, f"{w}: a passed gate entry needs the row's passing kernel-path QUICK on {n} "
+                                        f"{fam} chip{'s' * (n != 1)} (chips.{fam}: kernel_path bundle, chip count {n})")
 
 
 CPU_CHECK_KEYS = {"status", "reference", "identical_weights", "block_path", "greedy", "tokenizer"}
@@ -883,9 +1043,10 @@ def sidebar_block(reg):
 
 
 def readme_block(reg):
-    """The README models block: the lead line, then two labelled tiers: MASHBOX builds (our ports table), then every
-    GGUF file by publisher."""
-    return builds_head(reg) + models_table(reg, absolute=False) + "\n\n" + gguf_block(reg)
+    """The README models block: the lead line, then the labelled tiers: MASHBOX builds (our ports table), every GGUF file
+    by publisher, and the models `mashbox run` does not start (elsewhere[]) when models.json lists any."""
+    tail = _lists().elsewhere_block(reg)
+    return builds_head(reg) + models_table(reg, absolute=False) + "\n\n" + gguf_block(reg) + (f"\n\n{tail}" if tail else "")
 
 
 # The Hugging Face org card is the org's static README Space. Like the GitHub org profile it is an overview with no
@@ -1044,13 +1205,14 @@ def experimental_note(m, sep):
 
 
 def llms_block(reg):
-    """llms.txt models block, the same two tiers: each MASHBOX build, then the GGUF files with a passing chip test and
-    the catalog link with the count line (model_lists.llms_lines)."""
+    """llms.txt models block, the same tiers: each MASHBOX build, then the GGUF files with a passing chip test and the
+    catalog link with the count line (model_lists.llms_lines), then the models `mashbox run` does not start, when any."""
     ml = _lists()
     return "\n".join([f"{ml.BUILDS}:"] + [
         f"- [{m['name']}]({docs_url(m)}): {m['in']} in, {m['out']} out. {KINDS[m['kind']]['label']}."
         + experimental_note(m, " ") + ("." if experimental(m) else "") + runs_on(m) for m in live(reg)]
-        + ["", f"{ml.GGUF}:"] + ml.llms_lines(reg, CATALOG_URL))
+        + ["", f"{ml.GGUF}:"] + ml.llms_lines(reg, CATALOG_URL)
+        + (["", f"{ml.ELSEWHERE}:"] + ml.elsewhere_llms(reg) if ml.elsewhere(reg) else []))
 
 
 def front_matter(reg, m):
@@ -1614,6 +1776,7 @@ CHIPS_RE = re.compile(r"(<!-- chips:start -->)(.*?)(<!-- chips:end -->)", re.S)
 CATALOG_RE = re.compile(r"(<!-- catalog:start -->)(.*?)(<!-- catalog:end -->)", re.S)   # a docs page (mashbox.catalog)
 ARCHS_RE = re.compile(r"(<!-- archs:start -->)(.*?)(<!-- archs:end -->)", re.S)         # docs/gguf.md (gguf.archs.ARCHS)
 KERNELS_RE = re.compile(r"(<!-- kernels:start -->)(.*?)(<!-- kernels:end -->)", re.S)   # docs/gguf.md (engine_kernels[])
+GATED_RE = re.compile(r"(<!-- gated:start -->)(.*?)(<!-- gated:end -->)", re.S)       # docs/speculation.md (drafter gates)
 READER_TYPES = Path("src") / "mashbox" / "ops" / "reference.py"    # TYPES: every block type the GGUF reader reads
 UNQUANTIZED = ("F32", "F16", "BF16")
 
@@ -1653,6 +1816,36 @@ def kernels_block(reg, repo):
         out.append(f"| {', '.join(CHIP_LABEL.get(c, c) for c in k.get('chips') or [])} | {k.get('jax')} | "
                    f"{', '.join(on)} | {', '.join(off)} |")
     return "\n".join(out)
+
+
+# what docs/speculation.md calls each drafter kind
+DRAFTER_NAME = {"mtp": "the model's own MTP head", "ngram": "copy from the conversation", "draft_model": "a draft model",
+                "dflash": "a trained block drafter (DFlash)"}
+TURN_ON = "`--mtp K`, `--speculation ngram` or, on Qwen3.8-27B, `--speculation dflash --drafter-dir DIR`"
+
+
+def gated_block(reg):
+    """The block between <!-- gated:start --> and <!-- gated:end --> in docs/speculation.md: what `auto` turns on, from
+    models.json's drafter gates ({chip: entry} in models[].drafter.gate and per kind in gguf[].speculation). `auto` turns
+    a drafter on only where its entry says "passed" (cli.speculation, drafters/select.gated), so the page names exactly
+    those entries, and says nothing is on when none has passed."""
+    def chip(c):
+        return CHIP_LABEL.get(c, f"TPU {c}")
+    on = []
+    for m in reg.get("models") or []:
+        d = m.get("drafter") or {}
+        on += [f"{DRAFTER_NAME.get(d.get('kind'), d.get('kind'))} for {m['name']} on {chip(c)}"
+               for c, e in sorted((d.get("gate") or {}).items()) if e.get("status") == "passed"]
+    for g in reg.get("gguf") or []:
+        on += [f"{DRAFTER_NAME.get(k, k)} for `{g['repo']}` `{g['file']}` on {chip(c)}"
+               for k, chips in sorted((g.get("speculation") or {}).items())
+               for c, e in sorted(chips.items()) if e.get("status") == "passed"]
+    if not on:
+        return ("- No drafter has passed its checks on a chip in this release, so `auto` decodes without speculation. "
+                f"Turn it on with {TURN_ON}.")
+    return ("- `auto` turns speculation on only where a drafter passed its checks for that model on that chip. In this "
+            f"release: {'; '.join(on)}. Everywhere else `auto` decodes without speculation; turn it on there with "
+            f"{TURN_ON}.")
 
 
 CLI_NOTE =("Generated from the argparse parsers in src/mashbox/cli.py and src/mashbox/tpu/__init__.py by "
@@ -1907,12 +2100,14 @@ def docs_views(reg, repo, problems):
         new = CATALOG_RE.sub(lambda mt: f"{mt.group(1)}\n{_lists().render_markdown(reg)}\n{mt.group(3)}", new)
         new = ARCHS_RE.sub(lambda mt: f"{mt.group(1)}\n{C.archs_block(reg)}\n{mt.group(3)}", new)
         new = KERNELS_RE.sub(lambda mt: f"{mt.group(1)}\n{kernels_block(reg, repo)}\n{mt.group(3)}", new)
+        new = GATED_RE.sub(lambda mt: f"{mt.group(1)}\n{gated_block(reg)}\n{mt.group(3)}", new)
         if CLOUD_RE.search(text):
             if cloud is None:
                 problems.add(rel, f"cloud blocks need {CLOUD.as_posix()}")
             else:
                 new = CLOUD_RE.sub(lambda mt: f"{mt.group(1)}\n{cloud_block(mt.group(2), cloud, reg)}\n{mt.group(4)}", new)
-        if new != text or any(rx.search(text) for rx in (CLI_RE, API_RE, CHIPS_RE, CLOUD_RE, CATALOG_RE, ARCHS_RE, KERNELS_RE)):
+        if new != text or any(rx.search(text) for rx in (CLI_RE, API_RE, CHIPS_RE, CLOUD_RE, CATALOG_RE, ARCHS_RE, KERNELS_RE,
+                                                         GATED_RE)):
             views[rel] = new
     return views
 
@@ -3271,6 +3466,47 @@ def weights_tag_problems(m, rev, fetch):
     return out
 
 
+HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$", re.M)
+
+
+def heading_anchor(text):
+    """the anchor Hugging Face gives a card heading: lower case, punctuation dropped, spaces as hyphens"""
+    return re.sub(r"[^\w\- ]", "", text.strip().lower()).replace(" ", "-")
+
+
+def elsewhere_online_problems(r, fetch):
+    """An elsewhere[] row as a logged-out reader finds it: the repo public with its head at the pinned revision, the
+    upstream LICENSE and NOTICE (and each component's licence file) at that revision byte for byte as pinned, and a
+    how_to_run link into the repo's own card landing on one of the card's headings at that revision."""
+    repo, rev, up, out = r["hf_repo"], r["hf_revision"], r["upstream"], []
+    st, body = fetch.get(f"https://huggingface.co/api/models/{repo}")
+    if st != 200:
+        return [f"repo not found (HTTP {st})"]
+    info = json.loads(body)
+    if info.get("private") or info.get("gated"):
+        out.append("repo is private or gated")
+    if info.get("sha") != rev:
+        out.append(f"HF head {str(info.get('sha'))[:12]} is not the pinned revision {str(rev)[:12]}")
+    pins = [(name, up.get(key)) for name, key in (("LICENSE", "license_sha256"), ("NOTICE", "notice_sha256"))]
+    pins += [(c.get("license_file"), c.get("license_sha256")) for c in up.get("components") or []]
+    for name, want in pins:
+        if not (name and want):
+            continue
+        st, text = fetch.get(f"https://huggingface.co/{repo}/raw/{rev}/{name}")
+        if st != 200:
+            out.append(f"no {name} at {rev[:12]} (HTTP {st})")
+        elif hashlib.sha256(text.encode()).hexdigest() != want:
+            out.append(f"{name} at {rev[:12]} differs from the pinned upstream file")
+    page, _, anchor = str(r["how_to_run"]).partition("#")
+    if page.rstrip("/") == f"https://huggingface.co/{repo}" and anchor:
+        st, card = fetch.get(f"https://huggingface.co/{repo}/raw/{rev}/README.md")
+        if st != 200:
+            out.append(f"card not readable at {rev[:12]} (HTTP {st})")
+        elif anchor not in {heading_anchor(h) for h in HEADING_RE.findall(card)}:
+            out.append(f"how_to_run #{anchor}: no such heading in the card at {rev[:12]}")
+    return out
+
+
 def check_online(reg, views, fetch, problems, repo=None):
     hf_org = reg["hf"]["org"]
     st, body = fetch.get(f"https://huggingface.co/api/models?author={hf_org}&limit=1000")
@@ -3279,7 +3515,7 @@ def check_online(reg, views, fetch, problems, repo=None):
         problems.add("hf", f"cannot list models of {hf_org} (HTTP {st})")
     else:
         listed = {x.get("id") or x.get("modelId") for x in json.loads(body)}
-    wanted = {m["hf_repo"] for m in reg["models"] if m["hf_repo"]}
+    wanted = {m["hf_repo"] for m in reg["models"] if m["hf_repo"]} | {r["hf_repo"] for r in reg.get("elsewhere") or []}
     for extra in sorted(listed - wanted):
         problems.add("hf", f"{extra} is on Hugging Face but not in models.json")
     for m in reg["models"]:
@@ -3332,6 +3568,9 @@ def check_online(reg, views, fetch, problems, repo=None):
                 problems.add(where, f"no {name} at {rev[:12]} (HTTP {st}): upload licenses/{m['id']}/{name} unchanged")
             elif hashlib.sha256(text.encode()).hexdigest() != lic_sha:
                 problems.add(where, f"{name} at {rev[:12]} differs from the pinned upstream file")
+    for r in reg.get("elsewhere") or []:
+        for x in elsewhere_online_problems(r, fetch):
+            problems.add(f"hf {r['hf_repo']}", x)
     gh = reg["github"]
     st, _ = fetch.get(f"https://api.github.com/repos/{gh['org']}/{gh['repo']}/git/ref/tags/v{reg['version']}")
     if st != 200:
