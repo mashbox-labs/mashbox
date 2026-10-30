@@ -56,6 +56,7 @@ def test_pick_fallbacks_and_shards():
 def _tiny(path, arch, tensors=True):
     w = gguf.GGUFWriter(str(path), arch)
     w.add_block_count(1)
+    w.add_embedding_length(8)
     if tensors:
         w.add_tensor("token_embd.weight", np.zeros((4, 8), np.float32))
     w.write_header_to_file()

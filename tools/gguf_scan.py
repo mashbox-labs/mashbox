@@ -168,7 +168,9 @@ def blocked_by(meta, probe):
         return None
     why = probe.get("why") or ""
     arch = meta.get("general.architecture")
-    from mashbox.gguf import archs as GA
+    from mashbox.gguf import archs as GA, model_keys_missing
+    if model_keys_missing(meta.get):
+        return "not-a-model"
     if arch not in GA.ARCHS:
         return f"arch:{arch}"
     if "cannot read" in why or "block types" in why:
@@ -190,10 +192,13 @@ def moe(meta):
 def probe(hdr, size, path_hint):
     """the engine's own answer on a sparse copy of the header (tensor data reads as zeros): open_model + the MoE hold +
     the tokenizer and chat template built from the file -> dict(supported, why, stage)"""
-    from mashbox.gguf import open_model, GGUFError, archs as GA
+    from mashbox.gguf import open_model, GGUFError, archs as GA, model_keys_missing
     from mashbox.gguf import tokenizer as GT
-    arch = parse(hdr)[0].get("general.architecture")
-    if arch not in GA.ARCHS:            # open_model's first refusal (archs.module), without gguf-py's full parse
+    meta = parse(hdr)[0]
+    arch = meta.get("general.architecture")
+    # open_model's refusals in its order: a file that is not a llama.cpp model goes on to open_model for its line; an
+    # architecture this version does not run stops here (archs.module's line), without gguf-py's full parse
+    if arch not in GA.ARCHS and not model_keys_missing(meta.get):
         return dict(supported=False, stage="load", why=GA.unsupported(arch, path_hint))
     with tempfile.TemporaryDirectory() as td:
         p = os.path.join(td, os.path.basename(path_hint))
