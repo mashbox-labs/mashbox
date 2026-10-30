@@ -217,9 +217,13 @@ def test_the_rows_leg_holds_every_test_that_reads_the_gguf_rows():
     for f in t1 - set(files):                                      # a file that reads the rows directly is in the leg
         if CS.test_area(f.rsplit("/", 1)[-1], areas) != "gguf":
             assert not re.search(r"""\[["']gguf["']\]|get\(["']gguf["']""", (ROOT / f).read_text()), f
-    assert sum(CS.SECONDS.get(f, CS.SECONDS_DEFAULT) for f in files) <= 300
-    assert CS.jobs(["gguf", "gguf_rows"]) == [{"area": "gguf", "extra": "", "shard": "1/1"},
-                                              {"area": "gguf_rows", "extra": "", "shard": "1/1"}]
+    units = CS.units(files)                                        # its jobs (SHARDS, parts of SPLIT files) each finish
+    sec = {u: CS.unit_seconds(u, CS.SECONDS) for u in units}       # in 300 s by the runner's seconds per file
+    n = CS.SHARDS.get(CS.ROWS, 1)
+    loads = [sum(sec[u] for u in CS.shard_files(units, f"{i}/{n}", sec)) for i in range(1, n + 1)]
+    assert max(loads) <= 300, loads
+    assert CS.jobs(["gguf", "gguf_rows"]) == [{"area": "gguf", "extra": "", "shard": "1/1"}] + [
+        {"area": "gguf_rows", "extra": "", "shard": f"{i}/{n}"} for i in range(1, n + 1)]
 
 
 def test_conftest_marks_the_rows_leg_tests():
@@ -323,3 +327,94 @@ def test_contracts_summary_lists_each_contract(tmp_path):
     assert [r.split("|")[1].strip() for r in rows] == ["op/Q4_K", "tok/qwen2"], out
     assert "1 FAIL" in out and "1 PASS" in out
     assert "no contracts.json" in CS.contracts_summary(str(tmp_path / "none.json"))
+
+
+def test_the_official_client_tests_run_in_their_own_leg_with_the_pinned_clients_and_tokenizer(tmp_path):
+    """test_api_conformance.py and test_api_loaded_clients.py drive the server through the official openai and anthropic
+    clients at the versions they pin, and skip without them; the conformance file also skips without the Qwen3.8-27B
+    tokenizer and chat template (MASHBOX_QWEN_UPSTREAM). A skip there reads as green, so on CI they never ran. Their own
+    T1 leg installs exactly the pinned clients and fetches the pinned upstream files (checked by sha256, a wrong byte
+    stops the leg), every change that runs core runs it too, and the two files leave the core shards (each file in one
+    job). The sweep runs the same leg the same way."""
+    import hashlib
+    import re
+    areas = CS.model_areas()
+    files = ["tests/cpu/test_api_conformance.py", "tests/cpu/test_api_loaded_clients.py"]
+    assert CS.area_files(CS.CLIENTS, areas) == files
+    assert not set(files) & set(CS.area_files("core", areas))
+    for f in files:                                                # the leg installs the very versions each file pins
+        oa, an = re.search(r'!= \("(\d[\w.]*)", "(\d[\w.]*)"\)', (ROOT / f).read_text()).groups()
+        assert sorted(CS.extra(CS.CLIENTS).split()) == [f"anthropic=={an}", f"openai=={oa}"], f
+    assert CS.CLIENTS in CS.select(["src/mashbox/runtime/server.py"], areas)
+    assert CS.CLIENTS in CS.select(["pyproject.toml"], areas)
+    assert CS.select(["tests/cpu/test_api_loaded_clients.py"], areas) == [CS.CLIENTS]
+    assert CS.CLIENTS in {r["area"] for r in CS.jobs(CS.select(["src/mashbox/cli.py"], areas))}
+    # the upstream files: the revision models.json pins for the model, the three files runtime/chat.py reads
+    up = next(m["upstream"] for m in CS.json.loads((ROOT / "models.json").read_text())["models"] if m["id"] == CS.UPSTREAM_MODEL)
+    assert set(CS.UPSTREAM_FILES) == {"tokenizer.json", "chat_template.jinja", "generation_config.json"}
+    chat = (ROOT / "src" / "mashbox" / "runtime" / "chat.py").read_text()
+    assert all(f'"{n}"' in chat for n in CS.UPSTREAM_FILES)
+    good = {n: n.encode() * 3 for n in CS.UPSTREAM_FILES}
+    sums = {n: hashlib.sha256(b).hexdigest() for n, b in good.items()}
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        return good[url.rsplit("/", 1)[1]]
+    CS.upstream_files(str(tmp_path / "ok"), fetch=fetch, sums=sums)
+    assert sorted(asked) == sorted(f"https://huggingface.co/{up['hf']}/resolve/{up['revision']}/{n}" for n in CS.UPSTREAM_FILES)
+    assert {p.name: p.read_bytes() for p in (tmp_path / "ok").iterdir()} == good
+    bad = dict(good, **{"chat_template.jinja": b"{{ changed }}"})
+    try:
+        CS.upstream_files(str(tmp_path / "bad"), fetch=lambda u: bad[u.rsplit("/", 1)[1]], sums=sums)
+    except SystemExit as e:
+        assert "chat_template.jinja" in str(e), e
+    else:
+        raise AssertionError("a file whose sha256 differs from its pin was accepted")
+    assert not (tmp_path / "bad" / "chat_template.jinja").exists()
+    # both workflows fetch the files for this leg and hand the folder to its tests
+    for wf in ("ci.yml", "sweep.yml"):
+        t1 = (ROOT / ".github" / "workflows" / wf).read_text().split("\n  t1:\n", 1)[1]
+        step = re.search(r"if: matrix\.area == '([a-z_]+)'\n\s+run: \|\n((?:\s{10}.*\n)+)", t1)
+        assert step and step.group(1) == CS.CLIENTS, wf
+        assert "tools/ci_select.py --upstream-files" in step.group(2) and "MASHBOX_QWEN_UPSTREAM=" in step.group(2), wf
+        assert t1.index("--upstream-files") < t1.index("python3 -m pytest"), wf
+
+
+def test_tp_batched_runs_as_parts_in_pr_ci_and_whole_in_the_sweep():
+    """test_tp_batched.py's one script run outlasts a core shard, so in PR CI it runs as SPLIT parts (each part runs the
+    script with TP_ONLY = its gates). The sweep runs every file whole (--whole-files: no parts), the way a local pytest
+    run does, so the all-gates run of one process is still checked nightly."""
+    import re
+    areas = CS.model_areas()
+    f = "tests/cpu/test_tp_batched.py"
+    assert CS.SPLIT.get(f, 1) >= 2
+    files = CS.area_files("core", areas)
+    n = CS.SHARDS["core"]
+    whole = [a for i in range(1, n + 1) for a in CS.shard_args(files, f"{i}/{n}", whole=True)]
+    assert not [a for a in whole if a.startswith("--")] and sorted(whole) == sorted(files)     # each file once, whole
+    parts = [a for i in range(1, n + 1) for a in CS.shard_args(files, f"{i}/{n}")]
+    assert sorted(a for a in parts if a.startswith(f"--ci-part={f}@")) == [f"--ci-part={f}@{k}/{CS.SPLIT[f]}"
+                                                                          for k in range(1, CS.SPLIT[f] + 1)]
+    for wf, flag in (("ci.yml", False), ("sweep.yml", True)):
+        t1 = (ROOT / ".github" / "workflows" / wf).read_text().split("\n  t1:\n", 1)[1]
+        call = re.search(r"ci_select\.py --args-of [^\n]*", t1).group(0)
+        assert ("--whole-files" in call) == flag, (wf, call)
+
+
+def test_pr_ci_skips_the_timing_gates_runs_and_the_sweep_runs_them():
+    """Deselecting a timing test does not stop its gate script from doing that gate's runs (the wall-clock gate's warm pairs
+    and 8 runs at ~1000 tokens inside engine_batch_checks.py held the longest T1 leg). PR CI's T1 step sets MASHBOX_SKIP_TIMING=1, every
+    script with a TIMING gate reads it, and the sweep never sets it, so the sweep still runs and checks those gates."""
+    import importlib.util
+    import re
+    spec = importlib.util.spec_from_file_location("tq", ROOT / "tests" / "cpu" / "test_qwen3_8_27b.py")
+    src = spec.loader.get_source("tq")
+    timing = eval(re.search(r"^TIMING = (\{.*\})$", src, re.M).group(1))
+    assert timing
+    for script, _ in timing:
+        assert 'os.environ.get("MASHBOX_SKIP_TIMING") == "1"' in (ROOT / "tests" / "cpu" / script).read_text(), script
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text().split("\n  t1:\n", 1)[1].split("\n  t1-gate:\n", 1)[0]
+    step = ci.split("- name: CPU tests of", 1)[1].split("\n      - ", 1)[0]
+    assert re.search(r'^\s+MASHBOX_SKIP_TIMING: "1"', step, re.M) and '-m "$AREA and not t0 and not quarantine and not timing"' in step
+    assert "MASHBOX_SKIP_TIMING" not in (ROOT / ".github" / "workflows" / "sweep.yml").read_text()

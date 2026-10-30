@@ -30,7 +30,19 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 T0_TESTS = {"test_core.py"}                     # the T0 suite: static and registry checks, pytest only
-EXTRA = {"hy_nomas": "imageio-ffmpeg", "track2rig": "scipy"}          # pip packages an area's tests need beyond .[dev] (the app server test)
+# The T1 leg of the tests that drive the server through the official openai and anthropic clients: they skip without
+# the clients at the versions they pin, so they get their own leg that installs exactly those (EXTRA) and the pinned
+# Qwen3.8-27B tokenizer files (--upstream-files, MASHBOX_QWEN_UPSTREAM). A change that runs core runs it too.
+CLIENTS = "api_clients"
+CLIENTS_FILES = {"test_api_conformance.py", "test_api_loaded_clients.py"}
+EXTRA = {"hy_nomas": "imageio-ffmpeg", "track2rig": "scipy",          # pip packages an area's tests need beyond .[dev] (the app server test)
+         CLIENTS: "openai==3.40.0 anthropic==2.3.0"}
+# The upstream files of UPSTREAM_MODEL that runtime/chat.py reads (tokenizer, chat template, stop ids), fetched at its
+# models.json upstream revision for the CLIENTS leg and checked against these sha256 before any test reads them.
+UPSTREAM_MODEL = "qwen3-8-27b"
+UPSTREAM_FILES = {"tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+                  "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+                  "generation_config.json": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e"}
 T0_ONLY_DIRS = ("docs/", "licenses/", "hf/", "templates/", ".github/ISSUE_TEMPLATE/",
                 "tests/contracts/")          # the contracts job runs tests/contracts on every pull request
 CORE_TESTS = "+core"                            # run the core T1 job without expanding to every model
@@ -38,69 +50,80 @@ T0_ONLY_FILES = {"llms.txt", "LICENSE", "LICENSE-KERNELS", ".github/pull_request
                  "tools/docs_lint_allow.txt"}  # the docs-lint allow counts: only tools/docs_lint.py reads them, in T0
 CORE_DIRS = ("src/mashbox/runtime/", ".github/workflows/", "tools/")
 CORE_FILES = {"pyproject.toml", "tests/conftest.py"}
-SHARDS = {"core": 12, "qwen3_8_27b": 4}       # T1 jobs per area (default 1); core is ~70 test files, about 1,400 tests
+SHARDS = {"core": 12, "qwen3_8_27b": 4, CLIENTS: 2, "gguf_rows": 5}   # T1 jobs per area (default 1); core is ~70 test files, about 1,400 tests
 # A file in SPLIT runs as that many parts, each its own shard unit (FILE@K/M; --args-of passes --ci-part to pytest, and
 # tests/conftest.py keeps part K's tests: the file's test groups dealt round robin, a group = what the module's
-# ci_part(item) returns, else each test alone). Only for a file whose one module fixture outlasts a shard.
-SPLIT = {"tests/cpu/test_spec_in_step.py": 3, "tests/cpu/test_qwen3_8_27b.py": 4}
+# ci_part(item) returns, else each test alone). For a file whose one module fixture outlasts a shard, or whose many
+# tests together do (test_aot_table, test_catalog, test_drafters: each test is short, so its parts split its time).
+SPLIT = {"tests/cpu/test_spec_in_step.py": 3, "tests/cpu/test_qwen3_8_27b.py": 4, "tests/cpu/test_tp_batched.py": 3,
+         "tests/cpu/test_aot_table.py": 3, "tests/cpu/test_catalog.py": 2, "tests/cpu/test_drafters.py": 2}
 # Approximate seconds per T1 test file on a CI runner, used only to split an area's files into shards of even time.
 # A file missing here counts as SECONDS_DEFAULT; a name here with no file is ignored. Refresh it from a CI run's
 # per-file times when a shard runs long. Only files this repository ships are listed (a name here ships with it).
 SECONDS_DEFAULT = 5
 SECONDS = {
-    "tests/cpu/test_activation_edits.py": 47,
+    "tests/cpu/test_activation_edits.py": 43,
     "tests/cpu/test_activation_edits_contract.py": 0,
-    "tests/cpu/test_admission_fairness.py": 44,
+    "tests/cpu/test_admission_fairness.py": 43,
     "tests/cpu/test_agent_api.py": 0,
-    "tests/cpu/test_aot_table.py": 350,
-    "tests/cpu/test_aot_table_first_use.py": 98,
-    "tests/cpu/test_aot_table_prune.py": 78,
-    "tests/cpu/test_aot_table_restart.py": 36,
-    "tests/cpu/test_aot_table_startup.py": 140,
-    "tests/cpu/test_api_conformance.py": 4,
-    "tests/cpu/test_api_loaded_clients.py": 0,      # skipped on the CI runner: openai and anthropic are not installed
+    "tests/cpu/test_aot_table.py": 595,
+    "tests/cpu/test_aot_table_first_use.py": 159,
+    "tests/cpu/test_aot_table_prune.py": 130,
+    "tests/cpu/test_aot_table_restart.py": 43,
+    "tests/cpu/test_aot_table_startup.py": 228,
+    "tests/cpu/test_api_conformance.py": 0,
+    "tests/cpu/test_api_loaded_clients.py": 295,  # two 144 s queue tests (its own leg)
     "tests/cpu/test_app_addon_tpu.py": 0,
-    "tests/cpu/test_app_addons.py": 3,
+    "tests/cpu/test_app_addons.py": 5,
     "tests/cpu/test_app_catalog_sig.py": 1,
     "tests/cpu/test_app_module.py": 5,
     "tests/cpu/test_app_quit.py": 2,
-    "tests/cpu/test_app_security.py": 11,
+    "tests/cpu/test_app_security.py": 10,
     "tests/cpu/test_app_tunnel_guard.py": 13,
-    "tests/cpu/test_catalog.py": 88,
-    "tests/cpu/test_chat_module.py": 1,
+    "tests/cpu/test_catalog.py": 488,
+    "tests/cpu/test_chat_module.py": 2,
     "tests/cpu/test_chat_relay_guard.py": 2,
-    "tests/cpu/test_ci_areas.py": 0,
-    "tests/cpu/test_compile_key.py": 0,
-    "tests/cpu/test_docs_supported_models.py": 1,
-    "tests/cpu/test_drafter_gate.py": 0,
-    "tests/cpu/test_engine_model_hooks.py": 4,
-    "tests/cpu/test_engine_warm.py": 53,
+    "tests/cpu/test_ci_areas.py": 7,
+    "tests/cpu/test_compile_key.py": 1,
+    "tests/cpu/test_docs_supported_models.py": 3,
+    "tests/cpu/test_draft_model.py": 27,
+    "tests/cpu/test_draft_model_cli.py": 148,
+    "tests/cpu/test_drafter_detect.py": 0,
+    "tests/cpu/test_drafter_gate.py": 1,
+    "tests/cpu/test_drafters.py": 437,
+    "tests/cpu/test_engine_model_hooks.py": 6,
+    "tests/cpu/test_engine_warm.py": 221,
     "tests/cpu/test_front_admission.py": 4,
-    "tests/cpu/test_front_failures.py": 105,
+    "tests/cpu/test_front_failures.py": 96,
     "tests/cpu/test_guard.py": 0,
     "tests/cpu/test_hub_compile_cache.py": 0,
-    "tests/cpu/test_metrics.py": 16,
+    "tests/cpu/test_metrics.py": 17,
+    "tests/cpu/test_model_lists.py": 0,
     "tests/cpu/test_module_shell.py": 0,
-    "tests/cpu/test_moe_routed.py": 69,
-    "tests/cpu/test_openapi.py": 1,
+    "tests/cpu/test_moe_routed.py": 100,
+    "tests/cpu/test_openapi.py": 2,
+    "tests/cpu/test_org_card.py": 0,
     "tests/cpu/test_prefix_cache_owner.py": 0,
+    "tests/cpu/test_qwen3_8_27b.py": 2148,  # 4 parts x its slowest part without the wall-clock gate's runs
+    "tests/cpu/test_qwen3_8_27b_mtp_default.py": 0,
     "tests/cpu/test_sampler.py": 1,
-    "tests/cpu/test_serve_batching.py": 11,
-    "tests/cpu/test_serve_queue_api.py": 12,
-    "tests/cpu/test_serve_security.py": 2,
-    "tests/cpu/test_spec_in_step.py": 500,
+    "tests/cpu/test_serve_batching.py": 10,
+    "tests/cpu/test_serve_queue_api.py": 8,
+    "tests/cpu/test_serve_security.py": 3,
+    "tests/cpu/test_spec_in_step.py": 1344,  # 3 parts x its slowest part (each part repeats the module fixture)
+    "tests/cpu/test_spec_options.py": 0,
+    "tests/cpu/test_spec_page.py": 5,
     "tests/cpu/test_stop_strings.py": 18,
     "tests/cpu/test_subagents.py": 0,
-    "tests/cpu/test_tenancy.py": 4,
-    "tests/cpu/test_qwen3_8_27b.py": 940,
-    "tests/cpu/test_tp_batched.py": 560,
-    "tests/cpu/test_tpu_chip_safety.py": 53,
-    "tests/cpu/test_tpu_cli.py": 71,
+    "tests/cpu/test_tenancy.py": 6,
+    "tests/cpu/test_tp_batched.py": 861,
+    "tests/cpu/test_tpu_chip_safety.py": 73,
+    "tests/cpu/test_tpu_cli.py": 107,
     "tests/cpu/test_worker_protocol.py": 1,
 }
 
 
-AREAS_EXTRA = ("gguf",)                         # areas that are not a models.json row: GGUF files (reader, ops, kernels)
+AREAS_EXTRA = ("gguf", CLIENTS)                 # areas that are not a models.json row: GGUF files (reader, ops, kernels), the clients leg
 GGUF_DIRS = ("src/mashbox/gguf/", "src/mashbox/ops/", "tools/gguf_fixtures/", "tests/fixtures/gguf/")
 GGUF_FILES = {"tools/gguf_check.py"}
 # cli.main imports these two on every run (is_gguf_request, the GGUF dispatch), so a change to them runs every area
@@ -122,7 +145,10 @@ def model_areas(text=None):
 
 
 def test_area(file_name, areas):
-    """tests/cpu/test_hy_nomas_port.py -> hy_nomas; a file name that carries no model id -> core."""
+    """tests/cpu/test_hy_nomas_port.py -> hy_nomas; a CLIENTS_FILES name -> CLIENTS; a file name that carries no model
+    id -> core."""
+    if file_name in CLIENTS_FILES:
+        return CLIENTS
     stem = file_name[:-3] if file_name.endswith(".py") else file_name
     stem = stem[5:] if stem.startswith("test_") else stem
     for a in sorted(areas, key=len, reverse=True):
@@ -234,11 +260,13 @@ def unit_seconds(u, sec):
     return sec.get(f, SECONDS_DEFAULT) / (int(km.split("/")[1]) if km else 1)
 
 
-def shard_args(files, shard, seconds=None):
+def shard_args(files, shard, seconds=None, whole=False):
     """the pytest arguments of shard 'i/n' when SPLIT files run as parts: shard_files over units(files), then each file
-    once, plus --ci-part=FILE@K/M for every part this shard runs (none when it runs every part of that file)"""
+    once, plus --ci-part=FILE@K/M for every part this shard runs (none when it runs every part of that file); whole:
+    every file whole, no parts (the sweep)"""
     sec = SECONDS if seconds is None else seconds
-    mine = shard_files(units(files), shard, {u: unit_seconds(u, sec) for u in units(files)})
+    us = list(files) if whole else units(files)
+    mine = shard_files(us, shard, {u: unit_seconds(u, sec) for u in us})
     out, parts = [], {}
     for u in mine:
         f, _, km = u.partition("@")
@@ -312,6 +340,34 @@ def file_seconds(junit_xml):
     return "\n".join(f'    "{f}": {round(s)},' for f, s in sorted(tot.items(), key=lambda kv: -kv[1]))
 
 
+def _get(url):
+    import urllib.request
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as r:
+                return r.read()
+        except OSError:
+            if attempt == 2:
+                raise
+
+
+def upstream_files(folder, fetch=_get, sums=None):
+    """write UPSTREAM_FILES of UPSTREAM_MODEL, at its models.json upstream revision, into folder; stop (SystemExit,
+    nothing written for that file) when a file's sha256 is not its pin"""
+    import hashlib
+    sums = UPSTREAM_FILES if sums is None else sums
+    up = next(m["upstream"] for m in json.loads((ROOT / "models.json").read_text())["models"] if m["id"] == UPSTREAM_MODEL)
+    os.makedirs(folder, exist_ok=True)
+    for name, want in sorted(sums.items()):
+        data = fetch(f"https://huggingface.co/{up['hf']}/resolve/{up['revision']}/{name}")
+        got = hashlib.sha256(data).hexdigest()
+        if got != want:
+            raise SystemExit(f"{up['hf']}@{up['revision'][:8]} {name}: sha256 {got}, pinned {want}")
+        with open(os.path.join(folder, name), "wb") as fh:
+            fh.write(data)
+    return folder
+
+
 def changed_files(base, head):
     if not base or set(base) == {"0"}:
         return None                             # first push of a branch: no base to compare
@@ -329,8 +385,10 @@ def main(argv=None):
     ap.add_argument("--files-of", metavar="AREA", help="print the test files of AREA's T1 job --shard (default 1/1)")
     ap.add_argument("--args-of", metavar="AREA", help="print the pytest arguments of AREA's T1 job --shard, SPLIT files as parts")
     ap.add_argument("--shard", default="1/1")
+    ap.add_argument("--whole-files", action="store_true", help="with --args-of: every file whole, no SPLIT parts (the sweep)")
     ap.add_argument("--contracts-summary", metavar="CONTRACTS_JSON", help="print contracts.json as a table, failures first")
     ap.add_argument("--file-seconds", metavar="JUNIT_XML", help="print the seconds of each test file in a pytest junit file")
+    ap.add_argument("--upstream-files", metavar="DIR", help=f"fetch the pinned {UPSTREAM_MODEL} tokenizer files into DIR")
     a = ap.parse_args(argv)
     if a.contracts_summary:
         print(contracts_summary(a.contracts_summary))
@@ -338,9 +396,12 @@ def main(argv=None):
     if a.file_seconds:
         print(file_seconds(a.file_seconds))
         return 0
+    if a.upstream_files:
+        print("upstream files in", upstream_files(a.upstream_files))
+        return 0
     areas = model_areas()
     if a.args_of:
-        args = shard_args(area_files(a.args_of, areas), a.shard)
+        args = shard_args(area_files(a.args_of, areas), a.shard, whole=a.whole_files)
         if not args:
             print(f"no test files for area {a.args_of} shard {a.shard}", file=sys.stderr)
             return 1
