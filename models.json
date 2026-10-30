@@ -3061,6 +3061,37 @@
         "revision": "f332072aa78be7aecdf3ee76d5c247082da564a6",
         "license": "apache-2.0"
       }
+    },
+    {
+      "id": "lfm3-1-7b-coreml",
+      "name": "LFM3-1.7B",
+      "summary": "Text generation, as a Core ML model.",
+      "device": "Apple Neural Engine",
+      "how_to_run": "https://mashbox.gg/docs/models/lfm3-1-7b-coreml",
+      "hf_repo": "mashbox-labs/LFM3-1.7B-CoreML",
+      "hf_revision": "701d4f23b976d8d62a271c7b60957c9274503da1",
+      "upstream": {
+        "name": "LFM3-1.7B",
+        "maker": "Liquid AI",
+        "hf": "LiquidAI/LFM3-1.7B",
+        "revision": "ac2586a34f1a1c03329dbdcdefabd8b6478ddaa7",
+        "license": "other",
+        "license_name": "lfm1.0",
+        "license_link": "LICENSE",
+        "license_sha256": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c",
+        "components": [
+          {
+            "role": "quantization-aware weights (LFM3-1.7B-QAD-Q4_0.gguf)",
+            "hf": "LiquidAI/LFM3-1.7B-GGUF",
+            "revision": "bad5729bba61d076fff20d2548e62526665af215",
+            "license": "other",
+            "license_name": "lfm1.0",
+            "license_link": "LICENSE",
+            "license_file": "LICENSE",
+            "license_sha256": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c"
+          }
+        ]
+      }
     }
   ],
   "engine_kernels": [

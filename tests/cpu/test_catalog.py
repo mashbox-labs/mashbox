@@ -2156,7 +2156,8 @@ def quick_ngram_problems(g, e_row, read, root, kernels):
     entry's chip key, component set and speculation step version; the compare's rows are their ids against llama.cpp's
     sealed ids. Its status is what the runs give: passed only with the QUICK bars (4/4 load and print, llama.cpp's first
     token on every prompt, 0 other divergences), the row's plain kernel-path QUICK on that chip passing, and the n-gram
-    decode (runs 1-3) at least the plain one."""
+    decode (runs 1-3) at least the plain one. The plain runs decode without speculation: a plain run whose speculation
+    event says used (a catalog gate turned it on) refuses the entry, whatever its status."""
     out = []
     tag = f"{g['repo']}:{g['tag']}"
     for kind, per in (g.get("speculation") or {}).items():
@@ -2277,6 +2278,14 @@ def quick_ngram_problems(g, e_row, read, root, kernels):
                                             for i in range(QUICK_RUNS)])
             except (OSError, ValueError, KeyError, IndexError, TypeError, ZeroDivisionError):
                 plain = None
+            for i in range(QUICK_RUNS):     # the plain arm decodes without speculation (a catalog gate can turn it on)
+                q = sums.parent / f"run{i}.stderr"
+                sp = {}
+                if q.is_file() and _sha(q) == listed.get(os.path.normpath(q)):
+                    sp = next(iter(_quick_events(q.read_text()).get("speculation") or []), {})
+                if sp.get("used") is True:
+                    out.append(f"{what}: plain run{i} ran speculation {sp.get('method')} (used True, gated "
+                               f"{sp.get('gated')}); the gate compares n-gram with a plain arm that does not speculate")
             if not (r.get("status") == "passing" and r.get("kernel_path") == "bundle" and same_seal
                     and isinstance(plain, (int, float))):
                 why.append(f"the row's plain kernel-path QUICK on {fam} does not pass")
@@ -5050,6 +5059,9 @@ QUICK_N_BAD = {
             "ngram-run1 ran with MASHBOX_GGUF_KERNELS=off"),
     "not n-gram": (_quick_stderr_n(3, lambda x: x.update(method="draft_model") if x["event"] == "speculation" else None),
                    "ngram-run3 ran speculation"),
+    "the plain arm speculated": (_set("stderr1", lambda v: v + json.dumps(
+        {"event": "speculation", "used": True, "method": "ngram", "draft_k": 3, "gated": True}) + "\n"),
+        "plain run1 ran speculation ngram (used True, gated True); the gate compares n-gram with a plain arm that"),
     "k": (_spec_entry(lambda e: e["k_table"].update({"1": 4})), "k_table's 1-row k 4 is not the runs' draft_k 3"),
     "css": (_spec_entry(lambda e: e.update(component_set_sha="0" * 64)), "the runs' component set is " + QUICK_CSS),
     "step": (_spec_entry(lambda e: e.update(spec_step_version=99)), "the runs measured speculation step version"),

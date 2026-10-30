@@ -24,6 +24,7 @@
 * [Qwen3.8-27B](models/qwen3-8-27b.md)
 * [Track2Rig](models/track2rig.md)
 * [TRELLIS.2](models/trellis-2.md)
+* [LFM3-1.7B](models/lfm3-1-7b-coreml.md)
 <!-- models:end -->
 
 ## Reference

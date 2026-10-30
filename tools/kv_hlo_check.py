@@ -9,7 +9,11 @@ Per program it reports:
                   outside loops;
   cache_layouts   every layout the whole cache takes in the program;
   aliased         the cache arguments are aliased to the cache outputs (input_output_alias), so the donated buffer is
-                  updated in place.
+                  updated in place;
+  pool_scatters   scatter / gather instructions (fused computations included) whose result or operand has the shape of
+  pool_gathers    a whole slot-state array (the linear-attention pools R and C, a cache): a gather / scatter on the pool
+                  instead of a slice and an in-place dynamic_update_slice of the call's rows;
+  bytes_accessed  XLA's cost analysis of the program (cost_analysis()['bytes accessed']), GiB.
 
 A CPU compile does not show any of this (TPU tiles the two minor dims), so
 this needs libtpu installed (`pip install "jax[tpu]==0.11.2"`); it never needs a TPU.
@@ -47,6 +51,9 @@ MODELS = {
     "qwen25-05b": ("qwen2", dict(layers=24, hp=dict(D=256, F=256, H=14, KV=2, HD=64))),
     # Qwen3.5-9B (qwen35 hybrid): 32 layers (every 4th full attention), 16 q heads, 4 K/V heads of 256
     "qwen35-9b": ("qwen35", dict(layers=32, hp=dict(D=256, F=256, H=16, KV=4, HD=256, RD=64, HK=2, HV=4, DK=64))),
+    # unsloth/Qwen3.5-4B-GGUF: 32 layers (every 4th full attention: 16 q heads, 4 K/V heads of 256); linear attention
+    # 16 key heads, 32 value heads of 128, so the recurrent pool is (8, 3, slots + 1, 32, 128, 128) float32
+    "qwen35-4b": ("qwen35", dict(layers=32, hp=dict(D=256, F=256, H=16, KV=4, HD=256, RD=64, HK=16, HV=32, DK=128))),
 }
 
 # the MASHBOX Qwen3.8-27B build (models/qwen3_8_27b, BQ8_R int8 weights) at its real size: the weight tree weights.load
@@ -137,9 +144,22 @@ def analyse(compiled, shapes):
                 layouts.add(lay)
     head = txt.split("\n", 1)[0]
     alias = re.search(r"input_output_alias=\{(.*?)\}\s*,\s*entry_computation_layout", head)
+    shp = re.compile(r"\w+\[([0-9,]+)\]")
+    pool = {"scatter": 0, "gather": 0}
+    for line in txt.splitlines():
+        for op in pool:
+            if re.search(r"\s" + op + r"\(", line) and dims & set(shp.findall(line)):
+                pool[op] += 1
+    try:
+        ca = compiled.cost_analysis()
+        ca = ca[0] if isinstance(ca, (list, tuple)) else ca
+        ba = round(float(ca.get("bytes accessed", 0.0)) / 2 ** 30, 3)
+    except Exception:                   # a backend without a cost model
+        ba = None
     return dict(temp_gib=round(m.temp_size_in_bytes / 2 ** 30, 3), arg_gib=round(m.argument_size_in_bytes / 2 ** 30, 3),
                 out_gib=round(m.output_size_in_bytes / 2 ** 30, 3), alias_gib=round(m.alias_size_in_bytes / 2 ** 30, 3),
-                cache_copies=copies, cache_layouts=sorted(layouts), aliased=bool(alias and alias.group(1).strip()))
+                cache_copies=copies, cache_layouts=sorted(layouts), aliased=bool(alias and alias.group(1).strip()),
+                pool_scatters=pool["scatter"], pool_gathers=pool["gather"], bytes_accessed=ba)
 
 
 def build(name, S, CTX, K=8, d=None, spec=False):

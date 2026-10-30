@@ -142,3 +142,51 @@ def test_online_an_elsewhere_repo_is_listed_pinned_and_its_link_lands_on_a_headi
     assert any("not the pinned revision" in p for p in online(reg, Hub(r, head="c" * 40)))
     assert any("#run" in p for p in online(reg, Hub(r, card="# Example Model\n\n## Load\n"))), "a dead anchor passes"
     assert any("LICENSE" in p for p in online(reg, Hub(r, licence="edited\n"))), "a changed licence file passes"
+
+
+DOCS = "https://mashbox.gg/docs/models/example-model"
+FIG = {"decode": {"text": "11.1 tokens/s", "what": "decode speed, one conversation", "device": "a test Mac",
+                  "date": "2026-10-30"}}
+
+
+def test_a_listed_rows_figures_fill_number_markers_and_come_from_the_private_map():
+    """A listed row's measured numbers live where every row's do (figures by name, the private number map): a docs page
+    shows them through number markers, so the page, the map and the card each hold one copy that is checked against the
+    others, never a number typed twice."""
+    reg = with_rows(row(figures=FIG))
+    assert SC.figure_text(reg, "example-model", "decode") == "11.1 tokens/s"
+    p = SC.Problems()
+    marked = "decodes at <!-- r:example-model/decode -->9 tokens/s<!-- /r --> here"
+    assert SC.fill_numbers(reg, marked, "page", p) == marked.replace("9 tokens/s", "11.1 tokens/s") and not list(p)
+    assert SC.figure_text(reg, "example-model", "prefill") is None
+    plain = with_rows(row())
+    SC.merge_figures(plain, {"figures": {"example-model": FIG}})
+    assert plain["elsewhere"][0]["figures"] == FIG
+
+
+def test_a_listed_row_that_links_its_docs_page_has_the_page_and_a_sidebar_line(tmp_path):
+    """how_to_run on the row's own docs page (mashbox.gg/docs/models/<id>): docs/models/<id>.md is in the tree and the
+    docs sidebar lists it; a row whose how_to_run is its Hugging Face card gets no sidebar line."""
+    reg = with_rows(row(how_to_run=DOCS))
+    p = SC.Problems()
+    SC.elsewhere_page_problems(reg, tmp_path, p)
+    assert any("docs/models/example-model.md" in str(x) for x in p), list(p)
+    (tmp_path / "docs" / "models").mkdir(parents=True)
+    (tmp_path / "docs" / "models" / "example-model.md").write_text("# Example Model\n")
+    p = SC.Problems()
+    SC.elsewhere_page_problems(reg, tmp_path, p)
+    assert not list(p)
+    other = SC.Problems()
+    SC.elsewhere_page_problems(with_rows(row(how_to_run="https://mashbox.gg/docs/models/someone-else")), tmp_path, other)
+    assert any("its own page" in str(x) for x in other), list(other)
+    assert "* [Example Model](models/example-model.md)" in SC.sidebar_block(reg).splitlines()
+    assert "example-model" not in SC.sidebar_block(with_rows(row()))
+
+
+def test_online_a_listed_rows_figures_are_on_its_card_at_the_pinned_revision():
+    r = row(figures=FIG)
+    reg = with_rows(r)
+    on_card = "# Example Model\n\n## Run\n\nDecoding: 11.1 tokens/s.\n"
+    assert online(reg, Hub(r, card=on_card)) == []
+    got = online(reg, Hub(r, card="# Example Model\n\n## Run\n\nDecoding: 10.9 tokens/s.\n"))
+    assert any("decode" in p and "11.1 tokens/s" in p for p in got), got

@@ -28,12 +28,19 @@ def new_card(reg=REG):
     fams = SC._lists().gguf_families(reg)
     return (f"**{reg['company_line']}**\n\nOur engine runs GGUF files from the community as they are. Families covered "
             f"so far: {', '.join(fams[:-1])} and {fams[-1]}.\n\n{INSTALL}\n"
-            "Repo names: `<Model>-TPU` runs on Google Cloud TPU with the `mashbox` package.\n")
+            f"{SC.REPOS_START}\n{SC.repos_text(reg)}\n{SC.REPOS_END}\n")
 
 
-def collections(ids):
+def listed_in(reg, title):
+    """our repos models.json puts in a collection that is neither a kind's nor a family's: elsewhere[] rows by device"""
+    return sorted(r["hf_repo"] for r in reg.get("elsewhere") or [] if SC.DEVICE_INFO[r["device"]]["collection"] == title)
+
+
+def collections(ids, reg=REG):
+    extra = [{"title": d["collection"], "items": [{"type": "model", "id": i} for i in listed_in(reg, d["collection"])]}
+             for d in SC.DEVICE_INFO.values() if listed_in(reg, d["collection"])]
     return json.dumps([{"title": "TPU models", "items": [{"type": "model", "id": i} for i in ids]},
-                       {"title": "Qwen on TPU", "items": [{"type": "model", "id": f"{ORG}/Qwen3.8-27B-TPU"}]}])
+                       {"title": "Qwen on TPU", "items": [{"type": "model", "id": f"{ORG}/Qwen3.8-27B-TPU"}]}] + extra)
 
 
 class Fetch:
@@ -115,8 +122,9 @@ def test_a_family_collection_named_on_the_row_holds_it():
 
 def test_a_collection_listing_shows_four_items_so_each_is_read_whole():
     """The org's collection listing (api/collections?owner=) shows at most 4 items of each collection: each matched
-    collection is read whole (api/collections/<slug>) before it is compared, so a fifth port is never reported missing."""
-    reg = json.loads(json.dumps(REG))
+    collection is read whole (api/collections/<slug>) before it is compared, so a fifth port is never reported missing.
+    (elsewhere[] rows and their collections are not under test here)"""
+    reg = no_listed()
     base = next(x for x in reg["models"] if x["id"] == "qwen3-8-27b")
     for n in range(4):
         m = json.loads(json.dumps(base))
@@ -138,3 +146,79 @@ def test_a_collection_listing_shows_four_items_so_each_is_read_whole():
             return 404, ""
     assert len(want) > 4 and SC.collection_problems(reg, listing, "c", Whole()) == []
     assert any("lacks" in p for _, p in SC.collection_problems(reg, listing, "c"))   # the listing alone looks short
+
+
+def tpu_row(**kw):
+    r = {"id": "weights-x", "name": "Weights X", "summary": "Text to image.", "device": "TPU",
+         "how_to_run": f"https://huggingface.co/{ORG}/Weights-X-TPU#load", "hf_repo": f"{ORG}/Weights-X-TPU",
+         "hf_revision": "a" * 40, "upstream": {"name": "Weights X", "maker": "Someone", "hf": "someone/x",
+                                               "license": "apache-2.0"}}
+    r.update(kw)
+    return r
+
+
+def no_listed(reg=REG):
+    reg = json.loads(json.dumps(reg))
+    reg.pop("elsewhere", None)
+    return reg
+
+
+def test_the_repos_paragraph_is_rendered_from_models_json_and_true_for_every_repo():
+    """The card's one paragraph on what our repos hold is rendered from models.json between REPOS_START and REPOS_END:
+    a sentence for the run tier ("TPU models": `mashbox run` starts them) and, per device of elsewhere[] rows, one for
+    the repos `mashbox run` does not start, naming their device's collection. No row named, no count, no claim a repo
+    of either tier does not keep (bits per weight, measured numbers and file names are each card's to give)."""
+    run_only = SC.repos_text(no_listed())
+    assert "TPU models" in run_only and "`mashbox` package" in run_only
+    assert "does not start" not in run_only and "Weights for TPU" not in run_only
+    reg = no_listed()
+    reg["elsewhere"] = [tpu_row()]
+    both = SC.repos_text(reg)
+    assert "TPU models" in both and '"Weights for TPU"' in both and "`mashbox run` does not start" in both
+    reg["elsewhere"].append(tpu_row(id="ane-x", name="ANE X", device="Apple Neural Engine",
+                                    hf_repo=f"{ORG}/ANE-X-CoreML", how_to_run=f"https://huggingface.co/{ORG}/ANE-X-CoreML#run"))
+    ane = SC.repos_text(reg)
+    assert "the Apple Neural Engine" in ane and "`<Model>-CoreML`" in ane and SC.DEVICE_INFO["Apple Neural Engine"]["collection"] in ane
+    for text in (run_only, both, ane):
+        assert "\n" not in text and "Weights X" not in text and "ANE X" not in text
+        assert not SC.COUNT_RE.search(text), text
+        for claim in ("bits per weight", "measured", ".bshj"):
+            assert claim not in text, (claim, text)
+
+
+def test_the_card_carries_the_repos_paragraph_as_rendered_or_fails_online():
+    full = collections(sorted(SC.tpu_ports(REG)))
+    assert org_problems(new_card(), full) == []
+    old_line = new_card().replace(SC.repos_text(REG), "Repo names: `<Model>-TPU` runs on Google Cloud TPU with the "
+                                                       "`mashbox` package.")
+    assert any("repos" in p for p in org_problems(old_line, full)), "a hand-typed repos paragraph passes"
+    gone = new_card().split(SC.REPOS_START)[0]
+    assert any("repos" in p for p in org_problems(gone, full)), "a card with no repos paragraph passes"
+
+
+def test_render_writes_the_org_cards_repos_paragraph_from_models_json(tmp_path):
+    """render --org-card re-renders the card's repos paragraph (the rest of the card stays as it is) into the extra output
+    hf-org-card/README.md; the views compared with the tree never hold it."""
+    card = tmp_path / "card.md"
+    card.write_text(new_card().replace(SC.repos_text(REG), "stale words"))
+    p = SC.Problems()
+    views = SC.render_all(REG, ROOT, None, ROOT / "templates" / "hf", p, org_card=card)
+    assert "hf-org-card/README.md" not in views
+    assert SC.render_all.overviews == {"hf-org-card/README.md": new_card()}
+
+
+def test_an_elsewhere_row_sits_in_its_devices_collection_and_only_there():
+    """elsewhere[] rows go in their device's collection (DEVICE_INFO): the "TPU models" collection holds what `mashbox
+    run` starts on TPU, so a weights-only TPU repo is in "Weights for TPU", never in "TPU models"."""
+    assert set(SC.DEVICE_INFO) == set(SC.DEVICES)
+    reg = no_listed()
+    reg["elsewhere"] = [tpu_row()]
+    want = SC.collection_wants(reg)
+    assert want["Weights for TPU"] == {f"{ORG}/Weights-X-TPU"}
+    assert f"{ORG}/Weights-X-TPU" not in want["TPU models"]
+    assert "Weights for TPU" not in SC.collection_wants(no_listed()), "a device with no row wants no collection"
+    ok = collections(sorted(SC.tpu_ports(reg)), reg)
+    assert SC.collection_problems(reg, ok, "c") == []
+    lacking = json.dumps([c for c in json.loads(ok) if c["title"] != "Weights for TPU"]
+                         + [{"title": "Weights for TPU", "items": []}])
+    assert SC.collection_problems(reg, lacking, "c") == [("c", f"'Weights for TPU' lacks {ORG}/Weights-X-TPU")]

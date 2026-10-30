@@ -2,6 +2,38 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.12
+
+### Decode updates the linear-attention state in place (qwen35)
+
+1. **`gguf/archs/qwen35.py`:** decode and speculation verify run on contiguous rows (slots 0..B-1). Each layer group now reads its rows of the recurrent state (float32) and of the conv tail with one `dynamic_slice`, and writes them back with `dynamic_update_slice`. Before, it gathered its rows from the whole slot pool and scattered them back, once per layer group. Prefill rows (any slots) keep the slot-indexed path, as the Qwen3.8-27B build does.
+2. **`tools/kv_hlo_check.py`:** also counts gathers and scatters on a whole slot-state array, and reports XLA's bytes accessed per program. It has a fixture with Qwen3.5-4B's linear-attention shapes.
+3. **Tests:** in `test_gguf_qwen35.py`, decode holds no gather or scatter on a pool and gives the slot-indexed path's state, K/V and logits bit for bit, and a deviceless TPU compile of the decode programs shows no gather or scatter on a pool. A strict xfail keeps the two copies of the conv pool at a decode call's entry and exit, which this change leaves as they were.
+
+Why: on one v6e chip, Qwen3.5-4B Q4_K_M decode scattered the whole recurrent-state pool at every layer group of every step. At one user (kernel package 0.1.9), its steady decode goes from 8.86 to 8.56 ms per token, with the same greedy ids. The deviceless v6e compile at 8 slots x 2048 shows 2 pool scatters per decode program before and 0 after. XLA's bytes accessed per 8-row decode call fall from 1.42 to 1.18 GiB.
+
+How existing models keep working: the values read and written are the same, and only how they move changes. The engine's outputs are byte-identical before and after on the qwen35 and qwen35moe fixtures: generated ids, the state of every slot, and logits, for alone, batched, chunked, prefix-cache-resumed and speculative runs. Prefill and the Qwen3.8-27B build are unchanged. The decode programs of qwen35 files change, so a compile cache built before this change misses them once.
+
+### LFM3-1.7B for the Apple Neural Engine is listed; a listed row keeps its measured numbers like any row
+
+1. **`models.json` `elsewhere[]`:** `lfm3-1-7b-coreml`, Liquid AI's LFM3-1.7B as a Core ML model for the Apple Neural Engine (`mashbox-labs/LFM3-1.7B-CoreML` at its pinned revision). Its upstream licence is copied as Liquid AI states it (`other`, `lfm1.0`, `LICENSE`), with the LICENSE file pinned by sha256, and the quantization-aware GGUF weights it was built from are a pinned component.
+2. **`docs/models/lfm3-1-7b-coreml.md`:** its page, the row's `how_to_run`. The sidebar lists a listed row whose `how_to_run` is its own docs page.
+3. **`tools/hf_github_sync_check.py`:** a listed row holds named figures like a `models[]` row (the maintainers' number map, number markers on its page). `check --online` finds each of them on the row's Hugging Face card at the pinned revision, so the card, the page and the map carry the same numbers. A `how_to_run` that is a docs model page must be the row's own, and that page must be in the tree.
+4. **`tests/cpu/test_listed_elsewhere.py`:** figures, the page rule, the sidebar line and the card check; `tools/numbers_allowed.txt` lists the page's settings (call lengths, context, reply cap), which are not measurements.
+
+Why: the port is public, and a listed model's numbers belong in the one place every page reads them from.
+
+How existing models keep working: `models[]` and `gguf[]` rows, their figures and pages are unchanged; no file of `src/mashbox` but `models.json` changed.
+
+### The org card's repos paragraph and the device collections come from models.json
+
+1. **`tools/hf_github_sync_check.py`:** `DEVICE_INFO` gives each device of `elsewhere[]` its words and its Hugging Face collection (TPU: "Weights for TPU"); `collection_wants` puts each `elsewhere[]` repo in its device's collection, never in "TPU models". `repos_text` renders the org card's one paragraph on what our repos hold (the run tier by its collection, the repos `mashbox run` does not start by their device's collection, our own trained models), between `<!-- repos:start -->` and `<!-- repos:end -->`. It names no model and no count. `org_card_problems` (`check --online`) holds the card to it. `render --org-card --out` writes the re-rendered card as `hf-org-card/README.md`, outside the views compared with the tree.
+2. **`tests/cpu/test_org_card.py`:** the paragraph per tier and device, the card rule, the render, the device collections; `tests/cpu/test_core.py`'s online fixture card carries the paragraph.
+
+Why: the card's hand-typed repo-names line said every `<Model>-TPU` repo runs with the `mashbox` package and that every card gives bits per weight and measured quality, which the weights-only repos (and TRELLIS.2's card) do not.
+
+How existing models keep working: no file of `src/mashbox` changed; the run tier's collections ("TPU models", "Qwen on TPU") hold what they held.
+
 ## 0.1.11
 
 ### Models `mashbox run` does not start are listed, with their device and a how-to-run link
