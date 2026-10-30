@@ -8,7 +8,7 @@
 <h3 align="center">MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.</h3>
 
 <p align="center">
-  <a href="#quickstart"><b>Quickstart</b></a> •
+  <a href="#install"><b>Install</b></a> •
   <a href="#models"><b>Models</b></a> •
   <a href="https://mashbox.gg/docs"><b>Docs</b></a> •
   <a href="https://huggingface.co/mashbox-labs"><b>Hugging Face</b></a> •
@@ -26,19 +26,46 @@
 <p align="center"><a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.10/docs/models/qwen3-8-27b.md"><img alt="Qwen3.8-27B on one TPU v6e chip" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.10/hf/qwen3-8-27b/assets/hero.gif" width="100%"></a></p>
 <p align="center"><b>Qwen3.8-27B</b> on one TPU v6e chip: first-time install to first answer (sped up 10x).</p>
 
-## Quickstart
+## Install
 
-From your own machine, with the Google Cloud CLI set up ([docs/google-cloud.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/docs/google-cloud.md) does that from a new Google account). This runs Qwen3.8-27B on one TPU v6e chip:
+<!-- install:start -->
+Two lines on your own machine (Linux or macOS, x86_64 or arm64; on Windows, use WSL2). The first installs the `mashbox` command, the second gets a Google Cloud TPU chip and starts Qwen3.8-27B on it:
 
 ```bash
-gcloud compute tpus tpu-vm create mashbox-1 --zone=us-east5-b --accelerator-type=v6e-1 --version=v2-alpha-tpuv6e
-gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b --command='python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]" && ~/.local/bin/mashbox run qwen3-8-27b --prompt "Write a haiku about the sea."'
-gcloud compute tpus tpu-vm delete mashbox-1 --zone=us-east5-b --quiet
+curl -fsSL https://mashbox.gg/install.sh | sh
+mashbox tpu up qwen3-8-27b
 ```
 
-The chip's system Python is 3.10 and JAX for TPU needs 3.12, so the second line installs [uv](https://docs.astral.sh/uv/), which brings its own Python 3.12 and puts the `mashbox` command in `~/.local/bin`. The first run downloads the 26.9 GB weights file and the compile cache; with them on disk, the server on a TPU v6e-1 is ready in 69.6 s. If the create command says the zone has no capacity, use another zone from [step 6 of the setup guide](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/docs/google-cloud.md#6-create-one-chip) in all three lines.
+Line 2 needs the Google Cloud CLI, signed in to a project with billing and the TPU API turned on; [Run on Google Cloud TPU](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/docs/google-cloud.md) steps 1 to 5 do that from a new Google account. It prints the chip's price per hour and asks before it creates anything. Then it installs the same `mashbox` version on the chip and starts the server there, reached through an SSH tunnel from your machine. `mashbox tpu down mashbox-qwen3-8-27b` deletes the chip, and if you forget, the chip deletes itself at its max lifetime.
 
-The chip bills from create to delete: one TPU v6e chip is $2.70 an hour at Google's on-demand [list price](https://cloud.google.com/tpu/pricing). To serve Qwen3.8-27B with an OpenAI-compatible API instead, see [docs/models/qwen3-8-27b.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/docs/models/qwen3-8-27b.md).
+On a machine that has a TPU, such as a Cloud TPU VM you created yourself, the same line 1 installs the TPU version and `mashbox run` runs a model there:
+
+```bash
+curl -fsSL https://mashbox.gg/install.sh | sh
+mashbox run qwen3-8-27b --prompt "Write a haiku about the sea."
+```
+
+If the shell does not find `mashbox` after line 1, `~/.local/bin` is not on your `PATH`: line 1 printed the `export PATH=...` line for this terminal, or call it as `~/.local/bin/mashbox`. To do the same by hand with `gcloud`, one chip and one answer: [Quickstart](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/docs/quickstart.md).
+
+What each install adds:
+
+| Install | What it adds | Where it goes |
+|---|---|---|
+| `mashbox` | the `mashbox` command with `mashbox models` and `mashbox tpu`, which gets a chip and runs a model on it from your machine. It has no JAX, so models do not run on this machine. | your laptop or desktop: line 1 installs this anywhere but a TPU VM |
+| `mashbox[cpu]` | JAX for CPU | a machine that runs a CPU model: Track2Rig, which adds its own extra (`mashbox[cpu,track2rig]`) |
+| `mashbox[tpu]` | JAX for TPU | a TPU VM: line 1 installs this there |
+| `mashbox[tpu,hy-nomas]` | JAX for TPU, plus PyTorch and the other libraries the Hy-Nomas pipeline uses | a TPU VM that runs Hy-Nomas: `mashbox tpu up hy-nomas` installs it on its chip |
+
+Each one needs Python 3.12 or newer. Line 1 installs with [uv](https://docs.astral.sh/uv/), which brings its own Python 3.12, since a Cloud TPU VM's system Python is 3.10. On a TPU VM without line 1: `python3 -m pip install uv && python3 -m uv tool install --python 3.12 "mashbox[tpu]"`. For Hy-Nomas with line 1, name the extras:
+
+```bash
+curl -fsSL https://mashbox.gg/install.sh | MASHBOX_EXTRAS=tpu,hy-nomas sh
+```
+
+`mashbox run` fetches the compiled TPU kernels a model uses by itself, so there is nothing to install or pick. They come from two places. The engine kernel package, used for GGUF files and Hugging Face models, is one file attached to a mashbox release on GitHub; `models.json` lists it under `engine_kernels`, with the chips and the JAX version it is built for. Each MASHBOX build that ships kernels has its own kernel package in its Hugging Face repo, under `kernels/`. `mashbox run` checks every file against its sha256 in `models.json` before it uses it. When no package fits the chip and the JAX version, the model runs without one, on plain JAX, which is slower, and the log says so.
+<!-- install:end -->
+
+The chip bills from create to delete: one TPU v6e chip is $2.70 an hour at Google's on-demand [list price](https://cloud.google.com/tpu/pricing). Qwen3.8-27B's options, chips and results: [docs/models/qwen3-8-27b.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/docs/models/qwen3-8-27b.md).
 
 ## Models
 
@@ -195,7 +222,7 @@ TPU v6e (one chip and a v6e-4) against one NVIDIA H100 at Google Cloud list pric
 
 ## Open code, compiled kernels
 
-The source of the model ports, CLI, runtime, demo apps and docs is in this repo, under Apache-2.0. Each model ships with its own compiled TPU kernels (our Culet kernels) and, where we built one, a precompiled compile cache, only what that model needs: `mashbox run` downloads them from the model's Hugging Face repo and checks them against the sha256 in `models.json`. Models that list plain JAX as tested also run without them, slower. The compiled files are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/LICENSE-KERNELS): free for personal use, research and evaluation, and for any use by companies under US$1M annual revenue. Larger companies in production: hello@mashbox.gg.
+The source of the model ports, CLI, runtime, demo apps and docs is in this repo, under Apache-2.0. The TPU kernels (our Culet kernels) ship compiled, as files that `mashbox run` fetches and checks by itself, with a precompiled compile cache where we built one; [Install](#install) says where each kernel package comes from. Models that list plain JAX as tested also run without them, slower. The compiled files are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.10/LICENSE-KERNELS): free for personal use, research and evaluation, and for any use by companies under US$1M annual revenue. Larger companies in production: hello@mashbox.gg.
 
 ## Coding agents
 

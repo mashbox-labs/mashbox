@@ -1,6 +1,6 @@
 # Quickstart
 
-Run Qwen3.8-27B on one Google Cloud TPU v6e chip with three commands from your own machine: create the chip, install and run, delete the chip.
+Run Qwen3.8-27B on one Google Cloud TPU v6e chip by hand, with three `gcloud` commands from your own machine: create the chip, install and run, delete the chip. [Install](install.md) does the same in two lines, with `mashbox tpu up`.
 
 You need the Google Cloud CLI signed in to a project with billing and the TPU API turned on. [Run on Google Cloud TPU](google-cloud.md) steps 1 to 5 do that from a new Google account.
 

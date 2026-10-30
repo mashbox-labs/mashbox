@@ -3,7 +3,7 @@
 Docs for `mashbox`, the MASHBOX Labs package that runs open models faster and cheaper. The models in it run on Google Cloud TPU. The same pages are on [mashbox.gg/docs](https://mashbox.gg/docs).
 
 - [Install](install.md): two lines on your own machine, from nothing to a running model
-- [Quickstart](quickstart.md): one chip, one model, one answer
+- [Quickstart](quickstart.md): one chip, one model, one answer, by hand with `gcloud`
 - [Run on Google Cloud TPU](google-cloud.md): from a new Google account to a running model and a deleted chip
 - [TPU or GPU](tpu-vs-gpu.md): when a TPU is the better pick
 - [Supported models](supported-models.md): every model and file this version lists, and the command for each
