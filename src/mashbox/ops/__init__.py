@@ -99,7 +99,16 @@ class Dense32:
     float32 value, so this holds the same bytes as Raw; it multiplies with the exact path's own float32 dot (bit for bit
     a Raw F32 weight's product) without rebuilding the values from the bytes at every call. That rebuild of Qwen3.6-35B's
     60 small F32 gate weights was 61% of a v6e decode step. A weight the exact path chunks, a stack and every other type
-    keep Raw."""
+    keep Raw.
+    F16 (ggml type 1, a GGUF F16 tensor or a Hugging Face float16 weight), on the kernel path only (prepare's use_kernel;
+    use_kernel=False keeps Raw, the reference): w (..., rows, cols) float16, the file's values (the same bytes), for any
+    2-D weight or layer stack (never a stack of experts). It runs the exact path's steps (the same barrier, the same row
+    chunks, the same float32 HIGHEST dot on the same float32 values: float16 -> float32 is exact) without rebuilding the
+    values from byte pairs at every call, but as another XLA program: XLA:CPU gives the exact path's bits; on TPU v6e the
+    float32 rounding can differ, so F16 is held to the op/F16 bars like BF16's native path, not to bit equality. Measured
+    on v6e (bfloat16 activations, 4096 to 14336 rows by 4096 cols, 1 to 32 rows of x): at most 45 outputs of a call
+    differ from the exact path's (45 of 352,256), by at most 0.016, and the NMSE against a float64 product equals the
+    exact path's to 9 digits."""
 
     def __init__(self, w, t, shape):
         self.w, self.t, self.shape = w, int(t), tuple(int(s) for s in shape)
@@ -116,8 +125,15 @@ class Dense32:
 
 
 def _dense32(raw, t, shape):
-    """-> Dense32 for one unstacked F32 tensor the exact path multiplies whole, else None"""
+    """-> Dense32 for one unstacked F32 tensor the exact path multiplies whole, or for an F16 weight of one (rows, cols)
+    shape (unstacked or a layer stack, never a stack of experts), else None"""
     rows, cols = (int(v) for v in shape[-2:])
+    if t == 1 and len(tuple(shape)) == 2 and raw.ndim >= 2:
+        lead = tuple(int(v) for v in raw.shape[:-2])
+        if isinstance(raw, jax.Array):
+            return Dense32(lax.bitcast_convert_type(raw.reshape(lead + (rows, cols, 2)), jnp.float16), t, shape)
+        return Dense32(jnp.asarray(np.ascontiguousarray(np.asarray(raw)).view("<f2").reshape(lead + (rows, cols))), t,
+                       shape)
     if t != 0 or raw.ndim != 2 or len(tuple(shape)) != 2 or exact_chunk_rows(rows, cols) != rows:
         return None
     if isinstance(raw, jax.Array):
@@ -127,8 +143,9 @@ def _dense32(raw, t, shape):
 
 def route(h):
     """the path a weight handle is multiplied on, as a load's weights event counts it: 'kernel' (kq or native planes),
-    'resident_f32' (Dense32: float32 values held on the device and the exact path's own float32 dot, no rebuild per
-    call: exact, never a kernel), 'native_bf16' (Dense16), else 'reference' (the exact path rebuilds the values from
+    'resident_f32' (Dense32: F32 or F16 values held on the device and the exact path's own float32 dot, no rebuild per
+    call, never a kernel: F32 is the exact path's product bit for bit; F16 runs it as another XLA program, held to the
+    op/F16 bars), 'native_bf16' (Dense16), else 'reference' (the exact path rebuilds the values from
     the blocks at every call)"""
     if isinstance(h, (Packed, NB)):
         return "kernel"
@@ -442,7 +459,7 @@ def prepare(raw, t, shape, use_kernel=True, experts=None):
         h = dense16.prepare(raw, t, shape)
         if h is not None:
             return h
-    h = _dense32(raw, t, shape)
+    h = _dense32(raw, t, shape) if use_kernel or t != 1 else None    # F16 held as values: kernel path only
     if h is not None:
         return h
     return Raw(jnp.asarray(_flat(raw)), t, shape)
@@ -501,7 +518,7 @@ def dequant(h):
     if isinstance(h, dense16.Dense16):
         return dense16.dequant(h)
     if isinstance(h, Dense32):
-        return h.w
+        return h.w.astype(f32)
     return R.dequant(_mat(h.raw, h.t, h.shape), h.t, h.shape[-1])
 
 
@@ -514,7 +531,7 @@ def take_rows(h, ids):
     if isinstance(h, dense16.Dense16):
         return dense16.take_rows(h, ids)
     if isinstance(h, Dense32):
-        return h.w[ids]
+        return h.w[ids].astype(f32)
     rows, cols = h.shape[-2], h.shape[-1]
     _, bs, ts = R.TYPES[h.t]
     rb = cols // bs * ts
@@ -556,6 +573,21 @@ def _exact(x, raw, t, cols):
     return lax.dot_general(x.astype(f32), w, (((x.ndim - 1,), (1,)), ((), ())), precision=HI, preferred_element_type=f32)
 
 
+def _f16_values(x, h):
+    """an F16 Dense32 (float16 values on the device): the Raw path's steps below on the same float32 values, with
+    float16 -> float32 (exact) in place of the rebuild from byte pairs. Another XLA program than the Raw path's: the same
+    bits on XLA:CPU; on TPU the float32 rounding can differ (Dense32)"""
+    x, w = lax.optimization_barrier((x, h.w))
+    rows, cols = h.shape[-2], h.shape[-1]
+    rc = exact_chunk_rows(rows, cols)
+    dot = lambda w_: lax.dot_general(x.astype(f32), w_.astype(f32), (((x.ndim - 1,), (1,)), ((), ())), precision=HI,
+                                     preferred_element_type=f32)
+    if rc == rows or w.ndim != 2:
+        return dot(w).astype(x.dtype)
+    ys = lax.map(dot, w.reshape(rows // rc, rc, cols))                        # (rows // rc, ..., rc)
+    return jnp.moveaxis(ys, 0, -2).reshape(x.shape[:-1] + (rows,)).astype(x.dtype)
+
+
 def qmatmul(x, h):
     """x (..., cols) @ W.T -> (..., rows), f32 accumulation, rounded to x.dtype.
 
@@ -581,6 +613,8 @@ def qmatmul(x, h):
         return _KERNELS["module"].matmul(x, h.packed, layer=h.layer).astype(x.dtype)
     if isinstance(h, dense16.Dense16):
         return dense16.matmul(x, h)
+    if isinstance(h, Dense32) and h.t == 1:
+        return _f16_values(x, h)
     if isinstance(h, Dense32):
         return lax.dot_general(x.astype(f32), h.w, (((x.ndim - 1,), (1,)), ((), ())), precision=HI,
                                preferred_element_type=f32).astype(x.dtype)
