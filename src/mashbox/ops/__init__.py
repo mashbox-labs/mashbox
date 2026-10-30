@@ -152,7 +152,7 @@ class Mixed:
     ffn_down in Q6_K): one stacked handle per type, holding that type's layers in order, and per layer `which` stack and
     the layer's index `sub` in it ((layers,) int32 each). A lax.scan holds the stacks whole and scans which / sub
     (scan_split / scan_join); its body multiplies through a Pick, one lax.switch branch per type, so a program holds one
-    weight rebuild per type of the role instead of one per layer (unrolled layers made each program ~30x larger)."""
+    weight rebuild per type of the role instead of one per layer (unrolled, a program grows with the layer count)."""
 
     def __init__(self, stacks, which, sub, types, shape):
         self.stacks, self.which, self.sub = tuple(stacks), which, sub
