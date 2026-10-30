@@ -175,7 +175,7 @@ class Overloaded(Busy):
 
 def stop_point(chat, ids, stops):
     """Tokens up to the finish point: the shortest prefix of ids whose text holds a stop string (len(ids) if none).
-    Usage counts these, never tokens the engine decoded past the stop inside a device call (spec section 2.4)."""
+    Usage counts these, never tokens the engine decoded past the stop inside a device call."""
     if not stops or not any(x in chat.decode(ids) for x in stops):
         return len(ids)
     lo, hi = 1, len(ids)
@@ -390,7 +390,7 @@ class Server:
         again after a worker fault (its "retried" mark, runtime/front.py) goes before all. So a request of an owner with
         nothing else waiting joins at the next free row, however long other owners' queues are (bounded
         progress: a late request emits before an earlier max-length row ends). The order depends only on the
-        arrivals and the earlier admissions, never on prompt content or cached state (B1: no content-dependent
+        arrivals and the earlier admissions, never on prompt content or cached state (no content-dependent
         ordering). With one owner (no API keys) it is plain first come, first served. Fallback: an empty `wait` raises
         IndexError, as deque.popleft() does."""
         if not wait:
@@ -457,7 +457,7 @@ class Server:
 
     def hangup(self, j):
         """The client left: the engine ends the job at its next step, and a job still waiting frees its waiting count
-        at once, without waiting for a free slot (E7: hung-up requests free their count within 0.5 s)."""
+        at once, without waiting for a free slot (hung-up requests free their count within 0.5 s)."""
         j["cancel"] = True
         if "t_run" not in j:
             self._unwait(j)
@@ -491,8 +491,8 @@ class Server:
 
     def table_failed(self, jobs, e):
         """A program loaded from the saved executable table failed in a request (programs.TableFailed): the engine
-        dropped its live rows and the table, and quarantined the table's folder. This process never warms again: a compile here would be a compile after ready, and a failed device call restarts the engine's process
-        (A13). The server says not ready, every job of the call gets the error, and the process ends (exit code 70).
+        dropped its live rows and the table, and quarantined the table's folder. This process never warms again: a compile here would be a compile after ready, and a failed device call restarts the engine's process.
+        The server says not ready, every job of the call gets the error, and the process ends (exit code 70).
         `mashbox run` serves through the HTTP front, where the engine's process is a worker (runtime/worker.py
         Worker.table_failed): the front starts a new worker without the table, which compiles before it says ready,
         and sends a request whose client has received nothing once more. -> [] (nothing runs again in this process)"""
@@ -1137,7 +1137,7 @@ class RequestReader(io.RawIOBase):
 
 
 class Stalled(ConnectionResetError):
-    """consumer_stalled (INTERFACES §3.3 P6): the client stopped reading. A ConnectionResetError, so every route ends the
+    """consumer_stalled: the client stopped reading. A ConnectionResetError, so every route ends the
     request as a hang-up: the engine ends the row at its next step."""
 
 
@@ -1407,7 +1407,7 @@ def serve(server, host="127.0.0.1", port=8000, log=print, ui=False, keys=None):
         def handle_one_request(self):
             """Each request is read under a deadline (RequestReader): read_s() for its first byte, then read_s() for the
             whole request; a connection that sends nothing or half a request is closed after it, so idle or half-sent
-            connections cannot pile up. Each answer goes through a StallWriter (P6): once do_POST has read a body and
+            connections cannot pile up. Each answer goes through a StallWriter: once do_POST has read a body and
             armed it, a client that stops reading is ended after stall_s() and its connection closed. The connection's
             own timeout and writer are restored after each request, so a keep-alive connection waits for its next
             request as before."""

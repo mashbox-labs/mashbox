@@ -33,7 +33,7 @@ The same Google Cloud pages, per hour for one chip or one GPU:
 | 1 NVIDIA H100 80GB SXM | 80 GB | 3,350 GB/s | 303 GB/s | [NVIDIA](https://www.nvidia.com/en-us/data-center/h100/) |
 <!-- cloud:end -->
 
-With one user and one token per step, a language model reads every weight from memory once for each token it writes. Memory bandwidth divided by the size of the weights is therefore the ceiling on tokens per second for that user, and real runs land below it.
+With one user and one token per step, a language model reads every weight from memory once for each token it writes. Memory bandwidth divided by the size of the weights is therefore the ceiling on tokens per second for that user without speculative decoding, and real runs land below it. [Speculative decoding](models/qwen3-8-27b.md#speculative-decoding) writes more than one token per pass, so it can go past this ceiling.
 
 ## Same price per hour: TPU v6e-4 and one H100
 

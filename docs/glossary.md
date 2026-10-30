@@ -38,7 +38,7 @@ The words these docs use, each with one meaning. Google Cloud terms follow Googl
 | SSH tunnel | `-- -L <port>:127.0.0.1:<port>` on `gcloud compute tpus tpu-vm ssh`. It brings a server on the chip to the same port on your machine, so nothing is open to the internet. |
 | Thinking mode | A mode of some language models that writes its reasoning before the answer. Off by default. |
 | TPU | Tensor Processing Unit, Google's chip for machine learning, rented through Google Cloud. |
-| TPU v5e | A TPU generation with 16 GB of memory per chip. A model runs there when it fits. |
+| TPU v5e | A TPU generation with 16 GB of memory per chip. A model too big for one chip splits across the 4 chips of a v5e-4 when its row says so. |
 | TPU v6e | The default TPU generation for every model here, with 32 GB of memory per chip. |
 | TPU VM | The machine a chip is attached to. You connect to it with SSH and run the model there. |
 | Weights type | How a weights file stores its numbers: full precision, or a reduced-size type with fewer bits per weight. Each file name says its type. |

@@ -102,7 +102,7 @@ def detect_draft_model(rows, tok_sha, target_bytes):
 
 def name_free(m):
     """a matched manifest as the pick sees it: without its origin and without the target's hf_id and revision, so no
-    name reaches the choice (ST-S9)"""
+    name reaches the choice: the pick reads metadata only"""
     out = {k: v for k, v in m.items() if k not in ("origin", "target")}
     out["target"] = {k: v for k, v in m["target"].items() if k not in ("hf_id", "revision")}
     return out

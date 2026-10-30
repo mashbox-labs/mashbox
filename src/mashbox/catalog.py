@@ -19,7 +19,7 @@ import os
 KIND_LABEL = {"llm-gguf": "LLM, GGUF", "llm-tpu": "LLM", "world": "World model", "video": "Video", "image": "Image",
               "voice": "Voice", "rig": "Rigging"}
 FORMAT_LABEL = {"bshj-build": "BSHJ build", "port": "TPU port", "own-model": "MASHBOX model"}
-LEVELS = ("MASHBOX build", "Tuned", "Tested", "Architecture supported")
+LEVELS = ("MASHBOX build", "Tuned", "Tested", "Checked on CPU", "Architecture supported")
 MASHBOX = "MASHBOX Labs"
 CHIPS = ("v5e", "v6e", "v5p-8", "v6e-4")
 KERNEL_PATHS = ("bundle", "exact")
@@ -74,8 +74,9 @@ def live(reg):
 
 
 def chips_run(row):
-    """["TPU v6e-1", ...]: the accelerator of every passing chip row, in CHIPS order, each named once."""
-    out = []
+    """["CPU", "TPU v6e-1", ...]: CPU when the cpu row passes, then the accelerator of every passing chip row, in CHIPS
+    order, each named once."""
+    out = ["CPU"] if ((row.get("chips") or {}).get("cpu") or {}).get("status") == "passing" else []
     for c in CHIPS:
         r = (row.get("chips") or {}).get(c) or {}
         if r.get("status") == "passing":
@@ -122,15 +123,50 @@ def _params(p):
     return t + (f", {p['active']:g}B active" if p.get("active") is not None else "")
 
 
+def cpu_checked(row):
+    """True for a gguf[] row whose CPU check against llama.cpp passed (cpu_check.status "passing", copied from its
+    sealed record; the record guard holds every number to it)."""
+    return (row.get("cpu_check") or {}).get("status") == "passing"
+
+
+def cpu_line(row):
+    """The CPU check of a gguf[] row in words, with its numbers: "Runs, checked against llama.cpp on CPU: ..."; None
+    when its CPU check did not pass."""
+    if not cpu_checked(row):
+        return None
+    c = row["cpu_check"]
+    same, block, g = c["identical_weights"], c["block_path"], c["greedy"]
+    return (f"Runs, checked against llama.cpp on CPU: same weights NMSE {same['nmse']:g}, top-1 {same['top1']}; "
+            f"llama.cpp's own path top-1 {block['top1']}; greedy {g['prompts']} x {g['tokens']} tokens: {g['full']} "
+            f"identical, {g['near_tie']} near tie")
+
+
+def tpu_line(row):
+    """What a gguf[] row says about TPUs: the chips it passed on, else the arch x block-type smoke that covers it with
+    that smoke's own number, else "TPU: Not tested yet"."""
+    run = chips_run(row)
+    if run:
+        return "Runs on: " + ", ".join(run)
+    for c in CHIPS:
+        sm = ((row.get("chips") or {}).get(c) or {}).get("smoke")
+        if sm:
+            return (f"TPU {sm['accelerator']}: {sm['decode_tok_s_1_user']:g} tok/s, 1 user, measured on {sm['row']} "
+                    "(same architecture and block types)")
+    return "TPU: Not tested yet"
+
+
 def level(row, ours=False):
     """The support level of a row, computed from what the row records (never stored): every models[] row is a MASHBOX
-    build; a gguf[] row with a passing chip run is Tested, and Tuned when it also has a tuned piece; a row with no
-    passing run claims only its architecture (validate() keeps such a row out of models.json)."""
+    build; a gguf[] row with a passing chip run is Tested, and Tuned when it also has a tuned piece; a gguf[] row with
+    no chip run whose CPU check against llama.cpp passed is Checked on CPU; any other row claims only its architecture
+    (validate() keeps such a row out of models.json)."""
     if ours:
         return LEVELS[0]
     if row.get("tuned") and chips_run(row):
         return LEVELS[1]
-    return LEVELS[2] if chips_run(row) else LEVELS[3]
+    if chips_run(row):
+        return LEVELS[2]
+    return LEVELS[3] if cpu_checked(row) else LEVELS[4]
 
 
 def ours(reg):
@@ -173,7 +209,8 @@ def gguf_rows(reg):
             "repo": g["repo"], "revision": g["revision"], "sha256": g["sha256"], "gb": round(g["bytes"] / 1e9, 2),
             "params": _params(g.get("params_b")), "arch": g["arch"], "moe": g["moe"], "types": g["types"],
             "format": "GGUF", "level": level(g), "experimental": bool(g.get("experimental")), "chips": chips_run(g),
-            "tok_s_1_user": tok, "tok_s_chip": chip, "run": g["run"],
+            "tok_s_1_user": tok, "tok_s_chip": chip, "run": g["run"], "cpu": cpu_line(g),
+            "tpu": None if chips_run(g) else tpu_line(g),
             "file_url": f"https://huggingface.co/{g['repo']}/blob/{g['revision']}/{g['file']}",
             "license": g["license"], "license_link": g.get("license_link"), "base": g.get("base"),
         })
@@ -265,6 +302,7 @@ def render_text(reg, src=None):
                     out.append(f"  {m['name']}" + (f"  (base {m['base']})" if m["base"] else ""))
                 out.append(f"    {r['file']}  {r['tag']}  {r['gb']:g} GB" + (f"  {r['params']}" if r["params"] else "")
                            + f"  {r['level']}{flag}" + (f"  {_speed(r)}" if _speed(r) else ""))
+                out += [f"      {x}" for x in (r["cpu"], r["tpu"]) if x]
                 out.append(f"      {r['run']}")
     if e["archs"]:
         out.append("")
@@ -301,7 +339,8 @@ def render_markdown(reg, src=None):
                 else:
                     model = f"**{m['name']}**{flag}" + (f"<br>base {m['base']}" if m["base"] else "")
                     what = f"[{r['file']}]({r['file_url']})<br>GGUF {r['tag']}, {r['gb']:g} GB"
-                rows.append([model, what, r["level"], ", ".join(r["chips"]), _speed(r), f"`{r['run']}`"])
+                level = r["level"] + "".join(f"<br>{x}" for x in (r.get("cpu"), r.get("tpu")) if x)
+                rows.append([model, what, level, ", ".join(r["chips"]), _speed(r), f"`{r['run']}`"])
         head = f"## {p['name']}" + (f" ([Hugging Face]({p['hf']}))" if p["hf"] else "")
         out += ([""] if out else []) + [head, "", _table(["Model", "Format or file", "Level", "Runs on", "Speed", "Run"],
                                                            rows)]

@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -32,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location("sync_check", ROOT / "tools" / "hf_github_sync_check.py")
 SC = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(SC)
+ML = SC._lists()   # the model lists every docs page renders (the docs catalog by family)
 _spec = importlib.util.spec_from_file_location("gguf_fixtures", ROOT / "tools" / "gguf_fixtures" / "fixtures.py")
 FXT = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(FXT)
@@ -43,7 +45,7 @@ ROW = {"id": "tiny-qwen3-gguf-q4-k-m", "model": "tiny-qwen3", "publisher": "some
        "revision": "0" * 40, "file": "Tiny-Qwen3-Q4_K_M.gguf", "tag": "Q4_K_M", "sha256": "a" * 64, "bytes": 1234,
        "arch": "qwen3", "moe": False, "params_b": {"total": 0.5, "active": None}, "types": ["F32", "Q4_K", "Q6_K"],
        "license": "apache-2.0", "license_link": "https://huggingface.co/someone/Tiny-Qwen3-GGUF/blob/main/LICENSE",
-       "base": "someone/Tiny-Qwen3", "in": "text", "out": "text", "run": "mashbox run someone/Tiny-Qwen3-GGUF:Q4_K_M",
+       "base": "Qwen/Tiny-Qwen3", "in": "text", "out": "text", "run": "mashbox run someone/Tiny-Qwen3-GGUF:Q4_K_M",
        "experimental": False,
        "chips": {"v6e": {"status": "passing", "accelerator": "v6e-1", "ctx": 2048, "slots": 8, "kernel_path": "exact",
                          "measured": {"decode_tok_s_1_user": 50.5, "decode_tok_s_8_users": 300.25}}}}
@@ -106,7 +108,7 @@ def test_a_confirmed_row_validates_and_every_rule_catches_its_bad_form():
         "date": dict(ROW, chips={"v6e": dict(ROW["chips"]["v6e"], date="2026-10-28")}),
         "date value": dict(ROW, chips={"v6e": dict(ROW["chips"]["v6e"], measured=dict(ROW["chips"]["v6e"]["measured"],
                                                                                        when="2026-10-28"))}),
-        "date in text": dict(ROW, base="someone/Tiny-Qwen3 (read 2026-10-28T23:00Z)"),
+        "date in text": dict(ROW, base="Qwen/Tiny-Qwen3 (read 2026-10-28T23:00Z)"),
         "status": dict(ROW, chips={"v6e": dict(ROW["chips"]["v6e"], status="pending")}),
         "chip": dict(ROW, chips={"v7": ROW["chips"]["v6e"]}),
         "speed": dict(ROW, chips={"v6e": dict(ROW["chips"]["v6e"], measured={})}),
@@ -130,7 +132,7 @@ def test_a_confirmed_row_validates_and_every_rule_catches_its_bad_form():
     dated["models"][0]["catalog"]["family"] = "Hy-Nomas 2026-10-28"
     assert any("no dates" in x for x in problems(dated))
     # a word that only contains "date" is not a date
-    assert problems(with_row(dict(ROW, base="someone/Tiny-Qwen3-candidate"))) == []
+    assert problems(with_row(dict(ROW, base="Qwen/Tiny-Qwen3-candidate"))) == []
 
 
 # a mixture-of-experts row (8 experts in the file's metadata, an active count below the total) that passes on v6e
@@ -200,8 +202,8 @@ def test_views_are_the_render():
     assert mt.group(2).strip() == catalog.archs_block(REG).strip()
     for page in sorted((ROOT / "docs").rglob("*.md")):
         mt = SC.CATALOG_RE.search(page.read_text())
-        if mt:
-            assert mt.group(2).strip() == catalog.render_markdown(REG).strip(), page
+        if mt:   # the docs catalog is the model lists' render (tools/model_lists.py), by family
+            assert mt.group(2).strip() == ML.render_markdown(REG).strip(), page
     assert not (ROOT / "docs" / "models.md").exists()
     assert "(models.md)" not in (ROOT / "docs" / "SUMMARY.md").read_text()
 
@@ -258,7 +260,7 @@ def test_views_group_by_publisher_then_model_then_file():
     assert [(m["name"], m["base"], [r["id"] for r in m["rows"]]) for m in pubs[1]["models"]] == [
         ("Tiny-Qwen3", ROW["base"], [ROW["id"], other["id"]])]
     t = catalog.render_text(reg)
-    assert t.index("MASHBOX Labs") < t.index("\nsomeone\n") < t.index("  Tiny-Qwen3  (base someone/Tiny-Qwen3)") < t.index(
+    assert t.index("MASHBOX Labs") < t.index("\nsomeone\n") < t.index(f"  Tiny-Qwen3  (base {ROW['base']})") < t.index(
         ROW["run"]) < t.index(other["run"])
     assert "tok/s" not in t.split("\nsomeone\n")[1]       # an exact-path row shows no speed (test below)
     md = catalog.render_markdown(reg)
@@ -300,7 +302,7 @@ def test_one_sorted_tree_whatever_the_order_of_the_rows():
     rows = [ROW,
             dict(ROW, id="tiny-qwen3-gguf-q8-0", tag="Q8_0", file="Tiny-Qwen3-Q8_0.gguf", sha256="c" * 64,
                  run="mashbox run someone/Tiny-Qwen3-GGUF:Q8_0"),
-            dict(ROW, id="alpha-gguf-q4-k-m", model="alpha", base="someone/Alpha", repo="someone/Alpha-GGUF",
+            dict(ROW, id="alpha-gguf-q4-k-m", model="alpha", base="Qwen/Alpha", repo="someone/Alpha-GGUF",
                  file="Alpha-Q4_K_M.gguf", sha256="d" * 64, run="mashbox run someone/Alpha-GGUF:Q4_K_M"),
             dict(ROW, id="tiny-qwen3-gguf-q4-k-m-b", publisher="Another", repo="Another/Tiny-Qwen3-GGUF",
                  sha256="e" * 64, run="mashbox run Another/Tiny-Qwen3-GGUF:Q4_K_M")]
@@ -321,7 +323,7 @@ def test_one_sorted_tree_whatever_the_order_of_the_rows():
         assert _tree(shuffled) == want, seed
         assert catalog.render_text(shuffled) == text and catalog.render_markdown(shuffled) == md, seed
     # one model id, one name
-    reg["gguf"][1]["base"] = "someone/Tiny-Qwen3-Other"
+    reg["gguf"][1]["base"] = "Qwen/Tiny-Qwen3-Other"
     assert any("one name per model" in x for x in problems(reg))
 
 
@@ -595,7 +597,8 @@ REQUIRE = os.environ.get("MASHBOX_REQUIRE_RECORDS") == "1"
 ARCHS_SRC = "src/mashbox/gguf/archs/__init__.py"
 # code set v1 of a GGUF row: the `mashbox run <gguf>` entry path by role. A row's
 # record stands only when each of these files, everything they import inside src/mashbox, the arch's module and every
-# ops/ file are byte-equal to the code it ran, and so are the engine_kernels rows of models.json the loader reads.
+# ops/ file hold the same code as the code it ran (compared as code: _code_only), and the engine_kernels rows of
+# models.json the loader reads are equal.
 CODE_SET_VERSION = 1
 CODE_SET = {
     "entry": ("src/mashbox/__main__.py", "src/mashbox/__init__.py", "src/mashbox/cli.py"),
@@ -687,7 +690,8 @@ def _git(git_dir, *args):
 
 def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None):
     """the record's code commit (in git_dir) against this tree: ARCHS maps the arch to the same module, every file of
-    gguf_code_files is byte-equal, and no ops/ file the record ran is missing here"""
+    gguf_code_files holds the same code (_code_only: comments, docstrings and import lines never void a record, as for
+    a CPU record), and no ops/ file the record ran is missing here"""
     if _git(git_dir, "cat-file", "-e", f"{commit}^{{commit}}") is None:
         return [f"{what}: the code the record ran ({commit[:12]}) is not in {git_dir}"]
     out = []
@@ -703,7 +707,7 @@ def code_problems(repo, git_dir, commit, arch, what, kernels=None, chip_of=None)
         old = _git(git_dir, "show", f"{commit}:{f}")
         if old is None:
             out.append(f"{what}: {f} is not in the code the record ran ({commit[:12]})")
-        elif old != (repo / f).read_bytes():
+        elif _code_only(f, old) != _code_only(f, (repo / f).read_bytes()):
             out.append(f"{what}: {f} differs from the code the record ran ({commit[:12]})")
     if chip_of is not None:     # models.json's engine_kernels rows pick the kernel package the loader runs (rule 2a)
         try:
@@ -950,7 +954,12 @@ def evidence_problems(reg, ev, repo, work=None):
         for ch in k["chips"]:
             manifests[ch] = man
     for g in reg.get("gguf") or []:
+        if "cpu_check" in g:
+            out += cpu_record_problems(g, (ev.get("gguf") or {}).get(g["id"], {}).get("cpu_check"), read, root, repo,
+                                       git_dir, f"{g['id']} cpu_check")
         for chip, r in g["chips"].items():
+            if r.get("status") == "pending":      # nobody ran it there: "Not tested yet", no record claimed
+                continue
             what = f"{g['id']} {chip}"
             e = (ev.get("gguf") or {}).get(g["id"], {}).get(chip)
             if e is None:
@@ -1052,6 +1061,150 @@ def evidence_problems(reg, ev, repo, work=None):
                 for t in g["types"]:
                     if t not in catalog.UNQUANTIZED and t not in (man.get("impl") or {}):
                         out.append(f"{what}: the release bundle has no {t} kernel")
+    return out
+
+
+# The locked CPU bars a cpu_check row's record must carry, and the files whose code
+# decides a CPU record: the import closure inside src/mashbox of tools/gguf_conform.py and the record's arch module, plus
+# that tool and the llama.cpp reference sources it builds. Nothing else voids a record (measured numbers stand):
+# tools/gguf_scan.py, other architectures, ops the arch does not import, comments, docstrings and import lines.
+CPU_BARS = dict(identical_weights_nmse_max=1e-4, top1_min_share=15 / 16, near_tie_gap=NEAR_TIE_GAP,
+                other_divergences_max=0, dequant_vs_gguf_py="bit-exact", dequant_vs_ggml_max_ulp=1)
+CPU_TOOL = "tools/gguf_conform.py"
+# imported only by gguf.archs.held (the MoE hold): it refuses a MoE architecture before any check and holds no dense one,
+# and no MoE row is listed from a CPU check, so the catalog view never decides a CPU record
+CPU_NOT_DECIDING = ("src/mashbox/catalog.py",)
+CPU_REFERENCE = ("tools/gguf_fixtures/llama_greedy.cpp", "tools/gguf_fixtures/llama_logits.cpp",
+                 "tools/gguf_fixtures/ggml_dequant.c")
+
+
+def cpu_record_files(repo, arch):
+    """the files that decide a CPU record of a file of `arch` (sorted); [] when ARCHS has no such arch"""
+    mod = _archs_map((repo / ARCHS_SRC).read_text()).get(arch)
+    if mod is None:
+        return []
+    return sorted((import_closure(repo, [CPU_TOOL, _module_file(repo, mod)]) | set(CPU_REFERENCE)) - set(CPU_NOT_DECIDING))
+
+
+def _code_only(path, data):
+    """what decides a file's behaviour: the bytes of a non-Python file; for Python, its syntax tree without import
+    lines and docstrings (so an unused import or a comment never voids a measured record)"""
+    if not path.endswith(".py"):
+        return data
+    tree = ast.parse(data)
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list):
+            body[:] = [b for b in body if not isinstance(b, (ast.Import, ast.ImportFrom))]
+            if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                body.pop(0)
+    return ast.dump(tree)
+
+
+def conform_code_id(git_dir, commit):
+    """gguf_conform.code_id() of the tree at `commit`, read with git: sha256 over (path NUL bytes NUL) of every file its
+    CODE_FILES patterns match there, sorted by path; None when the commit or the tool is missing"""
+    src = _git(git_dir, "show", f"{commit}:{CPU_TOOL}")
+    names = _git(git_dir, "ls-tree", "-r", "--name-only", commit)
+    if src is None or names is None:
+        return None
+    pats = next((ast.literal_eval(n.value) for n in ast.parse(src).body if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == "CODE_FILES" for t in n.targets)), [])
+
+    def hit(name, pat):
+        a, b = name.split("/"), pat.split("/")
+        return len(a) == len(b) and all(fnmatch.fnmatchcase(x, y) for x, y in zip(a, b))
+    h = hashlib.sha256()
+    for f in sorted(n for n in names.decode().split() if any(hit(n, q) for q in pats)):
+        h.update(f.encode() + b"\0" + _git(git_dir, "show", f"{commit}:{f}") + b"\0")
+    return h.hexdigest()
+
+
+def cpu_check_of(rec):
+    """a row's cpu_check block computed from its sealed gguf_conform record (tools/gguf_rows.py writes the same)"""
+    c, tk, same = rec["c_cpu"], rec["b_tokenizer"], rec["c_cpu"]["identical_weights"]
+    return dict(status="passing" if rec["verdict"] == "cpu-checked" else "failing",
+                reference=f"llama.cpp {rec['versions']['llama_cpp'][:7]} CPU",
+                identical_weights=dict(nmse=float(f"{same['nmse']:.2g}"), top1=f"{same['top1_agree']}/{same['positions']}"),
+                block_path=dict(top1=f"{c['top1_agree']}/{c['positions']}", kl=float(f"{c['kl_mean']:.2g}")),
+                greedy=dict(prompts=c["prompts"], tokens=c["n_gen"], full=c["full_match"],
+                            near_tie=c["near_tie_divergences"], other=c["other_divergences"]),
+                tokenizer=dict(texts=tk["texts"], equal=tk["nfc_equal"], explained=tk["nfc_explained"]))
+
+
+def cpu_record_problems(g, e, read, root, repo, git_dir, what):
+    """A cpu_check row against its sealed gguf_conform record ([] when it holds): the evidence names the record, its
+    SHA256SUMS, card.json, header.bin and the quant record (path + sha256 under the records root; the seal lists the
+    first three), the code commit, and `decides` (the files that decide it, never fewer than cpu_record_files). The
+    record is a gguf-conformance record of this row's repo, revision, file, sha256, size, arch, moe and types, with the
+    locked bars, a verdict matching the status, and every cpu_check value equal to the record's (cpu_check_of); the
+    quant record is the one it names and passes every quantized type of the file; the pinned card names this repo,
+    revision and licence. Code: the commit's gguf_conform code id equals the record's (so it is the code that ran),
+    and only the files in `decides` must hold the same code in this tree (_code_only)."""
+    if e is None:
+        return [f"{what}: no evidence entry"]
+    out = []
+    have = {k: read(e[k], f"{what} {k}") if k in e else out.append(f"{what}: no {k} in the evidence")
+            for k in ("record", "sha256sums", "card", "header", "quant")}
+    if have["sha256sums"] is not None:
+        listed = _sums(have["sha256sums"])
+        out += seal_problems(have["sha256sums"], root, what)
+        for k in ("record", "card", "header"):
+            if k in e and listed.get(os.path.normpath(e[k]["path"])) != e[k]["sha256"]:
+                out.append(f"{what}: {e[k]['path']} is not in {have['sha256sums'].name} with its sha256")
+    rec, card = have["record"], have["card"]
+    if isinstance(rec, dict):
+        pin = rec.get("pin") or {}
+        for k, want in (("kind", "gguf-conformance"), ("pin.repo", g["repo"]), ("pin.revision", g["revision"]),
+                        ("pin.file", g["file"]), ("sha256", g["sha256"]), ("bytes", g["bytes"]), ("arch", g["arch"]),
+                        ("moe", g["moe"]), ("types", g["types"])):
+            got = pin.get(k[4:]) if k.startswith("pin.") else rec.get(k)
+            if got != want:
+                out.append(f"{what}: the record's {k} is {got!r}, the row says {want!r}")
+        bars = {k: (rec.get("bars") or {}).get(k) for k in CPU_BARS}
+        if bars != CPU_BARS:
+            out.append(f"{what}: the record's bars {bars} are not the locked CPU bars {CPU_BARS}")
+        try:
+            want = cpu_check_of(rec)
+        except (KeyError, TypeError, ValueError):
+            want = None
+            out.append(f"{what}: the record has no complete CPU check")
+        if want is not None and want != g["cpu_check"]:
+            diff = sorted(k for k in set(want) | set(g["cpu_check"]) if want.get(k) != g["cpu_check"].get(k))
+            out.append(f"{what}: cpu_check {diff} differ from the record (status from verdict {rec.get('verdict')!r})")
+        q = rec.get("d_quant") or {}
+        if "quant" in e and q.get("record_sha256") != e["quant"]["sha256"]:
+            out.append(f"{what}: the record names quant record {str(q.get('record_sha256'))[:16]}, the evidence another")
+        lack = [t for t in g["types"] if t not in catalog.UNQUANTIZED and (q.get("types") or {}).get(t) is not True]
+        if lack:
+            out.append(f"{what}: the record's quant check does not pass {lack}")
+        if git_dir and "code" in e:
+            commit = e["code"].get("commit", "")
+            cid = conform_code_id(git_dir, commit)
+            if cid is None or cid != (rec.get("code") or {}).get("sha256"):
+                out.append(f"{what}: the code id at {commit[:12]} is {str(cid)[:16]}, the record ran "
+                           f"{str((rec.get('code') or {}).get('sha256'))[:16]}")
+            need = cpu_record_files(repo, g["arch"])
+            decides = list(e.get("decides") or [])
+            if not need or set(need) - set(decides):
+                out.append(f"{what}: decides must list every file that decides the record: {sorted(set(need) - set(decides))}")
+            for f in sorted(set(need) | set(decides)):
+                old, now = _git(git_dir, "show", f"{commit}:{f}"), repo / f
+                if old is None:
+                    out.append(f"{what}: {f} is not in the code the record ran ({commit[:12]})")
+                elif not now.is_file() or _code_only(f, old) != _code_only(f, now.read_bytes()):
+                    out.append(f"{what}: {f} differs from the code the record ran ({commit[:12]})")
+        elif "code" not in e:
+            out.append(f"{what}: no code in the evidence")
+    if isinstance(card, dict):
+        cd = card.get("cardData") or {}
+        for field, ours, theirs in (("repo", g["repo"], card.get("id")), ("revision", g["revision"], card.get("sha")),
+                                    ("license", g["license"], cd.get("license"))):
+            if ours != theirs:
+                out.append(f"{what}: {field} {ours!r}, the pinned card says {theirs!r}")
+    elif card is not None:
+        out.append(f"{what}: the card snapshot is not JSON")
     return out
 
 
@@ -1676,12 +1829,12 @@ BAD_FORMS = {
                                        "file-row.sha256 names another"),
     "the plan names another revision": (_set("plan", lambda t: t.replace(ROW["revision"], "1" * 40)),
                                         "plan-row.txt is not"),
-    "the arch's module differs": (_code(MODS["qwen3"], lambda b: b + b"# changed\n"), "dense.py differs"),
-    "a module the arch's module imports differs": (_code("src/mashbox/gguf/archs/qwen35.py", lambda b: b + b"#\n"),
+    "the arch's module differs": (_code(MODS["qwen3"], lambda b: b + b"\n_guard_probe = 1\n"), "dense.py differs"),
+    "a module the arch's module imports differs": (_code("src/mashbox/gguf/archs/qwen35.py", lambda b: b + b"\n_guard_probe = 1\n"),
                                                    "qwen35.py differs"),
-    "a module two imports down differs": (_code("src/mashbox/models/qwen3_8_27b/model.py", lambda b: b + b"#\n"),
+    "a module two imports down differs": (_code("src/mashbox/models/qwen3_8_27b/model.py", lambda b: b + b"\n_guard_probe = 1\n"),
                                           "model.py differs"),
-    "the reader differs": (_code("src/mashbox/gguf/reader.py", lambda b: b + b"#\n"), "reader.py differs"),
+    "the reader differs": (_code("src/mashbox/gguf/reader.py", lambda b: b + b"\n_guard_probe = 1\n"), "reader.py differs"),
     "ARCHS ran the arch with another module": (_code(ARCHS_SRC, lambda b: b.replace(
         b'"qwen3": "mashbox.gguf.archs.dense"', b'"qwen3": "mashbox.gguf.archs.qwen35"')), "the record's code ran it"),
     "an ops file the record ran is gone": (_code("src/mashbox/ops/gone.py", lambda b: b"x = 1\n"),
@@ -1719,7 +1872,7 @@ BAD_FORMS = {
     "the code repo is outside the records root through ..": (_set("ev", lambda e: e.__setitem__(
         "code_repo", e["records_root"] + "/" + os.path.relpath(ROOT, e["records_root"]))), "is not under"),
     # problem 5: gguf/__init__.py (open_model, fit_slots) is in the code set; the file sha256 needs its size line
-    "gguf/__init__.py differs": (_code("src/mashbox/gguf/__init__.py", lambda b: b + b"#\n"), "__init__.py differs"),
+    "gguf/__init__.py differs": (_code("src/mashbox/gguf/__init__.py", lambda b: b + b"\n_guard_probe = 1\n"), "__init__.py differs"),
     "file-*.sha256 has no size line": (_set("file", lambda t: t.split("\n")[0] + "\n"), "has no size line"),
     # The MoE rule: the expert count is the file's own metadata, read from the sealed header (never a record
     # field); the routed experts ran on the kernel
@@ -1858,7 +2011,7 @@ BAD_FORMS = {
     "the row's licence link is not the card's": (_set("reg", lambda r: r["gguf"][0].__setitem__(
         "license_link", ROW["license_link"] + ".txt")), "LICENSE.txt', the pinned card says"),
     "the row's base is not the card's": (_set("reg", lambda r: r["gguf"][0].__setitem__("base", "someone/Other")),
-                                         "base 'someone/Other', the pinned card says 'someone/Tiny-Qwen3'"),
+                                         f"base 'someone/Other', the pinned card says '{ROW['base']}'"),
     "the card is another repo's": (_set("card", lambda c: c.__setitem__("id", "someone/Other-GGUF")),
                                    "repo 'someone/Tiny-Qwen3-GGUF', the pinned card says 'someone/Other-GGUF'"),
     "the card is at another revision": (_set("card", lambda c: c.__setitem__("sha", "1" * 40)),
@@ -1887,10 +2040,20 @@ REVIEWED_CODE_SET_V1 = (
 
 @pytest.mark.parametrize("member", REVIEWED_CODE_SET_V1)
 def test_record_guard_refuses_a_row_when_any_code_set_member_differs(tmp_path, member):
-    """One mutation per member of the code set (the `mashbox run <gguf>` entry path by role): the guard names it"""
-    reg, ev = _fake_records(tmp_path, _code(member, lambda b: b + b"#\n"))
+    """One code change (a new statement) per member of the code set (the `mashbox run <gguf>` entry path by role): the
+    guard names it"""
+    reg, ev = _fake_records(tmp_path, _code(member, lambda b: b + b"\n_guard_probe = 1\n"))
     found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
     assert any(f"{member} differs" in x for x in found), found
+
+
+@pytest.mark.parametrize("member", REVIEWED_CODE_SET_V1)
+def test_record_guard_keeps_a_row_when_a_code_set_member_differs_only_in_a_comment(tmp_path, member):
+    """One guard model for every record (chip rows as CPU rows): the code set is compared as code, so a comment, a
+    docstring or an import line never voids a measured record; a new statement does (the test above)"""
+    reg, ev = _fake_records(tmp_path, _code(member, lambda b: b + b"\n# a comment, no code\n"))
+    found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
+    assert not any(f"{member} differs" in x for x in found), found
 
 
 def test_the_code_set_is_the_reviewed_v1_and_names_only_files_of_this_tree():
@@ -2068,7 +2231,7 @@ def test_record_guard_holds_a_record_from_before_code_ids_on_the_commit_path(tmp
     reg, ev = _fake_records(tmp_path, _no_code_id)
     assert "code_id" not in ev["gguf"][ROW["id"]]["v6e"]
     assert evidence_problems(reg, ev, ROOT, tmp_path / "fit") == []
-    reg, ev = _fake_records(tmp_path / "b", _both(_no_code_id, _code(MODS["qwen3"], lambda b: b + b"# changed\n")))
+    reg, ev = _fake_records(tmp_path / "b", _both(_no_code_id, _code(MODS["qwen3"], lambda b: b + b"\n_guard_probe = 1\n")))
     assert any("dense.py differs" in x for x in evidence_problems(reg, ev, ROOT, tmp_path / "fit"))
 
 
@@ -2076,7 +2239,7 @@ def test_a_code_id_does_not_replace_the_code_set(tmp_path):
     """a sealed code id that binds the record to its commit does not stand in for the code set: the packaged catalog
     (src/mashbox/models.json) is under src/, so the src tree differs with every catalog row, and a code set member that
     differs fails the row whatever its code id says"""
-    reg, ev = _fake_records(tmp_path, _code(MODS["qwen3"], lambda b: b + b"# changed\n"))
+    reg, ev = _fake_records(tmp_path, _code(MODS["qwen3"], lambda b: b + b"\n_guard_probe = 1\n"))
     assert "code_id" in ev["gguf"][ROW["id"]]["v6e"]
     found = evidence_problems(reg, ev, ROOT, tmp_path / "fit")
     assert any("dense.py differs" in x for x in found) and not any("code id" in x for x in found), found
@@ -2237,6 +2400,58 @@ def test_the_release_check_finds_every_file_in_the_one_public_repo():
         f"hf {m['hf_repo']}: files[{len(own)}] Extra-BQ8_R.bshj is in someone/Other-Repo: every file of a released "
         f"model is in its one public repo {m['hf_repo']}"]
     assert any(f"{own[0]} is not in {m['hf_repo']} at {rev[:12]}" in x for x in found(own[1:]))
+
+
+def test_a_card_names_a_hugging_face_tag_only_when_the_tag_points_at_the_pinned_revision():
+    """uploading a card makes a new revision that no tag points at, and a tag is never moved (a move deletes it first), so
+    the card names the weights by file and sha256, never by tag, and check --online refuses a card line that names a tag
+    of its repo pointing at any other revision; hf_tag (the dated weights version) must point at a revision whose weights
+    file is the one models.json pins, which a card-only revision after it keeps"""
+    m = copy.deepcopy(next(x for x in REG["models"] if x["id"] == "track2rig"))
+    reg = dict(copy.deepcopy(REG), models=[m])
+    rev, old, tag = m["hf_revision"], "9" * 40, m["hf_tag"]
+    w = next(f for f in m["files"] if f["kind"] == "weights" and f.get("default"))
+    card = SC.render_card(reg, m, ROOT / "templates" / "hf", ROOT)
+    assert tag not in card and f"`{w['name']}` has sha256 `{w['sha256']}`" in card
+    base = f"https://huggingface.co/api/models/{m['hf_repo']}"
+
+    class Fetch:
+        def __init__(self, card, tag_rev, tag_weights):
+            self.card, self.tag_rev, self.tag_weights = card, tag_rev, tag_weights
+
+        def get(self, url):
+            if url == base:
+                return 200, json.dumps({"sha": rev})
+            if url == base + "/refs":
+                return 200, json.dumps({"tags": [{"name": tag, "targetCommit": "4" * 40}],
+                                        "branches": [{"name": "main", "targetCommit": rev}]})
+            if url.startswith(base + "/revision/"):
+                r = url[len(base + "/revision/"):].split("?")[0]
+                r = self.tag_rev if r == tag else r
+                sha = self.tag_weights if r == self.tag_rev else w["sha256"]
+                return 200, json.dumps({"sha": r, "siblings": [
+                    {"rfilename": f["name"], "lfs": {"sha256": sha if f is w else f.get("sha256")}} for f in m["files"]]})
+            if url == f"https://huggingface.co/{m['hf_repo']}/raw/{rev}/README.md":
+                return 200, self.card
+            return 404, ""
+
+        def status(self, url):      # the card's links are checked too; not this test's subject
+            return 200
+
+    def found(card, tag_rev, tag_weights=w["sha256"]):
+        p = SC.Problems()
+        SC.check_online(reg, {f"hf/{m['id']}/README.md": card}, Fetch(card, tag_rev, tag_weights), p)
+        return [x for x in p if x.startswith(f"hf {m['hf_repo']}: ") and ("Hugging Face tag" in x or "hf_tag" in x)]
+    named = card.replace(f"`{w['name']}` has sha256", f"`{w['name']}` (weights version `{tag}`) has sha256")
+    line = next(i + 1 for i, x in enumerate(named.splitlines()) if tag in x)
+    assert found(named, old) == [
+        f"hf {m['hf_repo']}: the card at {rev[:12]} line {line} names the Hugging Face tag {tag}, which points at "
+        f"{old[:12]}, not at the pinned revision {rev[:12]}: a card names no tag, or only a tag of the revision it is on"]
+    assert found(named, rev) == []                      # the tag points at the pinned revision: true, allowed
+    assert found(card, old) == []                       # the card names no tag: the tag may point at an older revision
+    assert found(card, old, "0" * 64) == [              # ... but only at one with the same weights file
+        f"hf {m['hf_repo']}: hf_tag {tag}: {w['name']} at tag {tag} has sha256 {'0' * 12}, models.json pins "
+        f"{w['sha256'][:12]}"]
 
 
 def test_no_private_repository_reaches_a_public_view():
@@ -2792,3 +3007,243 @@ def test_a_not_supported_row_that_prints_not_tested_yet_prints_not_supported_now
     m = copy.deepcopy(hy)
     m["chips"]["v5e"] = {**base, "date": "2026-10-28", "note": "Not tested yet: not supported by this release"}
     assert SC.chip_text(m, "v5e") == "Not tested yet: not supported by this release"   # what the rule keeps off the pages
+
+
+def test_a_page_never_makes_fitting_one_chip_the_condition_while_a_model_passes_split_across_a_host():
+    """README and docs/chips.md said "A model runs on v5e when its weights and working memory fit in 16 GB" while
+    Qwen3.8-27B (26.94 GB) passes on a v5e-4, split across its 4 chips. A sentence that makes fitting one chip the
+    condition to run on a chip type names the host of several chips or the split, for every chip type a model passes
+    on that way; the public pages say so."""
+    hosts = SC.multi_chip_hosts(REG)
+    assert hosts.get("v5e") == ["v5e-4"], hosts
+    for kind, hs in hosts.items():
+        assert SC.chip_fit_problems(REG, f"A model runs on {kind} when its weights fit in one chip."), kind
+        assert SC.chip_fit_problems(REG, f"TPU {kind} | One chip each. A model runs there when it fits. |"), kind
+        assert SC.chip_fit_problems(REG, f"A model runs on {kind} when it fits one chip, or on a {hs[0]} otherwise.") == []
+        assert SC.chip_fit_problems(REG, f"A model runs on {kind} if it fits; a larger one splits across chips.") == []
+    assert SC.chip_fit_problems(REG, "A model runs on v5p when it fits in 95 GB.") == []      # no host of several v5p
+    assert SC.chip_fit_problems(REG, "A TPU v5e chip has 16 GB.") == []                       # a spec, no condition
+    found = [(rel, why) for rel, raw in SC.guard_pages(REG, ROOT) for line in SC._guard_text(raw).splitlines()
+             for why in SC.chip_fit_problems(REG, line)]
+    assert found == [], found
+
+
+# ---------------------------------------------------------------- Checked on CPU
+
+CPU = dict(status="passing", reference="llama.cpp a37cc46 CPU", identical_weights=dict(nmse=4.2e-12, top1="131/131"),
+           block_path=dict(top1="128/131", kl=0.0021), greedy=dict(prompts=4, tokens=16, full=3, near_tie=1, other=0),
+           tokenizer=dict(texts=8, equal=8, explained=0))
+
+
+def cpu_row(**kw):
+    """ROW with no chip run: its CPU check against llama.cpp passed and its chip is pending with the reason"""
+    return {**ROW, "cpu_check": copy.deepcopy(CPU),
+            "chips": {"v6e": dict(status="pending", not_run_reason="no chip run of this file")}, **kw}
+
+
+def test_a_row_with_a_passing_cpu_check_and_no_chip_run_is_checked_on_cpu():
+    row = cpu_row()
+    assert problems(with_row(row)) == []
+    assert catalog.level(row) == "Checked on CPU" and catalog.LEVELS.index("Checked on CPU") == 3
+    text = catalog.render_text(with_row(row))
+    assert ("Runs, checked against llama.cpp on CPU: same weights NMSE 4.2e-12, top-1 131/131; llama.cpp's own path "
+            "top-1 128/131; greedy 4 x 16 tokens: 3 identical, 1 near tie") in text
+    assert "TPU: Not tested yet" in text and "Checked on CPU" in catalog.render_markdown(with_row(row))
+    assert catalog.level(dict(ROW, cpu_check=copy.deepcopy(CPU))) == "Tested"    # a chip run outranks the CPU check
+
+
+def test_a_cpu_only_row_needs_a_passing_check_and_every_chip_pending_with_its_reason():
+    failing = cpu_row(cpu_check=dict(CPU, status="failing"))
+    assert any("no passing chip" in x for x in problems(with_row(failing))) and catalog.level(failing) == "Architecture supported"
+    other = cpu_row(cpu_check=dict(CPU, greedy=dict(CPU["greedy"], full=2, other=1)))
+    assert any("0 other greedy divergences" in x for x in problems(with_row(other)))
+    for chips in ({"v6e": dict(status="pending")}, {"v6e": dict(status="pending", not_run_reason=" ")},
+                  {"v6e": dict(status="pending", not_run_reason="x", measured={"decode_tok_s_1_user": 9.0})},
+                  {"v6e": dict(status="pending", not_run_reason="x"), "v5e": dict(ROW["chips"]["v6e"], status="failing")}):
+        assert problems(with_row(cpu_row(chips=chips))), chips
+    assert any("cpu_check must have" in x for x in problems(with_row(cpu_row(cpu_check={"status": "passing"}))))
+
+
+def test_a_mixture_of_experts_is_never_listed_from_a_cpu_check():
+    moe = cpu_row(moe=True, params_b={"total": 30.0, "active": 3.0})
+    assert any("mixture of experts is only listed" in x for x in problems(with_row(moe)))
+
+
+def _cpu_records(base, edit=None):
+    """A records root under base: one sealed gguf_conform CPU record (record.json, card.json, header.bin, SHA256SUMS,
+    quant.json), the git repo of the code it ran (this tree's files) and a copy of that tree to compare; returns
+    (row, evidence, tree). edit(part, value) changes a part before it is written."""
+    edit = edit or (lambda part, v: v)
+    root, code, tree = base / "records", base / "records" / "code", base / "tree"
+    for d in (code, tree):
+        for sub in ("src/mashbox", "tools"):
+            shutil.copytree(ROOT / sub, d / sub, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    commit = _commit(code)
+    rec_dir = root / "rec" / "f"
+    rec_dir.mkdir(parents=True)
+    (rec_dir / "quant.json").write_text(json.dumps({"types": {"Q4_K": True}}))
+    rec = edit("record", dict(
+        kind="gguf-conformance", pin=dict(repo=ROW["repo"], revision=ROW["revision"], file=ROW["file"]),
+        sha256=ROW["sha256"], bytes=ROW["bytes"], arch=ROW["arch"], moe=ROW["moe"], types=ROW["types"],
+        bars=dict(CPU_BARS, verdict="..."), verdict="cpu-checked",
+        code=dict(sha256=conform_code_id(str(code), commit), files=20, git_head=None),
+        versions=dict(llama_cpp="a37cc46104eb50900d5ab4a9ba02a0abdac039db"),
+        b_tokenizer=dict(texts=8, nfc_equal=8, nfc_explained=0),
+        c_cpu=dict(identical_weights=dict(nmse=4.2e-12, top1_agree=131, positions=131), top1_agree=128, positions=131,
+                   kl_mean=0.00213, prompts=4, n_gen=16, full_match=3, near_tie_divergences=1, other_divergences=0),
+        d_quant=dict(record_sha256=_sha(rec_dir / "quant.json"),
+                     types={t: True for t in ROW["types"] if t not in catalog.UNQUANTIZED})))
+    (rec_dir / "record.json").write_text(json.dumps(rec))
+    (rec_dir / "card.json").write_text(json.dumps(edit("card", {"id": ROW["repo"], "sha": ROW["revision"],
+                                                                "cardData": {"license": ROW["license"]}})))
+    (rec_dir / "header.bin").write_bytes(b"GGUF")
+    (rec_dir / "SHA256SUMS").write_text("".join(f"{_sha(rec_dir / n)}  {n}\n" for n in ("card.json", "header.bin", "record.json")))
+    ev = {k: {"path": str(rec_dir / n), "sha256": _sha(rec_dir / n)} for k, n in (
+        ("record", "record.json"), ("card", "card.json"), ("header", "header.bin"), ("sha256sums", "SHA256SUMS"),
+        ("quant", "quant.json"))}
+    ev = edit("evidence", dict(ev, code={"commit": commit}, decides=cpu_record_files(tree, ROW["arch"])))
+    row = edit("row", cpu_row(cpu_check=cpu_check_of(rec)))
+    return row, dict(records_root=str(root), code_repo=str(code), models={}, gguf={row["id"]: {"cpu_check": ev}}), tree
+
+
+def _cpu_guard(row, ev, tree):
+    reg = copy.deepcopy(REG)
+    reg["models"], reg["gguf"], reg["engine_kernels"] = [], [row], []
+    return evidence_problems(reg, ev, tree)
+
+
+def test_the_cpu_record_guard_holds_a_backed_row_and_reads_every_number_from_its_record(tmp_path):
+    row, ev, tree = _cpu_records(tmp_path)
+    assert _cpu_guard(row, ev, tree) == []
+    off = copy.deepcopy(row)
+    off["cpu_check"]["block_path"]["top1"] = "129/131"
+    assert any("cpu_check ['block_path'] differ from the record" in x for x in _cpu_guard(off, ev, tree))
+    for part, change, says in (
+            ("record", lambda r: dict(r, bars=dict(r["bars"], top1_min_share=0.9)), "not the locked CPU bars"),
+            ("record", lambda r: dict(r, pin=dict(r["pin"], revision="1" * 40)), "pin.revision"),
+            ("record", lambda r: dict(r, code=dict(r["code"], sha256="0" * 64)), "the code id at"),
+            ("record", lambda r: dict(r, d_quant=dict(r["d_quant"], types={})), "quant check does not pass"),
+            ("card", lambda c: dict(c, cardData={"license": "other"}), "the pinned card says"),
+            ("evidence", lambda e: dict(e, decides=e["decides"][1:]), "decides must list")):
+        sub = tmp_path / f"{part}-{says[:6]}"
+        sub.mkdir()
+        r2, e2, t2 = _cpu_records(sub, lambda p, v, part=part, change=change: change(v) if p == part else v)
+        assert any(says in x for x in _cpu_guard(r2, e2, t2)), (part, says)
+    failed = tmp_path / "failed"
+    failed.mkdir()
+    r2, e2, t2 = _cpu_records(failed, lambda p, v: dict(v, verdict="failed") if p == "record" else v)
+    r2["cpu_check"]["status"] = "passing"
+    assert any("cpu_check ['status'] differ from the record (status from verdict 'failed')" in x
+               for x in _cpu_guard(r2, e2, t2))
+
+
+def test_the_cpu_record_guard_voids_a_record_only_when_a_file_that_decides_it_changes(tmp_path):
+    """Measured numbers stand. The scan tool, another architecture, the catalog view, an import line, a comment or
+    a docstring never void a CPU record; a code change in a file that decides it (its arch module, the reader, the
+    check tool) does."""
+    row, ev, tree = _cpu_records(tmp_path)
+    arch_file = arch_module_files(tree / ARCHS_SRC)[row["arch"]]
+    others = [f for a, f in arch_module_files(tree / ARCHS_SRC).items() if f not in cpu_record_files(tree, row["arch"])]
+    for f, change in (("tools/gguf_scan.py", lambda t: t + "\nX = 1\n"), (others[0], lambda t: t + "\nX = 1\n"),
+                      ("src/mashbox/catalog.py", lambda t: t + "\nX = 1\n"),
+                      (CPU_TOOL, lambda t: t.replace("import argparse\n", "import argparse\nimport urllib.request\n", 1)),
+                      (arch_file, lambda t: "# a comment\n" + t)):
+        p = tree / f
+        p.write_text(change(p.read_text()))
+        assert _cpu_guard(row, ev, tree) == [], f
+    for f in (arch_file, "src/mashbox/gguf/reader.py", CPU_TOOL):
+        p = tree / f
+        keep = p.read_text()
+        p.write_text(keep + "\nX = 1\n")
+        assert any(f"{f} differs from the code the record ran" in x for x in _cpu_guard(row, ev, tree)), f
+        p.write_text(keep)
+
+
+def test_the_guard_reads_the_same_code_id_as_the_check_tool(tmp_path):
+    """conform_code_id (git, at a commit) is gguf_conform.code_id() of the same files"""
+    spec = importlib.util.spec_from_file_location("gguf_conform", ROOT / CPU_TOOL)
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    code = tmp_path / "code"
+    for sub in ("src/mashbox", "tools"):
+        shutil.copytree(ROOT / sub, code / sub, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    assert conform_code_id(str(code), _commit(code)) == tool.code_id()["sha256"]
+def test_a_model_that_runs_on_the_cpu_says_so_in_every_chip_list():
+    """Track2Rig's cpu row passes in models.json, but llms.txt and docs/supported-models.md said "TPU v6e" only, the
+    README chips cell had no CPU line, and `mashbox tpu up track2rig` stopped without saying where it runs. Every live
+    model with a passing cpu row is named CPU in each chip list, first, from that row (llms.txt Runs on, the README
+    chips cell, the package catalog behind supported-models.md and `mashbox models`), and `tpu up` for one without TPU
+    settings says it runs on a CPU with its install and run lines."""
+    from mashbox import tpu as T
+    llms = (ROOT / "llms.txt").read_text().splitlines()
+    readme = (ROOT / "README.md").read_text().splitlines()
+    supported = (ROOT / "docs" / "supported-models.md").read_text().splitlines()
+    seen = 0
+    for m in SC.live(REG):
+        if (m["chips"].get("cpu") or {}).get("status") != "passing":
+            continue
+        seen += 1
+        line = next(x for x in llms if x.startswith(f"- [{m['name']}]("))
+        assert line.split(" Runs on: ", 1)[-1].startswith("CPU"), line
+        row = next(x for x in readme if x.startswith(f"| **[{m['name']}]("))
+        assert row.split(" | ")[2].startswith("CPU: Supported<br>"), row
+        assert catalog.chips_run(m)[0] == "CPU"
+        row = next(x for x in supported if x.startswith(f"| **[{m['name']}]("))
+        assert row.split(" | ")[3].startswith("CPU"), row
+        if "cloud" not in m:
+            with pytest.raises(T.Stop) as e:
+                T.model(m["id"])
+            assert "runs on a CPU" in str(e.value) and m["install"] in str(e.value) and m["run"] in str(e.value), e.value
+    assert seen
+
+
+def test_the_chips_table_runs_on_names_every_chip_the_model_starts_on():
+    """docs/chips.md and the FAQ's chips table showed only the default chip under "Runs on" (Qwen3.8-27B: "TPU v6e-1")
+    while its v5e-4 and v6e-4 rows pass. That column names every chip the model starts on, the same list as
+    docs/supported-models.md "Runs on" and `mashbox models` (the package catalog: CPU when its row passes, then every
+    passing chips row); a chip it was only measured on keeps its note in its own column."""
+    for page in ("docs/chips.md", "docs/faq.md"):
+        block = (ROOT / page).read_text().split("<!-- chips:start -->", 1)[1].split("<!-- chips:end -->", 1)[0]
+        for m in SC.live(REG):
+            row = next(x for x in block.splitlines() if x.startswith(f"| {m['name']} | "))
+            assert row.split(" | ")[1] == ", ".join(catalog.chips_run(m)), (page, row)
+    assert SC.chips_block(REG) in (ROOT / "docs" / "chips.md").read_text()
+
+
+def test_a_passing_chip_prints_its_measured_speed():
+    """Qwen3.8-27B's v5e-4 and v6e-4 rows carry their measured decode speed in models.json (76.73 and 110.78 tokens/s
+    for 1 request), but no page printed it: a chip we ran on is supported with its measured speed. A passing chips row
+    with a measured block prints its decode speed for 1 request (and for 8 when measured) wherever its chip line
+    prints: the chips table (docs/chips.md, the FAQ) and the model's page."""
+    pages = {p: (ROOT / "docs" / p).read_text() for p in ("chips.md", "faq.md")}
+    seen = 0
+    for m in SC.live(REG):
+        page = (ROOT / "docs" / "models" / f"{m['id']}.md").read_text()
+        for chip in SC.CHIPS:
+            c = m["chips"].get(chip) or {}
+            one = (c.get("measured") or {}).get("decode_tok_s_1_user")
+            if c.get("status") != "passing" or one is None:
+                continue
+            seen += 1
+            said = f"{one:g} tokens/s for 1 request"
+            assert said in SC.chip_text(m, chip), (m["id"], chip)
+            for name, text in {**pages, m["id"]: page}.items():
+                assert said in text, (name, m["id"], chip)
+    assert seen >= 3
+
+
+def test_the_org_profile_chips_cell_names_the_cpu_first_for_a_model_that_runs_on_it():
+    """The org profile's Chips cell listed passing TPU rows only, so Track2Rig (cpu row passing) read "TPU v6e" there
+    while llms.txt, the README, supported-models.md and `mashbox models` say "CPU, TPU v6e". Every live model with a
+    passing cpu row has CPU first in its profile Chips cell; a model without one never says CPU."""
+    lines = SC.profile_table(REG).splitlines()
+    seen = 0
+    for m in SC.live(REG):
+        row = next(x for x in lines if x.startswith(f"| **[{m['name']}]("))
+        chips = row.rstrip(" |").rsplit(" | ", 1)[1]
+        if (m["chips"].get("cpu") or {}).get("status") == "passing":
+            seen += 1
+            assert chips.split(", ")[0] == "CPU", row
+        else:
+            assert "CPU" not in chips.split(", "), row
+    assert seen

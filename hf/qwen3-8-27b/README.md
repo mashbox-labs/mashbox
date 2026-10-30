@@ -27,11 +27,11 @@ Qwen's 27B hybrid-attention language model on one Google Cloud TPU v6e chip, wit
 <table>
 <tr>
 <td width="50%"><b>38.1 vs 31.4 tok/s</b><br>vs vLLM on the same chip, 1 request at a time<br><sub>TPU v6e-1</sub></td>
-<td width="50%"><b>326.6 vs 1,606.7 s</b><br>first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type<br><sub>TPU v6e-1</sub></td>
+<td width="50%"><b>74.84 tok/s</b><br>with speculative decoding (--mtp 2), 1 request at a time, greedy; 37.77 tok/s with it off<br><sub>TPU v6e-1</sub></td>
 </tr>
 <tr>
+<td width="50%"><b>326.6 vs 1,606.7 s</b><br>first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type<br><sub>TPU v6e-1</sub></td>
 <td width="50%"><b>258 tok/s total</b><br>8 users at once on one chip (37.45 for 1 user)<br><sub>TPU v6e-1</sub></td>
-<td width="50%"><b>69.6 s</b><br>to ready with the shipped compile cache, weights on disk (326.6 s without)<br><sub>TPU v6e-1</sub></td>
 </tr>
 </table>
 

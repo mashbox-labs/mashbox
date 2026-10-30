@@ -180,6 +180,8 @@ def model(name):
     for m in registry()["models"]:
         if key in (m["id"], m["name"].replace(".", "-").lower()):
             if "cloud" not in m:
+                if ((m.get("chips") or {}).get("cpu") or {}).get("status") == "passing":   # a CPU model: say where it runs
+                    raise Stop(f"{m['name']} runs on a CPU, no TPU needed: {m['install']}, then {m['run']}")
                 raise Stop(f"{m['id']}: no TPU settings in this version of mashbox")
             return {k: v for k, v in m.items() if k != "addon"}     # only addon_rows() marks a row as an add-on's
     for m in addon_rows():
@@ -1246,16 +1248,19 @@ def cmd_up(a):
         raise Stop("--max-hours must be 0 (off) or more")
     project = preflight(a.project)
     p = price(acc)
-    say(f"{m['name']} needs a TPU {acc}: {money(p)} per hour while it exists ({PRICE_NOTE}).")
-    say(f"Max lifetime: {'%g h after the chip starts, then it deletes itself (--max-hours 0 turns this off)' % a.max_hours if a.max_hours else 'off (--max-hours 0)'}.")
     zones = [a.zone] if a.zone else list(dict.fromkeys(c["zones"] + all_zones()))   # --zone: that zone only
     node, qr = one_place(name, *find(project, name, zones),
                          "Choose another name with --name (mashbox tpu status lists the chips mashbox made)")
     qrname = None
     if node:
         zone, x = node
-        age = now() - (created(x) or now())
-        say(f"{name} already exists in {zone} ({x.get('state')}, up {mins(age)}, about {money((p or 0) * age / 3600)} so far, estimate). Using it.")
+        age, have = now() - (created(x) or now()), x.get("acceleratorType") or acc
+        hp = price(have)                                     # the chip it uses, not the one asked for
+        say(f"{name} already exists in {zone} (TPU {have}, {x.get('state')}, up {mins(age)}, about {money((hp or 0) * age / 3600)} "
+            f"so far, estimate). Using it: {money(hp)} per hour while it exists ({PRICE_NOTE}).")
+        if have != acc:
+            say(f"  It is a TPU {have}, not a {a.chip or acc}: nothing new is created. For a {a.chip or acc}, take it down "
+                f"first (mashbox tpu down {name}) or choose another name with --name.")
         if x.get("state") not in ("READY", "CREATING", "STARTING", "RESTARTING", "REPAIRING"):
             raise Stop(f"{name} is {x.get('state')}. Take it down (mashbox tpu down {name}) and run up again")
         if x.get("state") != "READY" and not wait_ready_node(project, zone, name):
@@ -1266,7 +1271,10 @@ def cmd_up(a):
         zone = qr[0]
         raise Stop(f"a queued request for {name} is waiting in {zone} from an earlier run. Delete it with "
                    f"mashbox tpu down {name}, then run up again")
-    else:
+    else:                                                    # only here does up create a chip
+        shown = acc if a.chip in (None, acc) else f"{a.chip} ({acc})"
+        say(f"{m['name']} on a new TPU {shown}: {money(p)} per hour while it exists ({PRICE_NOTE}).")
+        say(f"Max lifetime: {'%g h after the chip starts, then it deletes itself (--max-hours 0 turns this off)' % a.max_hours if a.max_hours else 'off (--max-hours 0)'}.")
         if not a.yes:
             if not sys.stdin.isatty():
                 raise Stop("this creates a billed chip; add --yes to confirm when not running in a terminal")

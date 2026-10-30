@@ -43,11 +43,31 @@ The chip bills from create to delete: one TPU v6e chip is $2.70 an hour at Googl
 ## Models
 
 <!-- models:start -->
+**MASHBOX builds**
+
+Models we port or make ourselves. A BSHJ build is our weights file for the model, run on our TPU kernels. Measured is each one's number against its baseline, on the chip named.
+
 | Model | What it does | Chips | Measured | Weights |
 |---|---|---|---|---|
 | **[Hy-Nomas](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/hy_nomas)**<br>by Tencent Hunyuan | World model: text and movement keys in, video out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | Compute per second of video, quality preset, Tencent decoder, 1.00 = real time: **1.045 s** (TPU v6e-4)<br>Compute per second of video, quality preset, MASHBOX Fast decoder: **0.689 s** (TPU v6e-4) | [Hy-Nomas-TPU](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU) |
-| **[Qwen3.8-27B](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/qwen3_8_27b)**<br>by Qwen | LLM: text in, text out | TPU v5e (v5e-4): Supported<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | **38.1 vs 31.4 tok/s** vs vLLM on the same chip, 1 request at a time; **326.6 vs 1,606.7 s** first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type (TPU v6e-1). [All results](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) | [Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) |
-| **[Track2Rig](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/track2rig)**<br>by MASHBOX Labs<br>Experimental | Rigging: 3D point tracks in, rig (JSON and glTF) out | TPU v5e: Not tested yet<br>TPU v6e: Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | **0.784% vs 0.915%** held-out error vs SSDR at the same bone count, synthetic test set with noisy, partly hidden tracks, % of body size, lower is better; **6.24% vs 7.73%** joint error vs SSDR, % of body size, lower is better (CPU (AMD EPYC 7502P)). [All results](https://huggingface.co/mashbox-labs/Track2Rig) | [Track2Rig](https://huggingface.co/mashbox-labs/Track2Rig) |
+| **[Qwen3.8-27B](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/qwen3_8_27b)**<br>by Qwen | LLM: text in, text out | TPU v5e (v5e-4): Supported<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | **38.1 vs 31.4 tok/s** vs vLLM on the same chip, 1 request at a time; **74.84 tok/s** with speculative decoding (--mtp 2), 1 request at a time, greedy; 37.77 tok/s with it off; **326.6 vs 1,606.7 s** first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type (TPU v6e-1). [All results](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) | [Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) |
+| **[Track2Rig](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/track2rig)**<br>by MASHBOX Labs<br>Experimental | Rigging: 3D point tracks in, rig (JSON and glTF) out | CPU: Supported<br>TPU v5e: Not tested yet<br>TPU v6e: Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | **0.784% vs 0.915%** held-out error vs SSDR at the same bone count, synthetic test set with noisy, partly hidden tracks, % of body size, lower is better; **6.24% vs 7.73%** joint error vs SSDR, % of body size, lower is better (CPU (AMD EPYC 7502P)). [All results](https://huggingface.co/mashbox-labs/Track2Rig) | [Track2Rig](https://huggingface.co/mashbox-labs/Track2Rig) |
+
+**GGUF files that run in our engine**
+
+GGUF files from other publishers, run as they are by mashbox. Level and Runs on say how far each file has been checked; a speed shows only where a chip run measured it on our kernels.
+
+Tested on TPU:
+
+| Model | GGUF file | Architecture | Quant | Level | Runs on |
+|---|---|---|---|---|---|
+| **Qwen2.5-0.5B-Instruct**<br>by Qwen | [Qwen2.5-0.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/blob/41ba88dbac95fed2528c92514c131d73eb5a174b/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.4 GB | `qwen2` | Q4_K_M | Tested | TPU v6e-1 |
+| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [Qwen2.5-1.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/9eadc66189c7641e1ddd226b8267a9119b2ce2d4/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.99 GB | `qwen2` | Q4_K_M | Tested | TPU v6e-1 |
+| **Qwen3-0.6B**<br>by Qwen | [Qwen3-0.6B-Q8_0.gguf](https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/blob/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q8_0.gguf)<br>from unsloth, 0.64 GB | `qwen3` | Q8_0 | Tested | TPU v6e-1 |
+| **Qwen3.5-0.8B**<br>by Qwen | [Qwen3.5-0.8B-Q8_0.gguf](https://huggingface.co/ggml-org/Qwen3.5-0.8B-GGUF/blob/807dfd9a6fadbf703207aac3bfb0b2b3040d077c/Qwen3.5-0.8B-Q8_0.gguf)<br>from ggml-org, 0.83 GB | `qwen35` | Q8_0 | Tested | TPU v6e-1 |
+| **Qwen3.5-4B**<br>by Qwen | [Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/blob/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf)<br>from unsloth, 2.74 GB | `qwen35` | Q4_K_M | Tested | TPU v6e-1 |
+
+[Full catalog](https://mashbox.gg/docs/supported-models): 17 entries: 2 MASHBOX ports, 1 MASHBOX model and 14 GGUF files of 12 models.
 <!-- models:end -->
 
 Every number names the chip it was measured on; each model's guide has all its results. Options for any model: `~/.local/bin/mashbox run <model> --help`.
@@ -85,7 +105,7 @@ Each chart names the hardware on both sides.
 | Create with | `--accelerator-type=v6e-1 --version=v2-alpha-tpuv6e` | `--accelerator-type=v5litepod-1 --version=v2-alpha-tpuv5-lite` |
 | Zones to try first | us-east5-b, europe-west4-a | us-central1-a |
 
-v6e is the default. A model runs on v5e when its weights and working memory fit in 16 GB; the models table says which chips each model runs on. Specs from Google's [v6e](https://cloud.google.com/tpu/docs/v6e) and [v5e](https://cloud.google.com/tpu/docs/v5e) pages. More in [docs/chips.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.5/docs/chips.md).
+v6e is the default. A model too big for one v5e chip (16 GB) splits across the 4 chips of a v5e-4 when its row says so; the models table says which chips each model runs on. Specs from Google's [v6e](https://cloud.google.com/tpu/docs/v6e) and [v5e](https://cloud.google.com/tpu/docs/v5e) pages. More in [docs/chips.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.5/docs/chips.md).
 
 TPU v6e (one chip and a v6e-4) against one NVIDIA H100 at Google Cloud list prices, with the memory bandwidth of each and the cost per 1M output tokens of Qwen3.8-27B (27B parameters, dense): [TPU or GPU: price and bandwidth](https://github.com/mashbox-labs/mashbox/blob/v0.1.5/docs/tpu-vs-gpu.md).
 

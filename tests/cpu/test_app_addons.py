@@ -11,7 +11,7 @@ import pytest
 
 from mashbox.ui.app import addons
 
-from test_app_security import EVIL, ctx, req, serve  # noqa: F401  (ctx is a fixture)
+from test_app_security import EVIL, ROOT, Upstream, ctx, node, req, serve  # noqa: F401  (ctx is a fixture)
 
 
 def demo(seen):
@@ -71,6 +71,40 @@ def test_a_server_of_an_addon_is_filed_under_it(actx):
     assert st == 200
     s = json.loads(req(actx.port, "GET", "/api/state", headers=actx.auth)[2])
     assert [x["module"] for x in s["servers"]] == ["demo"] and s["active"] is None
+
+
+def test_a_server_of_an_addon_that_lists_a_model_is_used_for_chat_too(actx, monkeypatch):
+    """10-30 on a real Mac: an add-on's chip, added by its address with "Add and use", was filed under its add-on only,
+    so Chat stayed on "no server in use" though the chip lists its model at /v1/models and answers chat. A server of an
+    add-on that lists a model is the chat's server too; one that lists none is not (the test above)."""
+    up, url = serve(Upstream)
+    try:
+        monkeypatch.setattr(addons._loaded[0], "is_server", lambda u, key=None: u == url)
+        st, _, body = req(actx.port, "POST", "/api/servers/add", json.dumps({"name": "chip", "url": url}), actx.json)
+        assert st == 200, body
+        s = json.loads(req(actx.port, "GET", "/api/state", headers=actx.auth)[2])
+        assert [x["module"] for x in s["servers"]] == ["demo"] and s["active"] == json.loads(body)["id"]
+        assert req(actx.port, "GET", "/m/chat/")[0] == 200                      # Chat opens on it, not on Servers
+    finally:
+        up.shutdown()
+
+
+def test_the_row_of_an_addon_server_offers_use_once_it_lists_a_model():
+    """The Servers row of an add-on's server (its TPU row) gets "Use" for Chat beside "Open <add-on>" once its check
+    lists a model; with no model, no answer, or already in use, it has none."""
+    pytest.importorskip("shutil").which("node") or pytest.skip("node is not installed")
+    row = {"id": "tpu-c1", "name": "TPU c1", "url": "http://127.0.0.1:8792", "from": "tpu", "module": "demo", "has_key": False}
+    chat = {"id": "srv-1", "name": "S", "url": "http://127.0.0.1:8000", "from": "url", "module": "chat", "has_key": False}
+    st = {"servers": [row, chat], "active": "srv-1", "addons": [{"id": "demo", "label": "Demo", "href": "/m/demo/"}]}
+    view = str(ROOT / "src/mashbox/ui/app/view.js")
+
+    def acts(chk, s=st):
+        return {r["id"]: r["acts"] for r in node("servers", view, json.dumps({"state": s, "check": chk}))}
+    listed = {"ok": True, "ms": 5, "models": [{"id": "qwen3.8-27b"}]}
+    assert acts(listed) == {"tpu-c1": ["Open Demo", "Use", "Remove"], "srv-1": ["Remove"]}
+    assert acts({"ok": True, "ms": 5, "models": []})["tpu-c1"] == ["Open Demo", "Remove"]
+    assert acts({"ok": False, "error": "no answer", "models": []})["tpu-c1"] == ["Open Demo", "Remove"]
+    assert acts(listed, dict(st, active="tpu-c1")) == {"tpu-c1": ["Open Demo", "Remove"], "srv-1": ["Use", "Remove"]}
 
 
 MOD = """

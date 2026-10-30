@@ -18,7 +18,7 @@ How it runs:
 
 | | TPU v6e (v6e-1) | TPU v5e (v5e-4) | TPU v6e slice (v6e-4) | TPU v5p slice (v5p-8) |
 |---|---|---|---|---|
-| Status | Supported: one chip (v6e-1) | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB | Supported: 4 chips, split across them automatically | Not tested yet |
+| Status | Supported: one chip (v6e-1). 38.6 tokens/s for 1 request, 269 tokens/s for 8 | Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB. 76.73 tokens/s for 1 request, 470.4 tokens/s for 8 | Supported: 4 chips, split across them automatically. 110.78 tokens/s for 1 request, 652.2 tokens/s for 8 | Not tested yet |
 | Create with | `--accelerator-type=v6e-1 --version=v2-alpha-tpuv6e` | `--accelerator-type=v5litepod-4 --version=v2-alpha-tpuv5-lite` | `--accelerator-type=v6e-4 --version=v2-alpha-tpuv6e` | |
 
 One TPU v6e chip is $2.70 an hour at Google's on-demand list price. The chip bills from create to delete. Context is 2,048 tokens per request with 8 request slots. On a host of 4 chips, `mashbox run` splits the model across them by itself (`--tensor-parallel-size`, in [Options](#options)). The commands on this page use a v6e-1.
@@ -143,7 +143,7 @@ Made from the original bf16 weights: each large weight matrix (and the embedding
 
 ## Performance
 
-Measured on one TPU v6e-1 (on demand, zone europe-west4-a), set up on a new chip as this page shows: `mashbox` 0.1.0 with its kernel bundle and JAX 0.11.2 for TPU (`~/.local/bin/mashbox env` prints the full list), through the server with the default options (greedy, `--ctx 2048 --slots 8`). Chat prompts of about 30 tokens, 128 new tokens per request.
+Measured on one TPU v6e-1 (on demand, zone europe-west4-a), set up on a new chip as this page shows: `mashbox` with its kernel bundle and JAX 0.11.2 for TPU (`~/.local/bin/mashbox env` prints the full list), through the server with the default options (greedy, `--ctx 2048 --slots 8`). Chat prompts of about 30 tokens, 128 new tokens per request.
 
 | What | Result |
 |---|---|
@@ -152,7 +152,7 @@ Measured on one TPU v6e-1 (on demand, zone europe-west4-a), set up on a new chip
 | 8 users, each sending a new request as soon as its answer came back, for 60 s | 258 tokens/s in total; a request took 4.0 s (median) |
 | Install (`pip install uv` and `uv tool install`) | 5 to 7 s |
 
-Start to ready with `mashbox` 0.1.2 on one TPU v6e-1 (on demand), the weights file already on disk, from starting the server until it answers its ready check. Every prefill and decode program is compiled or loaded before the server says ready.
+Start to ready with `mashbox` on one TPU v6e-1 (on demand), the weights file already on disk, from starting the server until it answers its ready check. Every prefill and decode program is compiled or loaded before the server says ready.
 
 | What | Result |
 |---|---|
@@ -175,11 +175,9 @@ Quality from the installed package on the same chip: mean KL 0.00065 and top-1 a
 
 The output is not always the same as without it. With greedy decoding the text was identical on 5 of 8 prompts. Where it differs, the two best next tokens had equal scores, or scores one bf16 step apart, and a pass that checks 3 tokens rounds differently from one that reads 1. The engine's own two paths without speculation (compiled kernels and plain JAX) split at such ties too: they gave identical text on 3 of 8 prompts. Sampled requests keep the token the sampler draws without speculation at each position (same settings and seed), so each token is drawn from the model's own distribution.
 
-The other tables on this page were measured with `mashbox` 0.1.0, which decodes without speculation.
-
 ### Compared with vLLM TPU on the same chip
 
-Measured on one TPU v6e-1 (on demand, zone us-east5-b), one server on the chip at a time, the same OpenAI chat requests to both (streamed, 256 new tokens, thinking off). Ours: `mashbox` 0.1.0 with `Qwen3.8-27B-BQ8_R.bshj` (26.94 GB, 8.01 bits per weight) and default options. vLLM: vllm-tpu 0.32.0 with Qwen's own 8-bit file [Qwen/Qwen3.8-27B-FP8](https://huggingface.co/Qwen/Qwen3.8-27B-FP8), the closest like-for-like.
+Measured on one TPU v6e-1 (on demand, zone us-east5-b), one server on the chip at a time, the same OpenAI chat requests to both (streamed, 256 new tokens, thinking off). Ours: `mashbox` with `Qwen3.8-27B-BQ8_R.bshj` (26.94 GB, 8.01 bits per weight) and default options. vLLM: vllm-tpu 0.32.0 with Qwen's own 8-bit file [Qwen/Qwen3.8-27B-FP8](https://huggingface.co/Qwen/Qwen3.8-27B-FP8), the closest like-for-like.
 
 | What | mashbox | vLLM TPU 0.32.0 |
 |---|---|---|
@@ -208,7 +206,7 @@ Claude Code, Codex and Pi can use Qwen3.8-27B as their LLM: start the server wit
 
 ## FAQ
 
-- **Does it run on TPU v5e?** Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB.
+- **Does it run on TPU v5e?** Supported: a v5e-4 (4 chips), split across them automatically; one v5e chip is too small: the weights alone are about 27 GB and a v5e chip has 16 GB. 76.73 tokens/s for 1 request, 470.4 tokens/s for 8.
 - **Can several people use one server?** Yes. Up to 8 requests share the chip at once; a request that arrives while others are answering takes a free slot at the next device call, or waits for one when all 8 are busy. With 8 users each sending a new request as soon as the last answer came back, the server gave 258 tokens/s in total on TPU v6e-1 ([Performance](#performance)).
 - **How do I turn on thinking mode?** `--thinking` for `--prompt`, or `"chat_template_kwargs": {"enable_thinking": true}` in a server request.
 

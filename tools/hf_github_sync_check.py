@@ -66,6 +66,7 @@ import re
 import sys
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from string import Template
@@ -142,7 +143,8 @@ def validate(reg, repo_root, problems, release=False):
         if "stage" in m:
             problems.add(where, "stage is not a field: the Experimental label comes from catalog.experimental")
         if m["kind"] == "rig" and m["hf_revision"] is not None and not DATE_TAG_RE.match(str(m.get("hf_tag"))):
-            problems.add(where, "hf_tag must name the pinned weights revision by its date (YYYY-MM-DD)")
+            problems.add(where, "hf_tag must name the dated weights version (YYYY-MM-DD): the Hugging Face tag of a "
+                                "revision whose weights file is the pinned one")
         if not ID_RE.match(m["id"]):
             problems.add(where, "id must be lower case words joined by hyphens")
         if m["id"] in seen:
@@ -342,6 +344,8 @@ def validate_catalog(reg, problems):
             if key in reg:
                 problems.add("models.json", f"{key} needs schema 2")
         return
+    for rid, msg in _lists().maker_problems(reg):
+        problems.add(f"models.json gguf {rid}", msg)
     for key in ("gguf", "engine_kernels"):
         if not isinstance(reg.get(key), list):
             problems.add("models.json", f"schema 2 needs {key} (a list, empty when there is none)")
@@ -449,12 +453,39 @@ def validate_catalog(reg, problems):
         if _dated(g):
             problems.add(where, "no dates (the records behind a row are kept outside this repository)")
         chips = g["chips"] if isinstance(g["chips"], dict) else {}
+        cpu_ok = "cpu_check" in g and not cpu_check_problems(g["cpu_check"], problems, where)
+        pending = [ch for ch, r in chips.items() if isinstance(r, dict) and r.get("status") == "pending"]
         if not chips or any(ch not in CHIPS for ch in chips):
             problems.add(where, f"chips must name at least one chip from {CHIPS}")
         elif not any(isinstance(r, dict) and r.get("status") == "passing" for r in chips.values()):
-            problems.add(where, "no passing chip: a row is only added from a passing run (a failing outcome sits only "
-                                "beside a passing one)")
+            # Checked on CPU: no chip run, its CPU check against llama.cpp passed (sealed record), every chip pending
+            # with its not_run_reason; never a mixture of experts (no MoE without its routed experts on the kernel)
+            if moe:
+                problems.add(where, "a mixture of experts is only listed with a passing chip record of its routed experts "
+                                    "on the kernel, never from a CPU check alone")
+            elif not cpu_ok or (g["cpu_check"] or {}).get("status") != "passing" or len(pending) != len(chips):
+                problems.add(where, "no passing chip: a row is only added from a passing run (a failing outcome sits only "
+                                    "beside a passing one), or from a passing CPU check (cpu_check status passing) with "
+                                    "every chip pending and its not_run_reason")
+        for ch in pending:
+            r = chips[ch]
+            if not str(r.get("not_run_reason") or "").strip() or set(r) - {"status", "not_run_reason", "smoke"}:
+                problems.add(where, f"chips.{ch}: a pending chip holds its not_run_reason (never empty) and at most the "
+                                    "smoke that covers it, nothing measured")
+            sm = r.get("smoke")
+            if sm is not None:
+                src = next((x for x in reg["gguf"] if x.get("id") == (sm or {}).get("row")), None)
+                run = ((src or {}).get("chips") or {}).get(ch) or {}
+                if (src is None or run.get("status") != "passing" or src["arch"] != g["arch"]
+                        or not {t for t in g["types"] if t not in UNQUANTIZED} <= set(src["types"])
+                        or sm.get("accelerator") != run.get("accelerator")
+                        or sm.get("decode_tok_s_1_user") != (run.get("measured") or {}).get("decode_tok_s_1_user")):
+                    problems.add(where, f"chips.{ch}.smoke must name a row with a passing {ch} run of the same "
+                                        "architecture whose types cover this file's, with that run's accelerator and "
+                                        "decode_tok_s_1_user")
         for ch, r in chips.items():
+            if ch in pending:
+                continue
             if not isinstance(r, dict) or any(key not in r for key in GGUF_CHIP_KEYS):
                 problems.add(where, f"chips.{ch} needs {GGUF_CHIP_KEYS}")
                 continue
@@ -481,6 +512,44 @@ def validate_catalog(reg, problems):
                 lack = sorted(need - kern_types.get(ch, set()))
                 if lack:
                     problems.add(where, f"chips.{ch}: kernel_path bundle, but no engine_kernels row for {ch} has {lack}")
+
+
+CPU_CHECK_KEYS = {"status", "reference", "identical_weights", "block_path", "greedy", "tokenizer"}
+TOP1_RE = re.compile(r"^(\d+)/(\d+)$")
+
+
+def cpu_check_problems(c, problems, where):
+    """gguf[].cpu_check: the CPU check of the file against llama.cpp, copied from its sealed gguf_conform record (the
+    record guard holds every value to it). Shape only here: status passing or failing, the reference named, same-weights
+    NMSE <= 1e-4 with its top-1, llama.cpp's own path top-1 and KL, greedy prompts x tokens with full/near tie/other,
+    tokenizer texts/equal/explained; a passing one has 0 other greedy divergences. Returns the number of problems."""
+    bad = []
+    if not isinstance(c, dict) or set(c) != CPU_CHECK_KEYS:
+        bad.append(f"cpu_check must have exactly {sorted(CPU_CHECK_KEYS)}")
+    else:
+        same, block, g, tk = c["identical_weights"], c["block_path"], c["greedy"], c["tokenizer"]
+        if c["status"] not in ("passing", "failing"):
+            bad.append("cpu_check.status must be passing or failing (the record's verdict)")
+        if not str(c["reference"]).startswith("llama.cpp "):
+            bad.append("cpu_check.reference must name the llama.cpp build it was checked against")
+        tops = [TOP1_RE.match(str((x or {}).get("top1"))) for x in (same, block)]
+        if not all(tops) or any(int(m.group(1)) > int(m.group(2)) for m in tops):
+            bad.append("cpu_check top1 must be 'agree/positions'")
+        nm = (same or {}).get("nmse")
+        if not isinstance(nm, (int, float)) or nm < 0 or not isinstance((block or {}).get("kl"), (int, float)):
+            bad.append("cpu_check: identical_weights.nmse and block_path.kl must be numbers")
+        if not all(isinstance((g or {}).get(k), int) for k in ("prompts", "tokens", "full", "near_tie", "other")) or \
+                not all(isinstance((tk or {}).get(k), int) for k in ("texts", "equal", "explained")):
+            bad.append("cpu_check: greedy {prompts, tokens, full, near_tie, other} and tokenizer {texts, equal, "
+                       "explained} must be counts")
+        elif c["status"] == "passing" and (g["other"] != 0 or g["full"] + g["near_tie"] != g["prompts"]
+                                           or tk["equal"] + tk["explained"] != tk["texts"]
+                                           or not isinstance(nm, (int, float)) or nm > 1e-4):
+            bad.append("cpu_check passing needs 0 other greedy divergences, every tokenizer text equal or explained, "
+                       "and same-weights NMSE <= 1e-4 (the locked bar)")
+    for b in bad:
+        problems.add(where, b)
+    return len(bad)
 
 
 # ---------------------------------------------------------------- number guard (headline and short cells)
@@ -721,7 +790,8 @@ def models_table(reg, absolute):
         link = code_url(reg, m) if absolute or ver_newer(m.get("card_release"), reg["version"]) else m["path"]
         rows.append([f"**[{m['name']}]({link})**<br>by {m['upstream']['maker']}" + experimental_note(m, "<br>"),
                      f"{KINDS[m['kind']]['label']}: {m['in']} in, {m['out']} out",
-                     "<br>".join(f"{chip_label(m, c)}: {chip_note(m, c) or chip_cell(m, c)}"
+                     ("CPU: Supported<br>" if runs_cpu(m) else "")
+                     + "<br>".join(f"{chip_label(m, c)}: {chip_note(m, c) or chip_cell(m, c)}"
                                  + (f", {run_note(m, c)}" if chip_cell(m, c) == "Supported" and run_note(m, c) else "")
                                  for c in CHIPS), readme_measured(m),
                      weights_cell(m)])
@@ -759,13 +829,154 @@ def profile_measured(m):
 
 
 def profile_table(reg):
-    """Compact view for the org profile (reads on a phone): model and maker, in and out, supported chips."""
+    """Compact view for the org profile (reads on a phone): model and maker, in and out, supported chips (CPU first when
+    the model's cpu row passes)."""
     rows = []
     for m in live(reg):
-        passed = [CHIP_LABEL[c] for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
+        # CPU first when the cpu row passes, the same rule as every other chip list (catalog.chips_run)
+        passed = ["CPU"] if (m["chips"].get("cpu") or {}).get("status") == "passing" else []
+        passed += [CHIP_LABEL[c] for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
         rows.append([f"**[{m['name']}]({code_url(reg, m)})** by {m['upstream']['maker']}" + experimental_note(m, "<br>"),
                      f"{m['in']} in, {m['out']} out", profile_measured(m), ", ".join(passed) or "n/a"])
     return table(["Model", "What it does", "Measured", "Chips"], rows)
+
+
+CATALOG_URL = "https://mashbox.gg/docs/supported-models"
+
+
+@functools.lru_cache(maxsize=None)
+def _lists():
+    """tools/model_lists.py of this tool's own tree (standard library only), loaded by path: the one render of the
+    model lists (counts, families, the tested list, makers) behind every model list on every page. It reads
+    mashbox/catalog.py and never changes it (catalog.py is in the code set of every GGUF chip record)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_mashbox_model_lists", Path(__file__).resolve().parent / "model_lists.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def gguf_block(reg):
+    """The README's and the org profile's GGUF tier (model_lists.gguf_block): the files with a passing chip test, each
+    linking its exact file on Hugging Face, then the catalog link with the count line. Rendered, never typed: a new
+    gguf[] row reaches both pages with render --write."""
+    return _lists().gguf_block(reg, CATALOG_URL)
+
+
+def builds_head():
+    ml = _lists()
+    return f"**{ml.BUILDS}**\n\n{ml.BUILDS_LINE}\n\n"
+
+
+def readme_block(reg):
+    """The README models block in two labelled tiers: MASHBOX builds (our ports table), then the GGUF tier."""
+    return builds_head() + models_table(reg, absolute=False) + "\n\n" + gguf_block(reg)
+
+
+def profile_block(reg):
+    """The org profile models block: the same two tiers, with the compact builds table."""
+    return builds_head() + profile_table(reg) + "\n\n" + gguf_block(reg)
+
+
+# The Hugging Face org card is the org's static README Space. Its models block is rendered here like the GitHub
+# profile's (never typed on Hugging Face), and the "TPU models" collection holds every live TPU port.
+ORG_CARD_URL = "https://huggingface.co/spaces/{org}/README/raw/main/README.md"
+TPU_COLLECTION = "TPU models"
+
+
+def org_card_measured(m):
+    """Org card cell: the README's numbers (every headline marked readme), chip named; else the README's first two
+    results (measured_cell)."""
+    hl = [h for h in m.get("headline") or [] if h.get("readme")]
+    if not hl:
+        return measured_cell(m)
+    r = m["results"][hl[0]["results"][0]]
+    return "; ".join(f"**{h['big']}** {h['label']}" for h in hl) + f" ({r['chip']})"
+
+
+def org_card_table(reg):
+    """The org card table: each model links its Hugging Face repo; the chips are the passing rows, CPU first (the same
+    rule as profile_table)."""
+    rows = []
+    for m in live(reg):
+        passed = ["CPU"] if runs_cpu(m) else []
+        passed += [CHIP_LABEL[c] for c in CHIPS if (m["chips"].get(c) or {}).get("status") == "passing"]
+        name = f"[{m['name']}](https://huggingface.co/{m['hf_repo']})" if m["hf_repo"] else m["name"]
+        rows.append([f"**{name}** by {m['upstream']['maker']}" + experimental_note(m, "<br>"),
+                     f"{m['in']} in, {m['out']} out", org_card_measured(m), ", ".join(passed) or "n/a"])
+    return table(["Model", "What it does", "Measured", "Chips"], rows)
+
+
+def org_card_block(reg):
+    """The Hugging Face org card models block in the same two tiers as the README and the profile: MASHBOX builds (the
+    org card table), then the GGUF tier."""
+    return builds_head() + org_card_table(reg) + "\n\n" + gguf_block(reg)
+
+
+def tpu_ports(reg):
+    """The live models whose Hugging Face repo is a TPU port (named <Upstream>-TPU): the "TPU models" collection."""
+    return {m["hf_repo"] for m in live(reg) if m["hf_repo"] and m["hf_repo"].endswith("-TPU")}
+
+
+def org_card_problems(reg, card, where):
+    """[(where, problem)] for an org card's text: the block must equal org_card_block, the prose names no model and no
+    count, and the company line is models.json's."""
+    out = []
+    if MARK_START not in card or MARK_END not in card:
+        out.append((where, f"no {MARK_START} / {MARK_END} block"))
+    elif card.split(MARK_START, 1)[1].split(MARK_END, 1)[0].strip() != org_card_block(reg).strip():
+        out.append((where, "models block differs from the one rendered from models.json"))
+    if reg.get("company_line") and reg["company_line"] not in card:
+        out.append((where, "company line differs from models.json company_line"))
+    return out + list_problems(reg, card, where, names=True)
+
+
+def collection_problems(reg, body, where):
+    """[(where, problem)]: the org's "TPU models" collection holds exactly the live TPU ports of our org (other orgs'
+    repos may sit in it; family collections are not checked here)."""
+    cols = [c for c in json.loads(body) if c.get("title") == TPU_COLLECTION]
+    if len(cols) != 1:
+        return [(where, f"{len(cols)} collections titled {TPU_COLLECTION!r} (want 1)")]
+    org = reg["hf"]["org"]
+    ours = {i["id"] for i in cols[0].get("items") or [] if i.get("type") == "model" and i["id"].startswith(org + "/")}
+    want = tpu_ports(reg)
+    return ([(where, f"{TPU_COLLECTION!r} lacks {r}") for r in sorted(want - ours)]
+            + [(where, f"{TPU_COLLECTION!r} holds {r}, which is not a live TPU port in models.json")
+               for r in sorted(ours - want)])
+
+
+# Lists and counts live only in rendered blocks. Outside them a page names no count of models (COUNT_RE), and the org
+# profile's prose names no model (its one list is the block): a hand-typed list or count drifts the day a row lands.
+GEN_BLOCK_RE = re.compile(r"<!-- ([\w-]+):start\b[^>]*-->.*?<!-- \1:end\b[^>]*-->", re.S)
+COUNT_RE = re.compile(r"\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozens of|\d+)\s+(?:[\w.-]+\s+){0,2}?"
+                      r"(?:models|model ports|ports|GGUF files|LLMs)\b", re.I)
+ENTRIES_RE = re.compile(r"\b(\d+) entr(?:y|ies): ([^.\]\n]*)")
+PART_RE = re.compile(r"\b(\d+) (?:MASHBOX ports?|MASHBOX models?|GGUF files?)\b")
+
+
+def list_problems(reg, text, where, names=False):
+    """[(where, problem)]: a count of models typed outside a rendered block; with names (the org profile) a model named
+    outside it (name, id or its size such as 27B); and any printed count line whose parts do not add up to its total or
+    whose total is not models.json's."""
+    out, prose = [], GEN_BLOCK_RE.sub(" ", text)
+    for m in COUNT_RE.finditer(prose):
+        out.append((where, f"typed count {m.group(0)!r} outside a rendered block (counts come from models.json)"))
+    if names:   # a command in a code block (the install lines) is not a list
+        prose, ml = re.sub(r"```.*?```", " ", prose, flags=re.S), _lists()
+        words = {m["name"] for m in live(reg)} | {m["id"] for m in live(reg)} | {ml.gguf_name(r) for r in
+                                                                                 ml.catalog().gguf_rows(reg)}
+        sizes = [((m.get("catalog") or {}).get("params_b") or {}).get("total") for m in live(reg)]
+        words |= {f"{t:g}B" for t in sizes if t} | {f"{round(t)}B" for t in sizes if t}   # 26.9B and 27B
+        words |= {w for m in live(reg) for w in re.findall(r"(?<![\d.])\d+(?:\.\d+)?B\b", m["name"])}   # 27B in Qwen3.8-27B
+        for w in sorted(words):
+            if re.search(rf"(?<![\w.-]){re.escape(w)}(?![\w-])", prose, re.I):
+                out.append((where, f"names {w!r} outside the models block (the block is the one list)"))
+    total = _lists().counts(reg)["entries"]
+    for m in ENTRIES_RE.finditer(text):
+        parts = [int(x) for x in PART_RE.findall(m.group(2))]
+        if sum(parts) != int(m.group(1)) or int(m.group(1)) != total:
+            out.append((where, f"count line {m.group(0)!r} does not add up to models.json's {total} entries"))
+    return out
 
 
 def run_note(m, chip):
@@ -774,13 +985,19 @@ def run_note(m, chip):
     return str(c.get("run_note") or "").strip() if c.get("status") in ("passing", "measured") else ""
 
 
+def runs_cpu(m):
+    """True when m's chips.cpu row passes (a model that runs on a CPU): every chip list names CPU first."""
+    return (m["chips"].get("cpu") or {}).get("status") == "passing"
+
+
 def runs_on(m):
-    """" Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1)." from the passing and measured chips rows (agents read llms.txt to
-    pick a chip); a row's run_note follows its chip ("TPU v6e (v6e-1): 2.46 s of compute per second of video (...)"),
-    and the chips are then separated by semicolons."""
-    ok = [chip_label(m, c) + (f": {run_note(m, c)}" if run_note(m, c) else "") for c in CHIPS
-          if (m["chips"].get(c) or {}).get("status") in ("passing", "measured")]
-    sep = "; " if any(run_note(m, c) for c in CHIPS) else ", "
+    """" Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1)." from the passing and measured chips rows, CPU first when its cpu
+    row passes (agents read llms.txt to pick a chip); a row's run_note follows its chip ("TPU v6e (v6e-1): 2.46 s of
+    compute per second of video (...)"), and the chips are then separated by semicolons."""
+    keys = (["cpu"] if runs_cpu(m) else []) + [c for c in CHIPS
+                                               if (m["chips"].get(c) or {}).get("status") in ("passing", "measured")]
+    ok = [("CPU" if c == "cpu" else chip_label(m, c)) + (f": {run_note(m, c)}" if run_note(m, c) else "") for c in keys]
+    sep = "; " if any(run_note(m, c) for c in keys) else ", "
     return f" Runs on: {sep.join(ok)}." if ok else ""
 
 
@@ -795,8 +1012,13 @@ def experimental_note(m, sep):
 
 
 def llms_block(reg):
-    return "\n".join(f"- [{m['name']}]({docs_url(m)}): {m['in']} in, {m['out']} out. {KINDS[m['kind']]['label']}."
-                     + experimental_note(m, " ") + ("." if experimental(m) else "") + runs_on(m) for m in live(reg))
+    """llms.txt models block, the same two tiers: each MASHBOX build, then the GGUF files with a passing chip test and
+    the catalog link with the count line (model_lists.llms_lines)."""
+    ml = _lists()
+    return "\n".join([f"{ml.BUILDS}:"] + [
+        f"- [{m['name']}]({docs_url(m)}): {m['in']} in, {m['out']} out. {KINDS[m['kind']]['label']}."
+        + experimental_note(m, " ") + ("." if experimental(m) else "") + runs_on(m) for m in live(reg)]
+        + ["", f"{ml.GGUF}:"] + ml.llms_lines(reg, CATALOG_URL))
 
 
 def front_matter(reg, m):
@@ -1081,13 +1303,19 @@ def card_vars(reg, m, repo=None):
     }
 
 
+def default_weights(m):
+    """The default weights file row of files[] (kind weights, default true), or None."""
+    return next((f for f in m.get("files") or [] if f.get("kind") == "weights" and f.get("default")), None)
+
+
 def weights_version(m):
-    """One line naming the dated weights version (hf_tag); "" without one. It never prints the revision sha, so the card
-    reads the same before and after the upload that makes the revision models.json pins."""
-    if not m.get("hf_tag"):
+    """One line naming the weights of a model with a dated weights version (hf_tag) by file and sha256; "" without one.
+    It never prints a Hugging Face tag or the revision sha: uploading the card makes a new revision that no tag points
+    at (a tag is never moved), so a tag named in the card would name another revision (check --online refuses that)."""
+    w = default_weights(m)
+    if not m.get("hf_tag") or not w or not w.get("sha256"):
         return ""
-    return (f"Weights version `{m['hf_tag']}` (the Hugging Face tag of the revision `models.json` pins). Newer weights "
-            f"are published as new dated versions; a published version never changes.")
+    return f"The weights file `{w['name']}` has sha256 `{w['sha256']}`."
 
 
 def render_card(reg, m, templates, repo=None):
@@ -1142,14 +1370,14 @@ def pin_links(reg, repo, text, where, problems):
     return REF_RE.sub(ref, LINK_RE.sub(sub, text))
 
 
-def render_all(reg, repo, profile, templates, problems, places=None):
+def render_all(reg, repo, profile, templates, problems, places=None, org_card=None):
     """Return {relative path or 'profile': rendered text} for every view. places: the pages section of the private
     number map (None without one): pages get their markers back from it, are filled, and come out without markers;
     the new places are left in render_all.places."""
     views = {}
     readme = repo / "README.md"
     if readme.exists():
-        out = splice(readme.read_text(), models_table(reg, absolute=False), "README.md", problems)
+        out = splice(readme.read_text(), readme_block(reg), "README.md", problems)
         if out is not None:
             views["README.md"] = pin_links(reg, repo, out, "README.md", problems)
     else:
@@ -1162,9 +1390,13 @@ def render_all(reg, repo, profile, templates, problems, places=None):
     else:
         problems.add("llms.txt", "missing")
     if profile is not None:
-        out = splice(profile.read_text(), profile_table(reg), str(profile), problems)
+        out = splice(profile.read_text(), profile_block(reg), str(profile), problems)
         if out is not None:
             views["profile"] = out
+    if org_card is not None:   # the Hugging Face org card (README Space), same markers as the profile
+        out = splice(org_card.read_text(), org_card_block(reg), str(org_card), problems)
+        if out is not None:
+            views["org-card"] = out
     for m in live(reg):  # a "coming soon" model's card is not published yet; it is checked again at its launch
         if m["hf_repo"]:
             views[f"hf/{m['id']}/README.md"] = render_card(reg, m, templates, repo)
@@ -1371,14 +1603,36 @@ def chip_text(m, chip):
     if chip_note(m, chip):
         return chip_note(m, chip)
     why = c.get("note") if cell == "Supported" else (c.get("reason") or c.get("note"))
-    return cell + (f": {why}" if why and cell != "Not tested yet" else "")
+    speed = measured_speed(m, chip) if cell == "Supported" else ""
+    return cell + (f": {why}" if why and cell != "Not tested yet" else "") + (f". {speed}" if speed else "")
+
+
+def measured_speed(m, chip):
+    """A passing chips row's measured decode speed, "76.73 tokens/s for 1 request, 470.4 tokens/s for 8" (its measured
+    block); "" when it has none. A chip we ran on is supported with its measured speed."""
+    got = (m["chips"].get(chip) or {}).get("measured") or {}
+    one, eight = got.get("decode_tok_s_1_user"), got.get("decode_tok_s_8_users")
+    if not isinstance(one, (int, float)):
+        return ""
+    return f"{one:g} tokens/s for 1 request" + (f", {eight:g} tokens/s for 8" if isinstance(eight, (int, float)) else "")
+
+
+def starts_on(m):
+    """["CPU", "TPU v5e-4", "TPU v6e-1", ...]: every chip the model starts on, the package catalog's list (catalog.chips_run,
+    behind docs/supported-models.md and `mashbox models`): CPU when its cpu row passes, then every passing chips row's
+    host in CHIPS order, each once. A chip it was only measured on keeps its note in its own column."""
+    out = ["CPU"] if runs_cpu(m) else []
+    for c in CHIPS:
+        r = m["chips"].get(c) or {}
+        if r.get("status") == "passing" and f"TPU {r.get('accelerator') or c}" not in out:
+            out.append(f"TPU {r.get('accelerator') or c}")
+    return out
 
 
 def chips_block(reg):
     """Which chip each model runs on (the FAQ's and the chips page's table), from the models.json chips rows. Released
     models only, as every other view."""
-    rows = [[m["name"], f"TPU {m['cloud']['accelerator']}" if m.get("cloud") else "CPU (on a TPU VM, the host CPU)"]
-            + [chip_text(m, c) for c in CHIPS] for m in live(reg)]
+    rows = [[m["name"], ", ".join(starts_on(m))] + [chip_text(m, c) for c in CHIPS] for m in live(reg)]
     return table(["Model", "Runs on"] + [CHIP_LABEL[c] for c in CHIPS], rows)
 
 
@@ -1428,7 +1682,7 @@ def docs_views(reg, repo, problems):
         new = API_RE.sub(lambda mt: f"{mt.group(1)}\n{api_block(mods, rel)}\n{mt.group(3)}", new)
         new = CHIPS_RE.sub(lambda mt: f"{mt.group(1)}\n{chips_block(reg)}\n{mt.group(3)}", new)
         C = mods[".catalog"]
-        new = CATALOG_RE.sub(lambda mt: f"{mt.group(1)}\n{C.render_markdown(reg)}\n{mt.group(3)}", new)
+        new = CATALOG_RE.sub(lambda mt: f"{mt.group(1)}\n{_lists().render_markdown(reg)}\n{mt.group(3)}", new)
         new = ARCHS_RE.sub(lambda mt: f"{mt.group(1)}\n{C.archs_block(reg)}\n{mt.group(3)}", new)
         if CLOUD_RE.search(text):
             if cloud is None:
@@ -1905,6 +2159,43 @@ def only_chip_claims(m, piece):
     return out
 
 
+# a sentence that makes fitting one chip the condition to run on a chip type ("a model runs on v5e when its weights fit
+# in 16 GB", "a model runs there when it fits"); read after row_words()
+FIT_CONDITION_RE = re.compile(r"\b(?:when|if|once|as long as|unless)\b[^.;|]*\bfits?\b")
+RUN_WORD_RE = re.compile(r"\b(?:runs?|running)\b")
+
+
+def multi_chip_hosts(reg):
+    """{chip type: the hosts of several chips a model passes on} from the released models' passing chips rows with a
+    chip_count above 1: {"v5e": ["v5e-4"], "v6e": ["v6e-4"]}."""
+    out = {}
+    for m in live(reg):
+        for key, c in (m.get("chips") or {}).items():
+            if isinstance(c, dict) and c.get("status") == "passing" and int(c.get("chip_count") or 1) > 1:
+                host = row_words(c.get("accelerator") or key)
+                out.setdefault(host.split("-")[0], set()).add(host)
+    return {t: sorted(h) for t, h in out.items()}
+
+
+def chip_fit_problems(reg, line):
+    """A page line that makes fitting one chip the condition to run on a chip type, while a model passes on a host of
+    several chips of that type (Qwen3.8-27B on a v5e-4, split across 4 chips): the sentence names that host or the
+    split, else it tells a reader the larger model does not run there. The chip type comes from the sentence, else from
+    its line (a table row: "TPU v5e | ... A model runs there when it fits.")."""
+    hosts, out = multi_chip_hosts(reg), []
+    for piece in re.split(r"(?<=[.!?])\s+", line):
+        words = row_words(piece)
+        if not (FIT_CONDITION_RE.search(words) and RUN_WORD_RE.search(words)):
+            continue
+        kinds = {t.split("-")[0] for t in CHIP_TOKEN_RE.findall(words)} or \
+                {t.split("-")[0] for t in CHIP_TOKEN_RE.findall(row_words(line))}
+        for kind in sorted(kinds & set(hosts)):
+            if not (any(re.search(rf"\b{re.escape(h)}\b", words) for h in hosts[kind]) or re.search(r"\bsplit|\bacross\b", words)):
+                out.append(f"makes fitting one chip the condition to run on {kind} ({' '.join(piece.split())[:100]!r}), but "
+                           f"a model passes on {', '.join(hosts[kind])} split across its chips: name the host or the split")
+    return out
+
+
 def sentences(text):
     """The sentences of a page with each paragraph, list item, table row and heading joined across its line breaks (a
     claim wrapped over two lines is read whole); a piece holding a chip marker (\x01) is left out."""
@@ -1961,6 +2252,8 @@ def check_numbers(reg, repo, problems, places=None):
         own = next((m for m in reg["models"] if rel == f"docs/models/{m['id']}.md"), None)
         status = []   # a sentence (or table row) that gives a model's chip status: from the chips row (marker) only
         for line in text.splitlines():
+            for why in chip_fit_problems(reg, line if "\x01" not in line else ""):   # \x01: a chips-row marker
+                problems.add(rel, why)
             for piece in re.split(r"(?<=[.!?])\s+", line):
                 said = {names[w]["id"]: names[w] for w in name_re.findall(piece)} or ({own["id"]: own} if own else {})
                 if CHIP_WORD_RE.search(piece) and STATUS_WORD_RE.search(piece) and "\x01" not in piece and said:
@@ -2266,6 +2559,45 @@ def check_conditions(reg, repo, problems):
                 if pat.search(part) and cond not in part and m["name"] in f.read_text():
                     problems.add(f.relative_to(repo).as_posix(), f"line {n}: {num} ({m['id']} results[{i}]) without {cond!r}: "
                                                                  f"{part.strip()[:120]}")
+
+
+LEVELS_PAGE = "docs/supported-models.md"   # its "## Levels" table defines every level a catalog row prints
+
+
+def check_levels(repo, problems):
+    """Every level a catalog block prints (the Level column of each table between <!-- catalog:start --> and
+    <!-- catalog:end -->, on any page) is a row of the "## Levels" table on docs/supported-models.md, so a reader can
+    look up what each row claims. The level itself is computed by mashbox.catalog.level()."""
+    page = repo / LEVELS_PAGE
+    if not page.exists():
+        return
+    def cells(line):
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+    sec = re.search(r"^## Levels[ \t]*\n(.*?)(?=^## |\Z)", page.read_text(), re.S | re.M)
+    defined = {cells(x)[0] for x in (sec.group(1).splitlines() if sec else []) if x.lstrip().startswith("|")} \
+        - {"Level", ""}
+    defined = {d for d in defined if not set(d) <= set("-: ")}
+    if not defined:
+        problems.add(LEVELS_PAGE, "no \"## Levels\" table: nothing defines the levels the catalog rows print")
+    for f in _prose(repo):
+        if not f.exists():
+            continue
+        for block in CATALOG_RE.finditer(f.read_text()):
+            col, printed = None, {}
+            for line in block.group(2).splitlines():
+                if not line.lstrip().startswith("|"):
+                    col = None
+                    continue
+                row = cells(line)
+                if col is None:
+                    col = row.index("Level") if "Level" in row else -1
+                elif 0 <= col < len(row) and not set(row[col]) <= set("-: "):
+                    lvl = re.split(r"<br\s*/?>", row[col])[0].strip()
+                    printed[lvl] = printed.get(lvl, 0) + 1
+            for lvl, n in sorted(printed.items()):
+                if lvl not in defined:
+                    problems.add(f.relative_to(repo).as_posix(), f"the catalog prints level {lvl!r} on {n} row(s) but "
+                                                                 f"the Levels table on {LEVELS_PAGE} does not define it")
 
 
 def check_relative_links(repo, problems, reg=None):
@@ -2647,6 +2979,52 @@ def public_file_problems(m, rev, listing, fetch):
     return out
 
 
+def card_tag_problems(m, rev, cards, fetch):
+    """A card line that names a Hugging Face tag of its repo is true only when that tag points at the pinned revision
+    (the one that carries the card). Uploading a card makes a new revision, and a tag is never moved (a move deletes it
+    first), so after a card-only upload the card names no tag. cards: {label: card text}. Tags read logged out."""
+    st, body = fetch.get(f"https://huggingface.co/api/models/{m['hf_repo']}/refs")
+    if st != 200:
+        return [f"cannot read the Hugging Face tags (HTTP {st})"]
+    out = []
+    for name in sorted({t.get("name") for t in json.loads(body).get("tags") or [] if t.get("name")}):
+        pat = re.compile(r"(?<![\w.-])" + re.escape(name) + r"(?![\w-])")
+        hits = [(label, i + 1) for label, text in cards.items() for i, x in enumerate(text.splitlines()) if pat.search(x)]
+        if not hits:
+            continue
+        st, rb = fetch.get(f"https://huggingface.co/api/models/{m['hf_repo']}/revision/{urllib.parse.quote(name, safe='')}")
+        sha = json.loads(rb).get("sha") if st == 200 else None
+        if sha == rev:
+            continue
+        for label, n in hits:
+            out.append(f"{label} line {n} names the Hugging Face tag {name}, which points at "
+                       f"{str(sha)[:12] if sha else f'nothing readable (HTTP {st})'}, not at the pinned revision {rev[:12]}: "
+                       f"a card names no tag, or only a tag of the revision it is on")
+    return out
+
+
+def weights_tag_problems(m, rev, fetch):
+    """hf_tag (the dated weights version) points at a revision whose default weights file has the sha256 models.json
+    pins, and so does the pinned revision: a card-only revision after the tag keeps the weights, so the tag may point at
+    an older revision, never at other weights."""
+    tag, w = m.get("hf_tag"), default_weights(m)
+    if not tag:
+        return []
+    if not w or not w.get("sha256"):
+        return [f"hf_tag {tag}: files[] has no default weights file with a sha256"]
+    out = []
+    for label, r in ((f"tag {tag}", urllib.parse.quote(tag, safe="")), (f"the pinned revision {rev[:12]}", rev)):
+        st, body = fetch.get(f"https://huggingface.co/api/models/{m['hf_repo']}/revision/{r}?blobs=true")
+        if st != 200:
+            out.append(f"hf_tag {tag}: cannot read {label} (HTTP {st})")
+            continue
+        sha = next(((s.get("lfs") or {}).get("sha256") for s in json.loads(body).get("siblings") or []
+                    if s.get("rfilename") == w["name"]), None)
+        if sha != w["sha256"]:
+            out.append(f"hf_tag {tag}: {w['name']} at {label} has sha256 {str(sha)[:12]}, models.json pins {w['sha256'][:12]}")
+    return out
+
+
 def check_online(reg, views, fetch, problems, repo=None):
     hf_org = reg["hf"]["org"]
     st, body = fetch.get(f"https://huggingface.co/api/models?author={hf_org}&limit=1000")
@@ -2693,6 +3071,11 @@ def check_online(reg, views, fetch, problems, repo=None):
             problems.add(where, f"card not readable at {rev[:12]} (HTTP {st})")
         elif want is not None and card.strip() != want.strip():
             problems.add(where, "card on Hugging Face differs from the card rendered from models.json")
+        cards = {f"the card at {rev[:12]}": card} if st == 200 else {}
+        if want is not None and (st != 200 or card.strip() != want.strip()):
+            cards["the card rendered from models.json"] = want
+        for x in card_tag_problems(m, rev, cards, fetch) + weights_tag_problems(m, rev, fetch):
+            problems.add(where, x)
         lic_sha = m["upstream"].get("license_sha256")
         if lic_sha:  # the upstream LICENSE travels with our conversion, unchanged (Apache-2.0 section 4)
             st, text = fetch.get(f"https://huggingface.co/{m['hf_repo']}/raw/{rev}/LICENSE")
@@ -2716,8 +3099,24 @@ def check_online(reg, views, fetch, problems, repo=None):
         problems.add("profile", f"org profile not readable (HTTP {st})")
     elif MARK_START not in prof or MARK_END not in prof:
         problems.add("profile", f"org profile has no {MARK_START} / {MARK_END} block")
-    elif prof.split(MARK_START, 1)[1].split(MARK_END, 1)[0].strip() != profile_table(reg).strip():
+    elif prof.split(MARK_START, 1)[1].split(MARK_END, 1)[0].strip() != profile_block(reg).strip():
         problems.add("profile", "org profile models block differs from the one rendered from models.json")
+    if st == 200:
+        for w, msg in list_problems(reg, prof, "profile (live)", names=True):
+            problems.add(w, msg)
+    # The Hugging Face org card and the "TPU models" collection, as a logged-out visitor sees them
+    st, card = fetch.get(ORG_CARD_URL.format(org=hf_org))
+    if st != 200:
+        problems.add("hf org card", f"not readable (HTTP {st})")
+    else:
+        for w, msg in org_card_problems(reg, card, "hf org card (live)"):
+            problems.add(w, msg)
+    st, body = fetch.get(f"https://huggingface.co/api/collections?owner={hf_org}&limit=100")
+    if st != 200:
+        problems.add("hf collections", f"cannot list the collections of {hf_org} (HTTP {st})")
+    else:
+        for w, msg in collection_problems(reg, body, "hf collections"):
+            problems.add(w, msg)
     pages = {f.relative_to(repo).as_posix(): f.read_text() for f in _prose(repo)} if repo is not None else {}
     check_links(reg, {**pages, **views}, fetch, problems)  # every page, hand-written or generated (views win: rendered text)
 
@@ -2759,6 +3158,7 @@ def main(argv=None):
     ap.add_argument("pages", nargs="*", help="markup: the pages (repo-relative)")
     ap.add_argument("--repo", required=True, help="root of the main repo (holds models.json)")
     ap.add_argument("--profile", help="org profile README to keep in sync (optional)")
+    ap.add_argument("--org-card", help="Hugging Face org card (the org's README Space README.md) to keep in sync (optional)")
     ap.add_argument("--org-defaults", help="the .github repo: CONTRIBUTING.md and SECURITY.md must equal the main repo's")
     ap.add_argument("--templates", help="card templates; default: <repo>/templates/hf when it exists, else the org templates")
     ap.add_argument("--write", action="store_true", help="render: write the views in place")
@@ -2782,6 +3182,8 @@ def main(argv=None):
     templates = Path(a.templates) if a.templates else \
         (repo / "templates" / "hf" if (repo / "templates" / "hf").is_dir() else DEFAULT_TEMPLATES)
     profile = Path(a.profile) if a.profile else None
+    org_card = Path(a.org_card) if a.org_card else None
+    own = {"profile": (profile, "profile/README.md"), "org-card": (org_card, "hf-org-card/README.md")}
     problems = Problems()
     try:
         reg = json.loads((repo / "models.json").read_text())
@@ -2804,7 +3206,8 @@ def main(argv=None):
     if nmap is not None:
         moved = {o: dict(r.get("figures") or {}) for o, r in [("cloud", reg)] + [(m["id"], m) for m in reg["models"]]}
         merge_figures(reg, nmap, problems if a.cmd == "check" else None)
-    views = render_all(reg, repo, profile, templates, problems, nmap["pages"] if nmap is not None else None)
+    views = render_all(reg, repo, profile, templates, problems, nmap["pages"] if nmap is not None else None,
+                       org_card=org_card)
 
     if a.cmd == "render" and nmap is not None and (a.write or a.out):
         # the private map: figures move out of models.json, places follow the pages as rendered
@@ -2830,9 +3233,9 @@ def main(argv=None):
     if a.cmd == "render":
         for key, text in views.items():
             if a.out:
-                dest = Path(a.out) / ("profile/README.md" if key == "profile" else key)
+                dest = Path(a.out) / (own[key][1] if key in own else key)
             elif a.write:
-                dest = profile if key == "profile" else repo / key
+                dest = own[key][0] if key in own else repo / key
             else:
                 print(f"----- {key}\n{text}")
                 continue
@@ -2844,13 +3247,24 @@ def main(argv=None):
         return 1 if problems else 0
 
     for key, text in views.items():
-        path = profile if key == "profile" else repo / key
+        path = own[key][0] if key in own else repo / key
         if not path.exists():
             problems.add(key, "rendered view missing on disk (run render --write)")
         elif path.read_text() != text:
             problems.add(key, "differs from its generated view: models.json, runtime/openapi.py or the CLI parsers (run render --write)")
     check_prose(reg, repo, problems)
+    for f in _prose(repo):
+        rel = f.relative_to(repo).as_posix()
+        for w, msg in list_problems(reg, views.get(rel, f.read_text()), rel):
+            problems.add(w, msg)
+    if profile is not None and profile.exists():
+        for w, msg in list_problems(reg, views.get("profile", profile.read_text()), str(profile), names=True):
+            problems.add(w, msg)
+    if org_card is not None and org_card.exists():
+        for w, msg in org_card_problems(reg, views.get("org-card", org_card.read_text()), str(org_card)):
+            problems.add(w, msg)
     check_conditions(reg, repo, problems)
+    check_levels(repo, problems)
     check_relative_links(repo, problems, reg)
     if nmap is not None:
         check_numbers(reg, repo, problems, nmap["pages"])

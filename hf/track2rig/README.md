@@ -57,15 +57,15 @@ Track2Rig starts from 3D point tracks. To make them from a video of one animal w
 | `examples/clips/grison_walk.npz` | npz | 2.1 MB | example |
 | `examples/clips/pelican-spider_idle.npz` | npz | 2.5 MB | example |
 | `examples/clips/pelican-spider_walk.npz` | npz | 2.7 MB | example |
-| `examples/clips/reference.json` | json | 4.2 KB | example |
+| `examples/clips/reference.json` | json | 4.1 KB | example |
 
-Weights version `2026-10-29` (the Hugging Face tag of the revision `models.json` pins). Newer weights are published as new dated versions; a published version never changes.
+The weights file `track2rig-v2.safetensors` has sha256 `f8a79263dc21d2af078c123fbf76c2cba85df4694100f6a6c5e8f7608f6094b6`.
 
 ## Links
 
 |  |  |
 |---|---|
-| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.4/src/mashbox/models/track2rig) |
+| Code | [mashbox-labs/mashbox](https://github.com/mashbox-labs/mashbox/tree/v0.1.5/src/mashbox/models/track2rig) |
 | Guide | [mashbox.gg/docs/models/track2rig](https://mashbox.gg/docs/models/track2rig) |
 | Original model | [mashbox-labs/Track2Rig](https://huggingface.co/mashbox-labs/Track2Rig) by MASHBOX Labs |
 | Setup from a new Google account | [mashbox.gg/docs/google-cloud](https://mashbox.gg/docs/google-cloud) |

@@ -49,6 +49,9 @@ DATE_RULES = [
     ("day-month", re.compile(rf"\b\d{{1,2}} {_MONTH}\b"), "no dates on a page: the release version pins the page"),
     ("utc", re.compile(r"\bUTC\b"), "no measurement times on a page"),
 ]
+# Read with inline code kept (the name is often `mashbox` in backticks); fenced blocks are not read. No exceptions.
+VERSION_NOTE = ("measured-version", re.compile(r"`?\bmashbox`? (?:version )?\d+\.\d+\.\d+\b"),
+                "no version note beside a number or a run: the measurement stands; versions go in the changelog")
 RULES = [
     ("verified", re.compile(r"(?i)\bverified\b|\bran as (?:printed|written)\b"), "describe the release; never a verification stamp"),
     ("our-run", re.compile(r"(?i)\bour (?:own )?(?:runs?|tests?|test (?:runs?|sessions?|driver)|sessions?|chips?|new (?:chip|VM|project)|"
@@ -264,7 +267,13 @@ def lint_text(rel, text, allowed, used, extra=()):
                         if rule in DATE_IN_CODE and rx.search(line):
                             probs.append(f"{rel}:{text.count(chr(10), 0, mt.start()) + 1 + i}: [{rule}] {rx.search(line).group(0)!r} "
                                          f"in a code block: use a placeholder (\"...\") for times and ids in sample output")
-        text = CODE_RE.sub(_blank, FENCE_RE.sub(_blank, text))
+        prose = FENCE_RE.sub(_blank, text)
+        text = CODE_RE.sub(_blank, prose)
+    else:
+        prose = text
+    rule, rx, fix = VERSION_NOTE
+    for mt in rx.finditer(prose):
+        probs.append(f"{rel}:{prose.count(chr(10), 0, mt.start()) + 1}: [{rule}] {mt.group(0)!r}: {fix}")
     if rel.endswith((".md", ".mdx", ".txt")):
         found = [*COMMENT_RE.finditer(text), *(MDX_COMMENT_RE.finditer(text) if rel.endswith(".mdx") else ())]
         for mt in sorted(found, key=lambda m: m.start()):

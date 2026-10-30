@@ -15,14 +15,14 @@
 #app{--mbx-ar:1.81818;--mbx-reserve:212px}
 .wm-below{margin:0 auto;width:min(100%,max(1080px,calc((100vh - var(--mbx-reserve)) * var(--mbx-ar))));width:min(100%,max(1080px,calc((100svh - var(--mbx-reserve)) * var(--mbx-ar))))}
 /* ---------- the picture and its readouts (dark in both themes) ---------- */
-#stage{--text:#f3ebe1;--dim:#b9ab9b;color:var(--text)}
+#stage{--text:#ece6da;--dim:#b3ab9e;color:var(--text)}
 #cv{width:100%;height:100%;display:block}
 #hud{position:absolute;left:12px;right:262px;bottom:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;pointer-events:none}
-#stage .chip{font:13px/1 var(--mbx-mono);font-variant-numeric:tabular-nums;color:#f3ebe1;background:rgba(11,9,8,.84);border:2px solid rgba(255,110,50,.4);padding:6px 9px;white-space:nowrap}
-#stage .chip b{color:#ffb347;font-weight:400}
+#stage .chip{font:13px/1 var(--mbx-mono);font-variant-numeric:tabular-nums;color:#ece6da;background:rgba(11,10,9,.84);border:1px solid rgba(236,230,218,.14);padding:6px 9px;white-space:nowrap}
+#stage .chip b{color:#ff8a5c;font-weight:400}
 #keysHud{position:absolute;right:12px;bottom:12px;display:flex;gap:4px;pointer-events:none}
-.kh{font:12px/1 var(--mbx-mono);min-width:28px;text-align:center;padding:7px 5px;background:rgba(11,9,8,.84);border:2px solid rgba(255,110,50,.3);color:#b9ab9b}
-.kh.on{background:#ff5a1f;border-color:#ff5a1f;color:#160800}
+.kh{font:12px/1 var(--mbx-mono);min-width:28px;text-align:center;padding:7px 5px;background:rgba(11,10,9,.84);border:1px solid rgba(236,230,218,.14);color:#b3ab9e}
+.kh.on{background:#ff5a1f;border-color:#ff5a1f;color:#1a0b04}
 #wlHud{position:absolute;left:12px;top:12px;display:none}
 #actHud{position:absolute;left:50%;top:12px;transform:translateX(-50%);display:none;max-width:70%;overflow:hidden;text-overflow:ellipsis}
 #veil{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;background:rgba(0,0,0,.6);font:600 17px/1.4 var(--mbx-font);text-align:center;padding:20px}
@@ -30,7 +30,7 @@
 #veil small{font:13px/1.4 var(--mbx-mono);color:var(--dim)}
 /* readout strip: each <span> with a .num inside is one cell; spans without one (dot separators) are hidden */
 #under{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;font:600 12.5px/1.3 var(--mbx-font);color:var(--mbx-dim)}
-#under>span{flex:1 1 auto;display:inline-flex;align-items:baseline;align-content:center;justify-content:center;flex-wrap:wrap;gap:3px 6px;padding:7px 10px;background:var(--mbx-panel);border:2px solid var(--mbx-line-2)}
+#under>span{flex:1 1 auto;display:inline-flex;align-items:baseline;align-content:center;justify-content:center;flex-wrap:wrap;gap:3px 6px;padding:7px 10px;background:var(--mbx-panel);border: 1px solid var(--mbx-line-2)}
 #under>span:not(:has(.num)):not(#msg){display:none}
 #under>span[title]{cursor:help}
 #under>span:first-child{flex:2 1 230px;flex-wrap:nowrap;justify-content:flex-start;align-items:center;text-align:left;line-height:1.25}
@@ -43,7 +43,7 @@
 #side{--mbx-cols:3;margin-top:0}
 #side .mbx-card{display:flex;flex-direction:column;gap:12px}
 #side .mbx-card>h2{margin:0}
-.wm-h{display:block;margin:2px 0 -4px;font:700 11.5px/1.3 var(--mbx-font);letter-spacing:.6px;text-transform:uppercase;color:var(--mbx-faint)}
+.wm-h{display:block;margin:2px 0 -4px;font:700 11.5px/1.3 var(--mbx-font);letter-spacing:.6px;color:var(--mbx-faint)}
 .wm-stack{display:flex;flex-direction:column;gap:10px}
 .wm-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
 #side .mbx-field :is(input,select,textarea){width:100%}
@@ -52,18 +52,18 @@
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .hint{margin:0;font-size:12.5px;line-height:1.5;color:var(--mbx-dim)}
 .wm-chips{gap:6px}
-.mbx-ui .wm-chips button{padding:4px 10px;font-size:13px;box-shadow:2px 2px 0 var(--mbx-hard)}
+.mbx-ui .wm-chips button{padding:4px 10px;font-size:13px;box-shadow:none}
 .mbx-ui .wm-chips button:active{transform:translate(2px,2px);box-shadow:none}
 .wm-go{align-items:flex-end}
 .wm-seed input{width:112px !important}
 .wm-err{color:var(--mbx-up)}
 .wm-err:empty{display:none}
-#wl{display:none;padding:8px 10px;font-size:12.5px;background:var(--mbx-panel-2);border:2px solid var(--mbx-line)}
+#wl{display:none;padding:8px 10px;font-size:12.5px;background:none;border: 1px solid var(--mbx-line)}
 #wl .bar{height:8px;margin:6px 0 4px;background:var(--mbx-field);border:1px solid var(--mbx-line-2)}
 #wl .bar i{display:block;height:100%;background:var(--mbx-up);width:0}
 /* dial-style sliders: name and value on top, the slider under them */
 .wm-knobs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.sl{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n v" "r r";gap:2px 8px;align-items:baseline;padding:8px 10px 4px;background:var(--mbx-panel-2);border:2px solid var(--mbx-line)}
+.sl{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n v" "r r";gap:2px 8px;align-items:baseline;padding:8px 10px 4px;background:none;border: 1px solid var(--mbx-line)}
 .sl>span:first-child{grid-area:n;font:600 12.5px/1.3 var(--mbx-font);color:var(--mbx-dim)}
 .sl>span:last-child{grid-area:v;font:400 14px/1 var(--mbx-mono);font-variant-numeric:tabular-nums;color:var(--mbx-ink)}
 .sl>input{grid-area:r;width:100%}
@@ -75,14 +75,14 @@
 .wm-opts .row[title] .hint{cursor:help}
 .mbx-ui .wm-opts .row button{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;box-shadow:none;padding:5px 12px;font-size:13px;background:var(--mbx-field);color:var(--mbx-dim)}
 .mbx-ui .wm-opts .row button+button{margin-left:-2px}
-.mbx-ui .wm-opts .row button.sel{position:relative;color:var(--mbx-acc);border-color:var(--mbx-acc);background:color-mix(in srgb,var(--mbx-acc) 12%,var(--mbx-panel))}
+.mbx-ui .wm-opts .row button.sel{position:relative;color:var(--mbx-bg);border-color:transparent;background:var(--mbx-ink);font-weight:600}
 .mbx-ui .wm-opts .row button:active{transform:none}
 .wm-session .row{gap:8px}
 .mbx-ui .wm-session button{padding:5px 10px;font-size:13.5px}
 /* actions sent to the model */
 .acts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px}
 .acts:empty{display:none}
-.acts li{display:flex;justify-content:space-between;gap:8px;padding:6px 10px;background:var(--mbx-panel-2);border:2px solid var(--mbx-line)}
+.acts li{display:flex;justify-content:space-between;gap:8px;padding:6px 10px;background:none;border: 1px solid var(--mbx-line)}
 .acts .st{font-family:var(--mbx-mono);color:var(--mbx-dim);white-space:nowrap}
 .acts .st.go{color:var(--mbx-up)}
 /* Hide UI (H): only the picture */
@@ -118,6 +118,11 @@ body.rec #stage{border:0;box-shadow:none}
   .mbx-ui .wm-opts .row button{padding:5px 9px}
 }
 @media (max-width:480px),(pointer:coarse) and (max-width:700px){#keysHud{display:none}}
+
+/* homepage shape: rounded readouts, tiles and fields; every stroke is full and 1px */
+#stage .chip,.kh{border-radius:var(--mbx-r-sm)}
+#under>span,.sl,.acts li,#wl{border-radius:var(--mbx-r)}
+#wl .bar,#wl .bar i{border-radius:var(--mbx-r-pill)}
 </style></head><body class="mbx-ui">
 <header data-mbx-top></header>
 <main id="app" class="mbx-main">
