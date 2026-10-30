@@ -79,7 +79,7 @@ Wait 10 s before you start it again ([why](../faq.md#how-do-i-stop-a-server-and-
 <!-- cli:start run -->
 | Option | Default | What it does |
 |---|---|---|
-| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, or a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0) |
+| `MODEL` |  | model id, as in models.json (e.g. qwen3-8-27b), a .gguf file, a Hugging Face GGUF repo with an optional quant tag (e.g. unsloth/Qwen3.8-27B-GGUF or unsloth/Qwen3.8-27B-GGUF:Q8_0), or a Hugging Face safetensors repo or model folder (e.g. Qwen/Qwen3-4B) |
 | `--weights FILE` |  | a local .bshj file instead of the download (its sha256 is still checked) |
 | `--no-kernels` | off | plain JAX only: a catalog model runs without its TPU kernels (slower decode, same outputs within rounding) |
 | `--prompt TEXT` |  | answer one chat turn, print it and exit; without it, start the server |
@@ -98,9 +98,10 @@ Wait 10 s before you start it again ([why](../faq.md#how-do-i-stop-a-server-and-
 | `--steps N` | `8` | decode steps per device call |
 | `--mtp K` |  | speculative decoding with the model's own multi-token-prediction head: K drafts per verify pass (1 to 3; 0 = off). Default: on only on chips where it passed its checks, else off. Uses the model's draft file (Qwen3.8-27B: --mtp 2); one chip only |
 | `--mtp-file FILE` |  | a local draft .bshj file instead of the download (its sha256 is still checked) |
-| `--speculation SPECULATION` |  | speculative decoding. auto (default): the first drafter that applies to the model file, in this order: 1 a trained drafter made for this model (not in this release); 2 the model's own MTP head; 3 a smaller draft model with the same tokenizer (only one you give with --draft-model); 4 n-gram over the request's own text (llama, qwen2, qwen3, qwen35, exaone and granite GGUF files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head only); off; or force one kind (then it says 'not gated on this chip'). One chip only (`auto`, `off`, `mtp`, `ngram`, `draft`) |
-| `--draft-k K` |  | drafts per verify pass for a drafter you pick: ngram 1 to 8 (default 3); draft 1 to 8 (default 3); mtp 1 to the head's k_max (Qwen3.8-27B: 1 to 3, default 2) |
+| `--speculation SPECULATION` |  | speculative decoding. auto (default): the first drafter that applies to the model file, in this order: 1 a trained drafter made for this model (auto picks none in this release); 2 the model's own MTP head; 3 a smaller draft model with the same tokenizer (only one you give with --draft-model); 4 n-gram over the request's own text (llama, qwen2, qwen3, qwen35, exaone and granite GGUF files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head only); off; or force one kind (then it says 'not gated on this chip'). dflash: the DFlash block drafter from --drafter-dir (Qwen3.8-27B), never picked by auto. One chip only (`auto`, `off`, `mtp`, `ngram`, `draft`, `dflash`) |
+| `--draft-k K` |  | drafts per verify pass for a drafter you pick: ngram 1 to 8 (default 3); draft 1 to 8 (default 3); mtp 1 to the head's k_max (Qwen3.8-27B: 1 to 3, default 2); dflash 1 to 7 (default 7) |
 | `--draft-model FILE` |  | --speculation draft with this draft model: a smaller GGUF file or repo (as the model argument) with the same tokenizer, a llama, qwen2, qwen3, exaone or granite file; for a GGUF model only. Its weights and cache take chip memory next to the model's |
+| `--drafter-dir DIR` |  | --speculation dflash with the DFlash drafter in DIR: its config.json and model.safetensors (for Qwen3.8-27B, the Hugging Face repo z-lab/Qwen3.8-27B-DFlash2). It runs one request at a time unless --slots N is given |
 | `--tensor-parallel-size N` | `0` | chips to split the model across, as vLLM (1, 2 or 4); default: the chips of this host, at most 4 (1 on a TPU v6e-1, 4 on a TPU v5e-4 or v6e-4) |
 | `--cache-dir DIR` |  | compile cache (default ~/.cache/mashbox/xla, or JAX_COMPILATION_CACHE_DIR) |
 | `--no-warm` | off | skip compiling the first request's programs before ready |

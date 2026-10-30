@@ -1,0 +1,32 @@
+{
+ "name": "mistral",
+ "architecture": "MistralForCausalLM",
+ "seed": 1234,
+ "tokens": [
+  177,
+  16,
+  127,
+  198,
+  184,
+  152,
+  82,
+  147,
+  96,
+  33,
+  59,
+  200,
+  165,
+  190,
+  109,
+  136
+ ],
+ "n_vocab": 256,
+ "transformers": "5.5.4",
+ "torch": "2.11.0+cu130",
+ "sha256": {
+  "config.json": "35abd28edd03e3c7f4d383761c258376f475d1d956dbfa37887047080f215a83",
+  "generation_config.json": "4e4e52d32be01dc604f43339af68524596e6f700353411239760f0d527cb0bd4",
+  "logits.f32": "1403b153453a9bf92852d5ffd8a39225d1b653ce23ec3b1d4a0e113580408c51",
+  "model.safetensors": "d7606cbbdc8374d4b221b62ccaae71b7ff38f0d8f87ccf92a667cc1f2eefc63d"
+ }
+}

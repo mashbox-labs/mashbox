@@ -15,6 +15,15 @@ import re
 
 from .reader import GGUFError
 
+
+class NoGGUF(GGUFError):
+    """a Hub repo with no .gguf file at all; files = its listing, so the caller can try the Hugging Face safetensors path
+    without listing the repo again"""
+
+    def __init__(self, msg, files):
+        super().__init__(msg)
+        self.files = files
+
 SIDECARS = ("mmproj", "mtp-", "dflash-", "eagle3-", "dspark-")
 DEFAULT_TAGS = ("Q4_K_M", "Q8_0")
 SPLIT = re.compile(r"^(.+)-([0-9]{5})-of-([0-9]{5})$", re.I)
@@ -131,8 +140,8 @@ def resolve(model, log=print, download=True):
     ggufs = [p for p in paths if p.endswith(".gguf")]
     if primary is None:
         if not ggufs:
-            raise GGUFError(f"mashbox: {repo} has no GGUF files. mashbox runs GGUF repos, .gguf files and the models in "
-                            f"`mashbox models`")
+            raise NoGGUF(f"mashbox: {repo} has no GGUF files and no config.json with safetensors weights. mashbox runs GGUF "
+                         f"repos, .gguf files, Hugging Face safetensors repos and the models in `mashbox models`", paths)
         raise GGUFError(f"mashbox: {repo} has no GGUF file for tag {tag!r}. Files: " + ", ".join(ggufs))
     want = shards(primary)
     missing = [p for p in want if p not in size]

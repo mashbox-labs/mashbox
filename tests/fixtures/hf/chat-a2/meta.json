@@ -1,0 +1,8 @@
+{
+ "name": "chat-a2",
+ "transformers": "5.5.4",
+ "sha256": {
+  "renders.json": "2a2558dcf4f979d91e6e4d2df46b48378545c87064bc7074d3a41768d9361561",
+  "tokenizer_config.json": "3698eee3f2ca4db64f1f0a8779717a45bbcace7384d09f44dfce53e1ea70ba0c"
+ }
+}

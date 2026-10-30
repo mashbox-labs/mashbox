@@ -288,12 +288,14 @@ def test_the_speed_check_leaves_the_back_off_wait_alone():
 AUTO_NAME = {"trained": "A trained drafter made for this model", "mtp": "The model's own MTP head",
              "draft_model": "A smaller model with the same tokenizer", "ngram": "Copy from the conversation"}
 NOT_RUN = "This release does not run"
+PICK_ONLY_TEXT = "`auto` does not pick one in this release"
 
 
 def _auto_list_problems(page):
     """auto's list (How auto picks a drafter) against drafters.ORDER: one numbered item per kind, in ORDER's order,
     named as the page names it; an item says this release does not run its kind exactly when the kind has no module
-    in this release (drafters.MODULES)"""
+    in this release (in neither drafters.MODULES nor drafters.PICK_ONLY), and says auto does not pick one exactly when
+    the kind runs only when picked (drafters.PICK_ONLY)"""
     sec = page.split("\n## How auto picks a drafter\n", 1)[1].split("\n## ", 1)[0]
     items = re.findall(r"^(\d+)\. (.+)$", sec, re.M)
     out = []
@@ -302,8 +304,11 @@ def _auto_list_problems(page):
     for (n, text), kind in zip(items, D.ORDER):
         if not text.startswith(f"**{AUTO_NAME[kind]}"):
             out.append(f"item {n} should be {AUTO_NAME[kind]!r}: {text[:60]!r}")
-        if (NOT_RUN in text) != (kind not in D.MODULES):
-            out.append(f"item {n} ({kind}): says {NOT_RUN!r} = {NOT_RUN in text}, module in this release = {kind in D.MODULES}")
+        absent = kind not in D.MODULES and kind not in D.PICK_ONLY
+        if (NOT_RUN in text) != absent:
+            out.append(f"item {n} ({kind}): says {NOT_RUN!r} = {NOT_RUN in text}, module in this release = {not absent}")
+        if (PICK_ONLY_TEXT in text) != (kind in D.PICK_ONLY):
+            out.append(f"item {n} ({kind}): says {PICK_ONLY_TEXT!r} = {PICK_ONLY_TEXT in text}, runs only when picked = {kind in D.PICK_ONLY}")
     return out
 
 
@@ -313,13 +318,16 @@ def test_auto_list_follows_the_order_and_says_what_this_release_does_not_run():
 
 def test_auto_list_check_catches_edits():
     """an edit to auto's list is caught: a kind this release does not run said to run, a built kind said not to run,
-    two items swapped, an item added"""
+    a kind that runs only when picked said to be picked by auto or said not to run, two items swapped, an item added"""
     sec = PAGE.split("\n## How auto picks a drafter\n", 1)[1].split("\n## ", 1)[0]
     items = re.findall(r"^\d+\. .+$", sec, re.M)
-    unbuilt = [i for i, k in enumerate(D.ORDER) if k not in D.MODULES]
+    unbuilt = [i for i, k in enumerate(D.ORDER) if k not in D.MODULES and k not in D.PICK_ONLY]
+    picked = [i for i, k in enumerate(D.ORDER) if k in D.PICK_ONLY]
     built = [i for i, k in enumerate(D.ORDER) if k in D.MODULES]
     edits = [PAGE.replace(items[built[0]], items[built[0]] + f" {NOT_RUN} it.")]
     edits += [PAGE.replace(items[i], items[i].split(NOT_RUN)[0].rstrip()) for i in unbuilt]
+    edits += [PAGE.replace(items[i], items[i].replace(PICK_ONLY_TEXT, "`auto` picks it")) for i in picked]
+    edits += [PAGE.replace(items[i], items[i] + f" {NOT_RUN} it.") for i in picked]
     a, b = items[built[0]], items[built[1]]
     edits.append(PAGE.replace(a, "\0").replace(b, a.replace(f"{built[0] + 1}. ", f"{built[1] + 1}. ", 1))
                  .replace("\0", b.replace(f"{built[1] + 1}. ", f"{built[0] + 1}. ", 1)))
