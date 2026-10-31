@@ -2,7 +2,7 @@
 
 ## How you tested
 
-- [ ] `python3 -m pytest tests/cpu`
+- [ ] `python3 -m pytest tests/contracts`, and the `tests/cpu` areas `python3 tools/ci_select.py --base origin/main` selected
 - [ ] Ran on a TPU (which chip, what command), or say that it needs a maintainer chip run
 
 ## Checklist
