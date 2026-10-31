@@ -30,7 +30,7 @@ For coding agents that work on this repo, or that run its models for a person.
 ## Work on the code
 
 - Install for development: `python3 -m pip install -e ".[dev]"`
-- CPU tests: `python3 -m pytest tests/cpu`. CI runs them on every pull request.
+- Checks: `python3 -m pytest tests/contracts` is what every pull request runs (CPU, a few minutes, no model download); then run the `tests/cpu` areas `python3 tools/ci_select.py --base origin/main` selects ([CI.md](CI.md)). The whole `tests/cpu` suite is the nightly sweep.
 - TPU tests live in `tests/tpu/`. Maintainers run them on real chips before each release. Say in the pull request if your change needs one.
 - After editing `models.json`, copy it to `src/mashbox/models.json`, then run `python3 tools/hf_github_sync_check.py render --repo . --write` and commit the files it rewrites.
 - The kernel source is not in this repo. `mashbox run` downloads the compiled kernels and checks each file against its sha256 in `models.json`: the engine kernel package (GGUF files and Hugging Face models) from a mashbox release on GitHub, listed under `engine_kernels`, and each MASHBOX build's own kernel package from its Hugging Face repo, under `kernels/`. Do not patch or decompile them; report kernel problems as issues. `--no-kernels` runs without them where the model supports plain JAX.

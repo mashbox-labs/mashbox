@@ -298,6 +298,7 @@ The source of the model ports, CLI, runtime, demo apps and docs is in this repo,
 | Models and weights | [huggingface.co/mashbox-labs](https://huggingface.co/mashbox-labs) |
 | News | [x.com/mashboxgg](https://x.com/mashboxgg) |
 | Bugs and model requests | [GitHub issues](https://github.com/mashbox-labs/mashbox/issues), see [CONTRIBUTING.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/CONTRIBUTING.md) |
+| Release notes | [GitHub releases](https://github.com/mashbox-labs/mashbox/releases), one per version; the core changes behind them, and how existing models keep working, are in [CORE-CHANGES.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/CORE-CHANGES.md) |
 | Security reports | [SECURITY.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/SECURITY.md) |
 | Companies | hello@mashbox.gg |
 

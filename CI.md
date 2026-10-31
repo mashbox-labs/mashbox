@@ -27,6 +27,7 @@ Run the same thing locally:
 
 ```bash
 PYTHONPATH=src python3 -m pytest -m t0 tests/cpu/test_core.py          # T0, needs only pytest
+python3 -m pytest tests/contracts                                      # the contracts job, the same for every pull request
 python3 tools/ci_select.py --base origin/main                           # which areas your change selects
 python3 -m pytest tests/cpu -m "hy_nomas and not t0" --durations=15     # T1 for one area
 ```
@@ -60,9 +61,11 @@ One run, on one fresh on-demand v6e-1:
 2. **kernels:** every `tests/tpu/<model>_kernel_check.py` compares each compiled kernel with the plain JAX version of the same op on the chip. `tools/ci_tpu_gate.py` applies the gates from `tests/tpu/<model>_kernel_tolerances.json`: every kernel checked, no non-finite values, and per op bit-exact or a relative L2 error at or under its written tolerance. A kernel with no rule fails.
 3. **tiny:** the CPU suite again on the chip, one pytest process per area (`JAX_PLATFORMS=tpu,cpu`: the TPU is the default device, f32 matmuls at full precision). Tests that need CPU-only stand-ins carry `@pytest.mark.cpu_only`.
 
-The chip gets the commit and the kernel bundles, never a token. The run is posted on the commit as the status `tpu/v6e-1`. The chip is deleted when the run ends, on any error, and at a hard deadline.
+The chip gets the commit and the kernel bundles, never a token. The chip is deleted when the run ends, on any error, and at a hard deadline.
 
-**How to trigger it:** say in the pull request that the change needs a chip run; a maintainer starts T2 for the commit.
+**Where the results are:** T2 runs for releases, not for every pull request, and its results live in the repo, not in a GitHub check: every GGUF row's `chips` entry in `models.json` names the chip, the record kind and the measured number of its last run, and each release's notes say which files ran on the release's code and kernel package. No commit status is posted today.
+
+**How to trigger it:** say in the pull request that the change needs a chip run; a maintainer runs T2 for the commit and writes the result into the pull request.
 
 **Cost:** on-demand v6e-1 list price is about $2.70 an hour. A T2 run bills about 10.1 minutes, about $0.46 at that price: 2.6 min to create the chip, 13 s to install, 229 s for the 28 Hy-Nomas kernels, 46 s for the CPU suite on the chip, 2.2 min to delete. Getting a chip can take longer than the run: on-demand v6e-1 can have no capacity in five zones for about 30 minutes, and a failed create bills nothing.
 
