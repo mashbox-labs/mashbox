@@ -2,6 +2,17 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.13
+
+### A decode call at one input row runs on its own kernel class
+
+1. **`models.json` (both copies):** the `engine_kernels` row names `mashbox_engine_kernels` 0.1.13. It adds a kernel class for matmul calls of exactly one input row, for every quantized type that runs on a shape class. Until now such a call was padded to the 8-row class. Every 0.1.12 payload is in the package byte for byte, and each weight keeps one copy of its planes, packed as before.
+2. **`ops/bundle.py`: no change.** The reader takes a call's row classes from the bundle, so a one-row call takes the new class, and a call of 2 rows or more takes the payload it took in 0.1.12.
+
+Why: on one TPU v6e chip, one input row, per call: a 9728 x 2560 Q4_K weight takes 22.6 us instead of 31.9 us, a 9728 x 2560 Q2_K weight takes 25.5 us instead of 57.6 us, and a 151936 x 2560 Q6_K head takes 474 us instead of 544 us.
+
+How existing models keep working: at one row the new class's outputs equal 0.1.12's bit for bit. This was checked for every quantized type that runs on a shape class, on 10 weight shapes, plain and through the layer form, along with rows 2 to 8 and 64, and the planes are equal. On the files measured, peak memory and the time to the first token are no higher than with 0.1.12.
+
 ## 0.1.12
 
 ### The org card claims our TPU kernels only as far as the rows ship them
