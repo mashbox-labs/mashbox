@@ -7,7 +7,7 @@
   "hf": {
     "org": "mashbox-labs"
   },
-  "version": "0.1.12",
+  "version": "0.1.13",
   "license": "Apache-2.0",
   "company_line": "MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.",
   "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]\"",
@@ -1104,13 +1104,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 322.01,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 325.35,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1148,12 +1148,12 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 205.07,
+            "steady_decode_tok_s_1_user": 209.35,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
@@ -1191,13 +1191,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 419.38,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 415.85,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1242,7 +1242,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 147.9,
+            "steady_decode_tok_s_1_user": 168.75,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -1285,7 +1285,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 579.24,
+            "steady_decode_tok_s_1_user": 582.95,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -1324,13 +1324,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 250.5,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 255.0,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1368,13 +1368,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 196.63,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 200.56,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1412,13 +1412,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 197.56,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 231.85,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1457,13 +1457,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 216.5,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 239.5,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1503,13 +1503,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 389.7,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 431.83,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1547,12 +1547,12 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 256.27,
+            "steady_decode_tok_s_1_user": 284.75,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
@@ -1593,13 +1593,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 323.92,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 322.16,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1637,13 +1637,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 403.0,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 465.05,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1681,12 +1681,12 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 205.7,
+            "steady_decode_tok_s_1_user": 210.41,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
@@ -1725,13 +1725,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 142.36,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 163.86,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1774,8 +1774,8 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 101.55,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+            "steady_decode_tok_s_1_user": 116.93,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
       }
@@ -1820,7 +1820,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 87.84,
+            "steady_decode_tok_s_1_user": 109.6,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -1859,13 +1859,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 45.67,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 61.69,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1903,13 +1903,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 205.38,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 209.77,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -1953,7 +1953,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 87.31,
+            "steady_decode_tok_s_1_user": 109.09,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -1998,13 +1998,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 27.45,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 32.28,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -2047,8 +2047,8 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 27.21,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+            "steady_decode_tok_s_1_user": 37.46,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
       }
@@ -2091,8 +2091,8 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 142.2,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+            "steady_decode_tok_s_1_user": 163.83,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
       }
@@ -2141,7 +2141,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 27.51,
+            "steady_decode_tok_s_1_user": 32.13,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -2186,13 +2186,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 27.33,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 32.9,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -2236,7 +2236,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 30.65,
+            "steady_decode_tok_s_1_user": 41.1,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
@@ -2282,7 +2282,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 28.25,
+            "steady_decode_tok_s_1_user": 35.63,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -2321,13 +2321,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 27.2,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 37.65,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -2370,7 +2370,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 27.2,
+            "steady_decode_tok_s_1_user": 37.51,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -2415,7 +2415,7 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 87.37,
+            "steady_decode_tok_s_1_user": 108.05,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
@@ -2456,12 +2456,12 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 27.25,
+            "steady_decode_tok_s_1_user": 37.58,
             "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
@@ -2502,13 +2502,13 @@
       "chips": {
         "v6e": {
           "status": "passing",
-          "accelerator": "v6e-4",
+          "accelerator": "v6e-1",
           "chip_count": 1,
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 12.43,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
+            "steady_decode_tok_s_1_user": 13.53,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
           }
         }
       }
@@ -2555,8 +2555,8 @@
           "kernel_path": "bundle",
           "record_kind": "quick",
           "measured": {
-            "steady_decode_tok_s_1_user": 11.42,
-            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, no other job on the host's chips"
+            "steady_decode_tok_s_1_user": 11.8,
+            "steady_condition": "steady decode, 1 user: median of 5 requests of 128 new tokens after one warm request, one process on one chip, another job on another chip of the same host"
           }
         }
       }
@@ -2693,9 +2693,9 @@
   "engine_kernels": [
     {
       "for": "gguf",
-      "file": "mashbox_engine_kernels-0.1.12-py3-none-any.whl",
-      "url": "https://github.com/mashbox-labs/mashbox/releases/download/v0.1.12/mashbox_engine_kernels-0.1.12-py3-none-any.whl",
-      "sha256": "cd46db5e3e46d8f6ee2c546477f07541a045d0bfab926b5c6c8be11dca210d62",
+      "file": "mashbox_engine_kernels-0.1.13-py3-none-any.whl",
+      "url": "https://github.com/mashbox-labs/mashbox/releases/download/v0.1.13/mashbox_engine_kernels-0.1.13-py3-none-any.whl",
+      "sha256": "57aafadae34cc3da52ca2ab875c2e84d45cdffe88bbd487df7d0062bce7b1608",
       "jax": "0.11.2",
       "libtpu": "0.0.48.*",
       "chips": [

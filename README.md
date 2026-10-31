@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.12/docs/assets/banner-dark.png">
-    <img alt="MASHBOX Labs" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.12/docs/assets/banner-light.png" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.13/docs/assets/banner-dark.png">
+    <img alt="MASHBOX Labs" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.13/docs/assets/banner-light.png" width="100%">
   </picture>
 </p>
 
@@ -16,14 +16,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.12/LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
+  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.13/LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
   <a href="#tpu-v6e-and-v5e"><img alt="TPU v6e" src="https://img.shields.io/badge/TPU-v6e-ff5a1f"></a>
   <a href="https://docs.astral.sh/uv/"><img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776ab?logo=python&logoColor=white"></a>
   <a href="https://huggingface.co/mashbox-labs"><img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-mashbox--labs-ffcc4d"></a>
   <a href="https://x.com/mashboxgg"><img alt="X" src="https://img.shields.io/badge/X-%40mashboxgg-000000?logo=x"></a>
 </p>
 
-<p align="center"><a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/models/qwen3-8-27b.md"><img alt="Qwen3.8-27B on one TPU v6e chip" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.12/hf/qwen3-8-27b/assets/hero.gif" width="100%"></a></p>
+<p align="center"><a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/models/qwen3-8-27b.md"><img alt="Qwen3.8-27B on one TPU v6e chip" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.13/hf/qwen3-8-27b/assets/hero.gif" width="100%"></a></p>
 <p align="center"><b>Qwen3.8-27B</b> on one TPU v6e chip: first-time install to first answer (sped up 10x).</p>
 
 ## Install
@@ -36,7 +36,7 @@ curl -fsSL https://mashbox.gg/install.sh | sh
 mashbox tpu up qwen3-8-27b
 ```
 
-Line 2 needs the Google Cloud CLI, signed in to a project with billing and the TPU API turned on; [Run on Google Cloud TPU](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/google-cloud.md) steps 1 to 5 do that from a new Google account. It prints the chip's price per hour and asks before it creates anything. Then it installs the same `mashbox` version on the chip and starts the server there, reached through an SSH tunnel from your machine. `mashbox tpu down mashbox-qwen3-8-27b` deletes the chip, and if you forget, the chip deletes itself at its max lifetime.
+Line 2 needs the Google Cloud CLI, signed in to a project with billing and the TPU API turned on; [Run on Google Cloud TPU](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/google-cloud.md) steps 1 to 5 do that from a new Google account. It prints the chip's price per hour and asks before it creates anything. Then it installs the same `mashbox` version on the chip and starts the server there, reached through an SSH tunnel from your machine. `mashbox tpu down mashbox-qwen3-8-27b` deletes the chip, and if you forget, the chip deletes itself at its max lifetime.
 
 On a machine that has a TPU, such as a Cloud TPU VM you created yourself, the same line 1 installs the TPU version and `mashbox run` runs a model there:
 
@@ -45,7 +45,7 @@ curl -fsSL https://mashbox.gg/install.sh | sh
 mashbox run qwen3-8-27b --prompt "Write a haiku about the sea."
 ```
 
-If the shell does not find `mashbox` after line 1, `~/.local/bin` is not on your `PATH`: line 1 printed the `export PATH=...` line for this terminal, or call it as `~/.local/bin/mashbox`. To do the same by hand with `gcloud`, one chip and one answer: [Quickstart](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/quickstart.md).
+If the shell does not find `mashbox` after line 1, `~/.local/bin` is not on your `PATH`: line 1 printed the `export PATH=...` line for this terminal, or call it as `~/.local/bin/mashbox`. To do the same by hand with `gcloud`, one chip and one answer: [Quickstart](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/quickstart.md).
 
 What each install adds:
 
@@ -65,7 +65,7 @@ curl -fsSL https://mashbox.gg/install.sh | MASHBOX_EXTRAS=tpu,hy-nomas sh
 `mashbox run` fetches the compiled TPU kernels a model uses by itself, so there is nothing to install or pick. They come from two places. The engine kernel package, used for GGUF files and Hugging Face models, is one file attached to a mashbox release on GitHub; `models.json` lists it under `engine_kernels`, with the chips and the JAX version it is built for. Each MASHBOX build that ships kernels has its own kernel package in its Hugging Face repo, under `kernels/`. `mashbox run` checks every file against its sha256 in `models.json` before it uses it. When no package fits the chip and the JAX version, the model runs without one, on plain JAX, which is slower, and the log says so.
 <!-- install:end -->
 
-The chip bills from create to delete: one TPU v6e chip is $2.70 an hour at Google's on-demand [list price](https://cloud.google.com/tpu/pricing). Qwen3.8-27B's options, chips and results: [docs/models/qwen3-8-27b.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/models/qwen3-8-27b.md).
+The chip bills from create to delete: one TPU v6e chip is $2.70 an hour at Google's on-demand [list price](https://cloud.google.com/tpu/pricing). Qwen3.8-27B's options, chips and results: [docs/models/qwen3-8-27b.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/models/qwen3-8-27b.md).
 
 ## Models
 
@@ -78,10 +78,10 @@ Models we port or make ourselves. A BSHJ build is our weights file for the model
 
 | Model | What it does | Chips | Measured | Weights |
 |---|---|---|---|---|
-| **[Hy-Nomas](https://github.com/mashbox-labs/mashbox/tree/v0.1.12/src/mashbox/models/hy_nomas)**<br>by Tencent Hunyuan | World model: text and movement keys in, video out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | Compute per second of video, quality preset, Tencent decoder, 1.00 = real time: **1.045 s** (TPU v6e-4)<br>Compute per second of video, quality preset, MASHBOX Fast decoder: **0.689 s** (TPU v6e-4) | [Hy-Nomas-TPU](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU) |
-| **[Qwen3.8-27B](https://github.com/mashbox-labs/mashbox/tree/v0.1.12/src/mashbox/models/qwen3_8_27b)**<br>by Qwen | LLM: text in, text out | TPU v5e (v5e-4): Supported<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | **38.1 vs 31.4 tok/s** vs vLLM on the same chip, 1 request at a time; **74.84 tok/s** with speculative decoding (--mtp 2), 1 request at a time, greedy; 37.77 tok/s with it off; **326.6 vs 1,606.7 s** first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type (TPU v6e-1). [All results](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) | [Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) |
-| **[Track2Rig](https://github.com/mashbox-labs/mashbox/tree/v0.1.12/src/mashbox/models/track2rig)**<br>by MASHBOX Labs<br>Experimental | Rigging: 3D point tracks in, rig (JSON and glTF) out | CPU: Supported<br>TPU v5e: Not tested yet<br>TPU v6e: Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | **0.784% vs 0.915%** held-out error vs SSDR at the same bone count, synthetic test set with noisy, partly hidden tracks, % of body size, lower is better; **6.24% vs 7.73%** joint error vs SSDR, % of body size, lower is better (CPU, AMD EPYC 7502P). [All results](https://huggingface.co/mashbox-labs/Track2Rig) | [Track2Rig](https://huggingface.co/mashbox-labs/Track2Rig) |
-| **[TRELLIS.2](https://github.com/mashbox-labs/mashbox/tree/v0.1.12/src/mashbox/models/trellis_2)**<br>by Microsoft<br>Experimental | image-to-3d: an RGBA image (background cut out) in, a textured 3D mesh (GLB) out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | One picture in, a textured GLB out: the whole command: **15 min 32.4 s to 30 min 11.7 s** (TPU v6e-1)<br>Picture in to mesh out: the model's stages on the chip, with the host work between them: **46.7 s to 1 min 37.5 s** (TPU v6e-1) | [TRELLIS.2-TPU](https://huggingface.co/mashbox-labs/TRELLIS.2-TPU) |
+| **[Hy-Nomas](https://github.com/mashbox-labs/mashbox/tree/v0.1.13/src/mashbox/models/hy_nomas)**<br>by Tencent Hunyuan | World model: text and movement keys in, video out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | Compute per second of video, quality preset, Tencent decoder, 1.00 = real time: **1.045 s** (TPU v6e-4)<br>Compute per second of video, quality preset, MASHBOX Fast decoder: **0.689 s** (TPU v6e-4) | [Hy-Nomas-TPU](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU) |
+| **[Qwen3.8-27B](https://github.com/mashbox-labs/mashbox/tree/v0.1.13/src/mashbox/models/qwen3_8_27b)**<br>by Qwen | LLM: text in, text out | TPU v5e (v5e-4): Supported<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | **38.1 vs 31.4 tok/s** vs vLLM on the same chip, 1 request at a time; **74.84 tok/s** with speculative decoding (--mtp 2), 1 request at a time, greedy; 37.77 tok/s with it off; **326.6 vs 1,606.7 s** first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type (TPU v6e-1). [All results](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) | [Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) |
+| **[Track2Rig](https://github.com/mashbox-labs/mashbox/tree/v0.1.13/src/mashbox/models/track2rig)**<br>by MASHBOX Labs<br>Experimental | Rigging: 3D point tracks in, rig (JSON and glTF) out | CPU: Supported<br>TPU v5e: Not tested yet<br>TPU v6e: Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | **0.784% vs 0.915%** held-out error vs SSDR at the same bone count, synthetic test set with noisy, partly hidden tracks, % of body size, lower is better; **6.24% vs 7.73%** joint error vs SSDR, % of body size, lower is better (CPU, AMD EPYC 7502P). [All results](https://huggingface.co/mashbox-labs/Track2Rig) | [Track2Rig](https://huggingface.co/mashbox-labs/Track2Rig) |
+| **[TRELLIS.2](https://github.com/mashbox-labs/mashbox/tree/v0.1.13/src/mashbox/models/trellis_2)**<br>by Microsoft<br>Experimental | image-to-3d: an RGBA image (background cut out) in, a textured 3D mesh (GLB) out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | One picture in, a textured GLB out: the whole command: **15 min 32.4 s to 30 min 11.7 s** (TPU v6e-1)<br>Picture in to mesh out: the model's stages on the chip, with the host work between them: **46.7 s to 1 min 37.5 s** (TPU v6e-1) | [TRELLIS.2-TPU](https://huggingface.co/mashbox-labs/TRELLIS.2-TPU) |
 
 **GGUF files that run in our engine**
 
@@ -91,7 +91,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Heretic-Q4_K_M.gguf](https://huggingface.co/0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF/blob/ab8d7bd81d03117501e4da60cccdff4c80f0eea0/Qwen3.8-27B-Heretic-Q4_K_M.gguf)<br>from 0bserverx, 16.55 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 27.2 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Heretic-Q4_K_M.gguf](https://huggingface.co/0bserverx/Qwen3.8-27B-Heretic-Abliterated-Uncensored-GGUF/blob/ab8d7bd81d03117501e4da60cccdff4c80f0eea0/Qwen3.8-27B-Heretic-Q4_K_M.gguf)<br>from 0bserverx, 16.55 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 37.51 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
 
 </details>
 
@@ -99,13 +99,13 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Falcon3-1B-Instruct**<br>by Technology Innovation Institute | [Falcon3-1B-Instruct-Q8_0.gguf](https://huggingface.co/bartowski/Falcon3-1B-Instruct-GGUF/blob/9e280a1e3b7f287edb7248042e3d14f893227b21/Falcon3-1B-Instruct-Q8_0.gguf)<br>from bartowski, 1.78 GB | `llama` | Q8_0 | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 579.24 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Llama-3.2-1B-Instruct**<br>by Meta | [Llama-3.2-1B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/blob/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.81 GB | `llama` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 403 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Llama-3.2-3B-Instruct**<br>by Meta | [Llama-3.2-3B-Instruct-IQ4_XS.gguf](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/blob/5ab33fa94d1d04e903623ae72c95d1696f09f9e8/Llama-3.2-3B-Instruct-IQ4_XS.gguf)<br>from bartowski, 1.83 GB | `llama` | IQ4_XS | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 250.5 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen2.5-0.5B-Instruct**<br>by Qwen | [Qwen2.5-0.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/blob/41ba88dbac95fed2528c92514c131d73eb5a174b/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.4 GB | `qwen2` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 322.01 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [Qwen2.5-1.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/9eadc66189c7641e1ddd226b8267a9119b2ce2d4/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.99 GB | `qwen2` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 205.07 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [Qwen2.5-1.5B-Instruct-Q5_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/9eadc66189c7641e1ddd226b8267a9119b2ce2d4/Qwen2.5-1.5B-Instruct-Q5_K_M.gguf)<br>from bartowski, 1.13 GB | `qwen2` | Q5_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 196.63 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen2.5-7B-Instruct**<br>by Qwen | [Qwen2.5-7B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/blob/8911e8a47f92bac19d6f5c64a2e2095bd2f7d031/Qwen2.5-7B-Instruct-Q4_K_M.gguf)<br>from bartowski, 4.68 GB | `qwen2` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 101.55 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Falcon3-1B-Instruct**<br>by Technology Innovation Institute | [Falcon3-1B-Instruct-Q8_0.gguf](https://huggingface.co/bartowski/Falcon3-1B-Instruct-GGUF/blob/9e280a1e3b7f287edb7248042e3d14f893227b21/Falcon3-1B-Instruct-Q8_0.gguf)<br>from bartowski, 1.78 GB | `llama` | Q8_0 | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 582.95 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Llama-3.2-1B-Instruct**<br>by Meta | [Llama-3.2-1B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/blob/067b946cf014b7c697f3654f621d577a3e3afd1c/Llama-3.2-1B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.81 GB | `llama` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 465.05 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Llama-3.2-3B-Instruct**<br>by Meta | [Llama-3.2-3B-Instruct-IQ4_XS.gguf](https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/blob/5ab33fa94d1d04e903623ae72c95d1696f09f9e8/Llama-3.2-3B-Instruct-IQ4_XS.gguf)<br>from bartowski, 1.83 GB | `llama` | IQ4_XS | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 255 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen2.5-0.5B-Instruct**<br>by Qwen | [Qwen2.5-0.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/blob/41ba88dbac95fed2528c92514c131d73eb5a174b/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.4 GB | `qwen2` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 325.35 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [Qwen2.5-1.5B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/9eadc66189c7641e1ddd226b8267a9119b2ce2d4/Qwen2.5-1.5B-Instruct-Q4_K_M.gguf)<br>from bartowski, 0.99 GB | `qwen2` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 209.35 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [Qwen2.5-1.5B-Instruct-Q5_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-1.5B-Instruct-GGUF/blob/9eadc66189c7641e1ddd226b8267a9119b2ce2d4/Qwen2.5-1.5B-Instruct-Q5_K_M.gguf)<br>from bartowski, 1.13 GB | `qwen2` | Q5_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 200.56 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen2.5-7B-Instruct**<br>by Qwen | [Qwen2.5-7B-Instruct-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/blob/8911e8a47f92bac19d6f5c64a2e2095bd2f7d031/Qwen2.5-7B-Instruct-Q4_K_M.gguf)<br>from bartowski, 4.68 GB | `qwen2` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 116.93 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
 
 </details>
 
@@ -113,7 +113,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-IQ2_XXS-2.56bpw.gguf](https://huggingface.co/byteshape/Qwen3.8-27B-GGUF/blob/3fdfbd9b4a618303ad36edb151e95d134ece8c18/Qwen3.8-27B-IQ2_XXS-2.56bpw.gguf)<br>from byteshape, 8.84 GB | `qwen35` | IQ2_XXS | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 11.42 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-IQ2_XXS-2.56bpw.gguf](https://huggingface.co/byteshape/Qwen3.8-27B-GGUF/blob/3fdfbd9b4a618303ad36edb151e95d134ece8c18/Qwen3.8-27B-IQ2_XXS-2.56bpw.gguf)<br>from byteshape, 8.84 GB | `qwen35` | IQ2_XXS | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 11.8 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
 
 </details>
 
@@ -121,7 +121,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-iMatrix-NVFP4-MTP.gguf](https://huggingface.co/cdiamond/Qwen3.8-27B-iMatrix-NVFP4-MTP-GGUF/blob/ac343e8f44caef0896f79d372ecc07ef7ab34ec8/Qwen3.8-27B-iMatrix-NVFP4-MTP.gguf)<br>from cdiamond, 17.13 GB | `qwen35` | MTP | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 12.43 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-iMatrix-NVFP4-MTP.gguf](https://huggingface.co/cdiamond/Qwen3.8-27B-iMatrix-NVFP4-MTP-GGUF/blob/ac343e8f44caef0896f79d372ecc07ef7ab34ec8/Qwen3.8-27B-iMatrix-NVFP4-MTP.gguf)<br>from cdiamond, 17.13 GB | `qwen35` | MTP | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 13.53 tok/s, steady decode, 1 user, on TPU v6e-1 |
 
 </details>
 
@@ -129,8 +129,8 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP**<br>by DavidAU | [Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q4_K_M.gguf](https://huggingface.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF/blob/d5f3139249b7ee2535c20ab81125c9a6ab0c4915/Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q4_K_M.gguf)<br>from DavidAU, 6.98 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 87.37 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU**<br>by DavidAU | [Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q4_K_M.gguf](https://huggingface.co/DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF/blob/b9bce7e859c9b5047aca884e5bff76f8a0443de1/Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q4_K_M.gguf)<br>from DavidAU, 18.5 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 27.25 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP**<br>by DavidAU | [Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q4_K_M.gguf](https://huggingface.co/DavidAU/Qwen3.5-9B-The-Defiant-Fable-Uncensored-Heretic-NEO-IMATRIX-MAX-MTP-GGUF/blob/d5f3139249b7ee2535c20ab81125c9a6ab0c4915/Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q4_K_M.gguf)<br>from DavidAU, 6.98 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 108.05 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NM-DAU**<br>by DavidAU | [Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q4_K_M.gguf](https://huggingface.co/DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF/blob/b9bce7e859c9b5047aca884e5bff76f8a0443de1/Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q4_K_M.gguf)<br>from DavidAU, 18.5 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 37.58 tok/s, steady decode, 1 user, on TPU v6e-1 |
 
 </details>
 
@@ -138,7 +138,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Q4_K_M.gguf](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/blob/a316ea527fde32c12487be7574e2db5ac2ad2a7e/Qwen3.8-27B-Q4_K_M.gguf)<br>from ggml-org, 18.97 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 30.65 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Q4_K_M.gguf](https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/blob/a316ea527fde32c12487be7574e2db5ac2ad2a7e/Qwen3.8-27B-Q4_K_M.gguf)<br>from ggml-org, 18.97 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 41.1 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
 
 </details>
 
@@ -146,7 +146,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf](https://huggingface.co/HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF/blob/993a5971fda8f30dd1b7eb2654792ba4415c7460/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf)<br>from HauhauCS, 17.92 GB | `qwen35` | Q4_K_P | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 28.25 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf](https://huggingface.co/HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF/blob/993a5971fda8f30dd1b7eb2654792ba4415c7460/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf)<br>from HauhauCS, 17.92 GB | `qwen35` | Q4_K_P | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 35.63 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
 
 </details>
 
@@ -154,7 +154,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.8-27B**<br>by Qwen | [Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/blob/1c69098e9c32db6dc06fc48f1d6cc75ad07da89e/Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf)<br>from huihui-ai, 16.55 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 27.33 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf](https://huggingface.co/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/blob/1c69098e9c32db6dc06fc48f1d6cc75ad07da89e/Huihui-Qwen3.8-27B-abliterated-UD-DW-Q4_K_M.gguf)<br>from huihui-ai, 16.55 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 32.9 tok/s, steady decode, 1 user, on TPU v6e-1 |
 
 </details>
 
@@ -162,7 +162,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **granite-3.3-2b-instruct**<br>by IBM | [granite-3.3-2b-instruct-Q4_K_M.gguf](https://huggingface.co/ibm-granite/granite-3.3-2b-instruct-GGUF/blob/7cdf86ccd1f1bb3491c9b7017b033f2e51367397/granite-3.3-2b-instruct-Q4_K_M.gguf)<br>from ibm-granite, 1.55 GB | `granite` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 197.56 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **granite-3.3-2b-instruct**<br>by IBM | [granite-3.3-2b-instruct-Q4_K_M.gguf](https://huggingface.co/ibm-granite/granite-3.3-2b-instruct-GGUF/blob/7cdf86ccd1f1bb3491c9b7017b033f2e51367397/granite-3.3-2b-instruct-Q4_K_M.gguf)<br>from ibm-granite, 1.55 GB | `granite` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 231.85 tok/s, steady decode, 1 user, on TPU v6e-1 |
 
 </details>
 
@@ -170,7 +170,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Uncensored-Q4_K_M.gguf](https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/blob/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/Qwen3.8-27B-Uncensored-Q4_K_M.gguf)<br>from JonathanColetti, 16.81 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 27.2 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Uncensored-Q4_K_M.gguf](https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/blob/45d0fc0ad6cfcf9eeee6008ddaea925536409b18/Qwen3.8-27B-Uncensored-Q4_K_M.gguf)<br>from JonathanColetti, 16.81 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 37.65 tok/s, steady decode, 1 user, on TPU v6e-1 |
 
 </details>
 
@@ -178,7 +178,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **EXAONE-3.5-2.4B-Instruct**<br>by LG AI Research | [EXAONE-3.5-2.4B-Instruct-Q4_K_M.gguf](https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct-GGUF/blob/142acae803a41c206e8d0fa978c6102c748911bb/EXAONE-3.5-2.4B-Instruct-Q4_K_M.gguf)<br>from LGAI-EXAONE, 1.64 GB | `exaone` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 256.27 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **EXAONE-3.5-2.4B-Instruct**<br>by LG AI Research | [EXAONE-3.5-2.4B-Instruct-Q4_K_M.gguf](https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct-GGUF/blob/142acae803a41c206e8d0fa978c6102c748911bb/EXAONE-3.5-2.4B-Instruct-Q4_K_M.gguf)<br>from LGAI-EXAONE, 1.64 GB | `exaone` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 284.75 tok/s, steady decode, 1 user, on TPU v6e-1 |
 
 </details>
 
@@ -186,8 +186,8 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.5-9B**<br>by Qwen | [Qwen3.5-9B-Q4_K_M.gguf](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/blob/1379f25c6b505a3fc737bd7818cb09389cf807c1/Qwen3.5-9B-Q4_K_M.gguf)<br>from lmstudio-community, 5.63 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 87.31 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Q4_K_M.gguf](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/blob/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf)<br>from lmstudio-community, 16.81 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 27.21 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.5-9B**<br>by Qwen | [Qwen3.5-9B-Q4_K_M.gguf](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF/blob/1379f25c6b505a3fc737bd7818cb09389cf807c1/Qwen3.5-9B-Q4_K_M.gguf)<br>from lmstudio-community, 5.63 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 109.09 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-Q4_K_M.gguf](https://huggingface.co/lmstudio-community/Qwen3.8-27B-GGUF/blob/5a7da681f60570ab5b439a587e912d2e5eddb582/Qwen3.8-27B-Q4_K_M.gguf)<br>from lmstudio-community, 16.81 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 37.46 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
 
 </details>
 
@@ -195,7 +195,7 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen3.8-27B**<br>by Qwen | [Dirk-Qwen3.8-27B-UD-Q4_K_M.gguf](https://huggingface.co/peculiar-ragdoll/Dirk-Qwen3.8-27B-GGUF/blob/6a762d2f2bada33557f3bf98facf916c585e0ed4/Dirk-Qwen3.8-27B-UD-Q4_K_M.gguf)<br>from peculiar-ragdoll, 16.46 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 27.45 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Dirk-Qwen3.8-27B-UD-Q4_K_M.gguf](https://huggingface.co/peculiar-ragdoll/Dirk-Qwen3.8-27B-GGUF/blob/6a762d2f2bada33557f3bf98facf916c585e0ed4/Dirk-Qwen3.8-27B-UD-Q4_K_M.gguf)<br>from peculiar-ragdoll, 16.46 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 32.28 tok/s, steady decode, 1 user, on TPU v6e-1 |
 
 </details>
 
@@ -203,11 +203,11 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **Qwen2.5-0.5B-Instruct**<br>by Qwen | [qwen2.5-0.5b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf)<br>from Qwen, 0.49 GB | `qwen2` | q4_k_m | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 323.92 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [qwen2.5-1.5b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf)<br>from Qwen, 1.12 GB | `qwen2` | q4_k_m | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 205.7 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen2.5-Coder-1.5B-Instruct**<br>by Qwen | [qwen2.5-coder-1.5b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/blob/f86cb2c1fa58255f8052cc32aeede1b7482d4361/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf)<br>from Qwen, 1.12 GB | `qwen2` | q4_k_m | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 205.38 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3-14B**<br>by Qwen | [Qwen3-14B-Q4_K_M.gguf](https://huggingface.co/Qwen/Qwen3-14B-GGUF/blob/530227a7d994db8eca5ab5ced2fb692b614357fd/Qwen3-14B-Q4_K_M.gguf)<br>from Qwen, 9 GB | `qwen3` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 45.67 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3-4B**<br>by Qwen | [Qwen3-4B-Q4_K_M.gguf](https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf)<br>from Qwen, 2.5 GB | `qwen3` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 142.36 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen2.5-0.5B-Instruct**<br>by Qwen | [qwen2.5-0.5b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf)<br>from Qwen, 0.49 GB | `qwen2` | q4_k_m | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 322.16 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen2.5-1.5B-Instruct**<br>by Qwen | [qwen2.5-1.5b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/blob/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf)<br>from Qwen, 1.12 GB | `qwen2` | q4_k_m | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 210.41 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen2.5-Coder-1.5B-Instruct**<br>by Qwen | [qwen2.5-coder-1.5b-instruct-q4_k_m.gguf](https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/blob/f86cb2c1fa58255f8052cc32aeede1b7482d4361/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf)<br>from Qwen, 1.12 GB | `qwen2` | q4_k_m | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 209.77 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen3-14B**<br>by Qwen | [Qwen3-14B-Q4_K_M.gguf](https://huggingface.co/Qwen/Qwen3-14B-GGUF/blob/530227a7d994db8eca5ab5ced2fb692b614357fd/Qwen3-14B-Q4_K_M.gguf)<br>from Qwen, 9 GB | `qwen3` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 61.69 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen3-4B**<br>by Qwen | [Qwen3-4B-Q4_K_M.gguf](https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf)<br>from Qwen, 2.5 GB | `qwen3` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 163.86 tok/s, steady decode, 1 user, on TPU v6e-1 |
 
 </details>
 
@@ -215,13 +215,13 @@ GGUF files from other publishers, run as they are by mashbox. Level and Runs on 
 
 | Model | GGUF file | Architecture | Quant | Level | Runs on | Speed |
 |---|---|---|---|---|---|---|
-| **gemma-3-1b-it**<br>by Google DeepMind | [gemma-3-1b-it-Q4_K_M.gguf](https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/blob/f0b45be0aac41bd6a100a4b5734cad5f67255bfb/gemma-3-1b-it-Q4_K_M.gguf)<br>from unsloth, 0.81 GB | `gemma3` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 389.7 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3-0.6B**<br>by Qwen | [Qwen3-0.6B-Q8_0.gguf](https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/blob/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q8_0.gguf)<br>from unsloth, 0.64 GB | `qwen3` | Q8_0 | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 419.38 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3-1.7B**<br>by Qwen | [Qwen3-1.7B-Q4_0.gguf](https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/blob/d7f544eead698dbd1f15126ef60b45a1e1933222/Qwen3-1.7B-Q4_0.gguf)<br>from unsloth, 1.06 GB | `qwen3` | Q4_0 | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 216.5 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3-4B-Instruct-2507**<br>by Qwen | [Qwen3-4B-Instruct-2507-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/blob/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf)<br>from unsloth, 2.5 GB | `qwen3` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 142.2 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3.5-4B**<br>by Qwen | [Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/blob/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf)<br>from unsloth, 2.74 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 147.9 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3.5-9B**<br>by Qwen | [Qwen3.5-9B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/blob/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf)<br>from unsloth, 5.68 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 87.84 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
-| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-UD-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_M.gguf)<br>from unsloth, 16.46 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 27.51 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **gemma-3-1b-it**<br>by Google DeepMind | [gemma-3-1b-it-Q4_K_M.gguf](https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/blob/f0b45be0aac41bd6a100a4b5734cad5f67255bfb/gemma-3-1b-it-Q4_K_M.gguf)<br>from unsloth, 0.81 GB | `gemma3` | Q4_K_M | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 431.83 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen3-0.6B**<br>by Qwen | [Qwen3-0.6B-Q8_0.gguf](https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/blob/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q8_0.gguf)<br>from unsloth, 0.64 GB | `qwen3` | Q8_0 | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 415.85 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen3-1.7B**<br>by Qwen | [Qwen3-1.7B-Q4_0.gguf](https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/blob/d7f544eead698dbd1f15126ef60b45a1e1933222/Qwen3-1.7B-Q4_0.gguf)<br>from unsloth, 1.06 GB | `qwen3` | Q4_0 | Quick check<br>Runs on TPU v6e-1 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | TPU v6e-1 | 239.5 tok/s, steady decode, 1 user, on TPU v6e-1 |
+| **Qwen3-4B-Instruct-2507**<br>by Qwen | [Qwen3-4B-Instruct-2507-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/blob/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf)<br>from unsloth, 2.5 GB | `qwen3` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 163.83 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.5-4B**<br>by Qwen | [Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/blob/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf)<br>from unsloth, 2.74 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 168.75 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.5-9B**<br>by Qwen | [Qwen3.5-9B-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/blob/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf)<br>from unsloth, 5.68 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 109.6 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
+| **Qwen3.8-27B**<br>by Qwen | [Qwen3.8-27B-UD-Q4_K_M.gguf](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/blob/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_M.gguf)<br>from unsloth, 16.46 GB | `qwen35` | Q4_K_M | Quick check<br>Runs on one chip of a TPU v6e-4 with the engine's TPU kernels: short check against llama.cpp (4 prompts x 32 tokens) | one chip of a TPU v6e-4 | 32.13 tok/s, steady decode, 1 user, on one chip of a TPU v6e-4 |
 
 </details>
 
@@ -248,9 +248,9 @@ Every number names the chip it was measured on; each model's guide has all its r
 <!-- charts:start -->
 Each chart names the hardware on both sides.
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.12/docs/media/charts/01-qwen38-27b-time-to-ready-dark.png"><img alt="Qwen3.8-27B: time to ready on one TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, asia-northeast1-b, on demand) vs one TPU v6e-1 (Google Cloud, us-east5-b)." src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.12/docs/media/charts/01-qwen38-27b-time-to-ready-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.13/docs/media/charts/01-qwen38-27b-time-to-ready-dark.png"><img alt="Qwen3.8-27B: time to ready on one TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, asia-northeast1-b, on demand) vs one TPU v6e-1 (Google Cloud, us-east5-b)." src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.13/docs/media/charts/01-qwen38-27b-time-to-ready-light.png" width="100%"></picture>
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.12/docs/media/charts/03-qwen3-30b-a3b-quality-vs-size-dark.png"><img alt="Qwen3-30B-A3B: quality vs file size, 20 files. Hardware: a frozen llama.cpp CPU scorer (16 threads, AMD EPYC 7502P / 7B13) vs the same scorer and the same 10,240 positions for every rival file." src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.12/docs/media/charts/03-qwen3-30b-a3b-quality-vs-size-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.13/docs/media/charts/03-qwen3-30b-a3b-quality-vs-size-dark.png"><img alt="Qwen3-30B-A3B: quality vs file size, 20 files. Hardware: a frozen llama.cpp CPU scorer (16 threads, AMD EPYC 7502P / 7B13) vs the same scorer and the same 10,240 positions for every rival file." src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.13/docs/media/charts/03-qwen3-30b-a3b-quality-vs-size-light.png" width="100%"></picture>
 
 <sub>Qwen3-30B-A3B is not in this package: this chart compares quantized files of it, each scored the same way.</sub>
 <!-- charts:end -->
@@ -261,8 +261,8 @@ Each chart names the hardware on both sides.
 - **Fits on fewer chips.** Qwen3.8-27B runs on a single TPU v6e chip (32 GB) from a 26.94 GB weights file at 8.01 bits per weight, with 99.72% top-1 agreement against Qwen's own bf16 weights.
 - **Fast starts.** Models ship their compiled TPU kernels, and Qwen3.8-27B also ships a precompiled compile cache for TPU v6e, so a start skips compiling: Qwen3.8-27B on TPU v6e-1 is ready in 69.6 s with it, 326.6 s without it.
 - **An OpenAI-compatible server** for the language models, with batching: 8 requests at once share the chip.
-- **Works with Claude Code, Codex and Pi.** The server also speaks the Anthropic Messages and OpenAI Responses APIs, so coding agents can use a model you serve as their LLM: [Use with coding agents](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/agents-on-tpu.md).
-- **Docs for coding agents.** [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/AGENTS.md) gives an agent the rules and the steps to set up a chip, run a model and delete the chip; [llms.txt](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/llms.txt) lists the docs.
+- **Works with Claude Code, Codex and Pi.** The server also speaks the Anthropic Messages and OpenAI Responses APIs, so coding agents can use a model you serve as their LLM: [Use with coding agents](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/agents-on-tpu.md).
+- **Docs for coding agents.** [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/AGENTS.md) gives an agent the rules and the steps to set up a chip, run a model and delete the chip; [llms.txt](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/llms.txt) lists the docs.
 - **Named files.** Every weights file on Hugging Face is named by its type (for example `Qwen3.8-27B-BQ8_R.bshj`), with size, bits per weight and measured quality next to it.
 
 ## TPU v6e and v5e
@@ -276,19 +276,19 @@ Each chart names the hardware on both sides.
 | Create with | `--accelerator-type=v6e-1 --version=v2-alpha-tpuv6e` | `--accelerator-type=v5litepod-1 --version=v2-alpha-tpuv5-lite` |
 | Zones to try first | us-east5-b, europe-west4-a | us-central1-a |
 
-v6e is the default. A model too big for one v5e chip (16 GB) splits across the 4 chips of a v5e-4 when its row says so; the models table says which chips each model runs on. Specs from Google's [v6e](https://cloud.google.com/tpu/docs/v6e) and [v5e](https://cloud.google.com/tpu/docs/v5e) pages. More in [docs/chips.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/chips.md).
+v6e is the default. A model too big for one v5e chip (16 GB) splits across the 4 chips of a v5e-4 when its row says so; the models table says which chips each model runs on. Specs from Google's [v6e](https://cloud.google.com/tpu/docs/v6e) and [v5e](https://cloud.google.com/tpu/docs/v5e) pages. More in [docs/chips.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/chips.md).
 
-TPU v6e (one chip and a v6e-4) against one NVIDIA H100 at Google Cloud list prices, with the memory bandwidth of each and the cost per 1M output tokens of Qwen3.8-27B (27B parameters, dense): [TPU or GPU: price and bandwidth](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/tpu-vs-gpu.md).
+TPU v6e (one chip and a v6e-4) against one NVIDIA H100 at Google Cloud list prices, with the memory bandwidth of each and the cost per 1M output tokens of Qwen3.8-27B (27B parameters, dense): [TPU or GPU: price and bandwidth](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/tpu-vs-gpu.md).
 
 ## Open code, compiled kernels
 
-The source of the model ports, CLI, runtime, demo apps and docs is in this repo, under Apache-2.0. The TPU kernels (our Culet kernels) ship compiled, as files that `mashbox run` fetches and checks by itself, with a precompiled compile cache where we built one; [Install](#install) says where each kernel package comes from. Models that list plain JAX as tested also run without them, slower. The compiled files are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/LICENSE-KERNELS): free for personal use, research and evaluation, and for any use by companies under US$1M annual revenue. Larger companies in production: hello@mashbox.gg.
+The source of the model ports, CLI, runtime, demo apps and docs is in this repo, under Apache-2.0. The TPU kernels (our Culet kernels) ship compiled, as files that `mashbox run` fetches and checks by itself, with a precompiled compile cache where we built one; [Install](#install) says where each kernel package comes from. Models that list plain JAX as tested also run without them, slower. The compiled files are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/LICENSE-KERNELS): free for personal use, research and evaluation, and for any use by companies under US$1M annual revenue. Larger companies in production: hello@mashbox.gg.
 
 ## Coding agents
 
-**Use a model as your agent's LLM.** Claude Code, Codex and Pi work with every LLM that `mashbox run` serves: start the server, open the tunnel, set the agent's base URL. Settings for each agent and measured results: [Use with coding agents](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/agents-on-tpu.md).
+**Use a model as your agent's LLM.** Claude Code, Codex and Pi work with every LLM that `mashbox run` serves: start the server, open the tunnel, set the agent's base URL. Settings for each agent and measured results: [Use with coding agents](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/agents-on-tpu.md).
 
-**Let an agent set it up.** [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/AGENTS.md) gives an agent the rules and the steps, from a Google account to a run and a deleted chip, and tells it to ask you before anything that costs money. [llms.txt](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/llms.txt) lists the docs.
+**Let an agent set it up.** [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/AGENTS.md) gives an agent the rules and the steps, from a Google account to a run and a deleted chip, and tells it to ask you before anything that costs money. [llms.txt](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/llms.txt) lists the docs.
 
 ## Community and links
 
@@ -297,14 +297,14 @@ The source of the model ports, CLI, runtime, demo apps and docs is in this repo,
 | Docs | [mashbox.gg/docs](https://mashbox.gg/docs) |
 | Models and weights | [huggingface.co/mashbox-labs](https://huggingface.co/mashbox-labs) |
 | News | [x.com/mashboxgg](https://x.com/mashboxgg) |
-| Bugs and model requests | [GitHub issues](https://github.com/mashbox-labs/mashbox/issues), see [CONTRIBUTING.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/CONTRIBUTING.md) |
-| Release notes | [GitHub releases](https://github.com/mashbox-labs/mashbox/releases), one per version; the core changes behind them, and how existing models keep working, are in [CORE-CHANGES.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/CORE-CHANGES.md) |
-| Security reports | [SECURITY.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/SECURITY.md) |
+| Bugs and model requests | [GitHub issues](https://github.com/mashbox-labs/mashbox/issues), see [CONTRIBUTING.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/CONTRIBUTING.md) |
+| Release notes | [GitHub releases](https://github.com/mashbox-labs/mashbox/releases), one per version; the core changes behind them, and how existing models keep working, are in [CORE-CHANGES.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/CORE-CHANGES.md) |
+| Security reports | [SECURITY.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/SECURITY.md) |
 | Companies | hello@mashbox.gg |
 
 ## Licence
 
-Our code is under the [Apache License 2.0](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/LICENSE). The compiled kernels and compile cache are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/LICENSE-KERNELS). Model weights keep each model's own licence, shown on its Hugging Face card and kept unchanged in [licenses/](https://github.com/mashbox-labs/mashbox/tree/v0.1.12/licenses). Details: [docs/licence.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/licence.md).
+Our code is under the [Apache License 2.0](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/LICENSE). The compiled kernels and compile cache are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/LICENSE-KERNELS). Model weights keep each model's own licence, shown on its Hugging Face card and kept unchanged in [licenses/](https://github.com/mashbox-labs/mashbox/tree/v0.1.13/licenses). Details: [docs/licence.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/licence.md).
 
 ## Citation
 
@@ -321,5 +321,5 @@ Our code is under the [Apache License 2.0](https://github.com/mashbox-labs/mashb
 
 - [Tencent Hunyuan](https://huggingface.co/tencent/Hy-Nomas) for Hy-Nomas and [Qwen](https://huggingface.co/Qwen/Qwen3.8-27B) for Qwen3.8-27B, and for releasing their weights.
 - The [JAX](https://github.com/jax-ml/jax) and Pallas teams, and Google Cloud TPU.
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) and the ggml authors for GGUF; mashbox reads GGUF files with their `gguf` package ([GGUF files](https://github.com/mashbox-labs/mashbox/blob/v0.1.12/docs/gguf.md)).
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) and the ggml authors for GGUF; mashbox reads GGUF files with their `gguf` package ([GGUF files](https://github.com/mashbox-labs/mashbox/blob/v0.1.13/docs/gguf.md)).
 - [Hugging Face](https://huggingface.co) for hosting the weights and [uv](https://github.com/astral-sh/uv) for a one-line Python 3.12.

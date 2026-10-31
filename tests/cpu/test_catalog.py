@@ -1626,6 +1626,26 @@ QUICK_MEASURED = ("decode_tok_s_1_user", "steady_decode_tok_s_1_user", "steady_c
 QUICK_DEVICE_RE = re.compile(r"^\S+ \S+ \S+ (TPU .+)$", re.M)      # setup's last check: mashbox, jax, libtpu, device kind
 
 
+def quick_device(setup):
+    """The device kind of a QUICK record's setup log: its last check line (mashbox, jax, libtpu, device kind). A one-chip
+    host's setup may add the device count and the chip after the kind ("TPU v6 lite 1 v6e"); then the count must be a
+    whole number of at least 1 and the chip must be the kind's chip, or the line names no known kind (None)."""
+    devs = QUICK_DEVICE_RE.findall(setup)
+    dev = devs[-1].strip() if devs else None
+    m = re.fullmatch(r"(TPU .+?) ([0-9]+) (v[0-9]+[a-z]+)", dev or "")
+    if m and DEVICE_CHIP.get(m.group(1)) == m.group(3) and int(m.group(2)) >= 1:
+        return m.group(1)
+    return dev
+
+
+def test_quick_device_reads_both_setup_line_forms():
+    line = "0.1.12 0.11.2 0.0.48.1 {}\n"
+    assert quick_device(line.format("TPU v6 lite")) == "TPU v6 lite"
+    assert quick_device(line.format("TPU v6 lite 1 v6e")) == "TPU v6 lite"
+    for bad in ("TPU v6 lite 1 v5e", "TPU v6 lite 0 v6e", "TPU v5 lite 1 v6e", "TPU v6 lite x v6e"):
+        assert DEVICE_CHIP.get(quick_device(line.format(bad))) is None, bad
+
+
 def quick_check_decode(runs):
     """the row's number: decode tok/s at 1 user = sum(new tokens) / sum(decode seconds) over runs 1-3 (run 0 holds the
     first compile), 2 decimals"""
@@ -2276,8 +2296,7 @@ def quick_check_problems(g, r, e, read, root, repo, git_dir, kernels, chip, what
     acc = files["accelerator-type.txt"].read_text().strip()
     if acc != r.get("accelerator"):
         out.append(f"{what}: accelerator {r.get('accelerator')}, the chip says {acc}")
-    devs = QUICK_DEVICE_RE.findall(setup)
-    dev = devs[-1].strip() if devs else None
+    dev = quick_device(setup)
     if DEVICE_CHIP.get(dev) != chip or not str(r.get("accelerator")).startswith(f"{chip}-"):
         out.append(f"{what}: the run's device is {dev}, the row is {chip} {r.get('accelerator')}")
     v = {k.lower().replace("-", "_"): x for k, x in re.findall(r"^([A-Za-z0-9_.-]+)==(\S+)$",
