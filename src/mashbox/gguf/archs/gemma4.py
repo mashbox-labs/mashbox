@@ -28,6 +28,7 @@ from jax import lax
 
 from ... import ops
 from ...runtime import kvcache
+from ...runtime import attention
 from ..reader import GGUFError
 from .qwen35 import rms, kv_write, _T, new_stats, book, tied_head, routes
 from .dense import rope
@@ -194,6 +195,8 @@ def new_state(c, S, CTX, extra_groups=0):
     second (snapshotted) state the sliding layers' K/V rings of min(window, CTX) positions, or a zero pair for a file
     without them. Slot on axis 1 in both."""
     full, ring, wf, wr = kinds(c)
+    if kvcache.STORE != "bf16":
+        raise NotImplementedError(f"MASHBOX_KV_CACHE={kvcache.STORE} is not offered for gemma files (narrow and sliding layers)")
     ck = kvcache.zeros(max(1, len(full)), S + 1, CTX, 1, wf or wr, c.act)
     if ring:
         return ck, kvcache.zeros(len(ring), S + 1, min(c.window, CTX), 1, wr, c.act)
@@ -204,7 +207,7 @@ def state_bytes(c, ctx, slots):
     """device bytes of new_state(c, slots, ctx) (gguf.need_bytes)"""
     full, ring, wf, wr = kinds(c)
     act = np.dtype(c.act).itemsize
-    return 2 * (slots + 1) * act * (max(1, len(full)) * ctx * (wf or wr) + len(ring) * min(c.window, ctx) * wr)
+    return 2 * (slots + 1 if slots > 2 else slots) * act * (max(1, len(full)) * ctx * (wf or wr) + len(ring) * min(c.window, ctx) * wr)
 
 
 def make_forward(c, decode_kernels=None):
@@ -234,6 +237,7 @@ def make_forward(c, decode_kernels=None):
         kok = jnp.concatenate([jnp.arange(Tc)[None] < p0[:, None], valid], 1) if Tc else valid
         dist = pos[:, :, None] - kpos[:, None, :]                        # (B, T, Tc + T)
         m_full = (dist >= 0) & kok[:, None, :]
+        hi = attention.cache_hi(p0, Tc, keep) if Tc else None     # full layers: cached positions any live row reads
         if ring:    # sliding layers: the ring's first Ts entries (each holds the position ring_pos says), then this step's
             Ks, Vs = cv
             Ts = min(Tc, Ks.shape[2])
@@ -271,18 +275,11 @@ def make_forward(c, decode_kernels=None):
             q, k = rope(q, cos, sin, RD, True), rope(k, cos, sin, RD, True)
             rl = l in ring_set
             n_c = Ts if rl else Tc
-            if n_c:
-                kc, vc = kvcache.read(*((Ks, Vs) if rl else (Kc, Vc)), idx[l], sl, n_c, contig, n)
-                kk = jnp.concatenate([kc.reshape(B, n_c, KV, HD), k], 1)
-                vv = jnp.concatenate([vc.reshape(B, n_c, KV, HD), v], 1)
-            else:
-                kk, vv = k, v
-            s = jnp.einsum("btkgd,bskd->bkgts", q.reshape(B, T, KV, G, HD), kk, preferred_element_type=f32)
-            if c.qscale != 1.0:                    # gemma3 scales q (llama.cpp: before the product)
-                s = s * np.float32(c.qscale)
-            m = m_swa if rl else m_full
-            p = jax.nn.softmax(jnp.where(m[:, None, None], s, NEG), -1).astype(act)
-            o = jnp.einsum("bkgts,bskd->btkgd", p, vv, preferred_element_type=f32).astype(act).reshape(B, T, H * HD)
+            rd = kvcache.reader(*((Ks, Vs) if rl else (Kc, Vc)), idx[l], sl, contig, KV, HD, width=n)
+            m = m_swa if rl else m_full           # gemma3 scales q (llama.cpp: before the product)
+            o = attention.attend_cache(q.reshape(B, T, KV, G, HD), rd, n_c, k, v, m,
+                                       np.float32(c.qscale) if c.qscale != 1.0 else None, act,
+                                       hi=None if rl else hi).reshape(B, T, H * HD)
             a = x + rms(lin_(o, w["wo"]).astype(act), w["pa"], eps)
             h = rms(a, w["ln2"], eps)
             g = (jax.nn.gelu(lin_(h, w["wg"]).astype(f32), approximate=True) * lin_(h, w["wu"]).astype(f32)).astype(act)

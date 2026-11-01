@@ -482,7 +482,7 @@ def dflash_slots(a):
     """--speculation dflash at --slots' default (8) runs 1 slot: the drafter's weights and its K/V ring per slot come on
     top of the model's, and on a TPU v6e-1 the 8-bit Qwen3.8-27B with the drafter at 8 slots ran out of memory where 1
     slot fits. --slots N runs as given."""
-    if getattr(a, "speculation", None) == "dflash" and a.slots == 8:
+    if getattr(a, "speculation", None) == "dflash" and a.slots in (None, 8):
         log("mashbox: --speculation dflash runs one request at a time (--slots 1): with the drafter, 8 slots did not fit "
             "a TPU v6e-1's memory. --slots N sets it")
         log(json.dumps(dict(event="dflash_slots", slots=1, asked=8)))
@@ -565,7 +565,9 @@ def gguf_speculation(a, c, A, records=None, f=None):
         log("speculation: not gated on this chip")
     log(json.dumps(dict(event="speculation", used=True, method=kind, draft_k=k, k_table=kt, gated=gated, reason=why[-1],
                         spec_step_version=SPEC_STEP_VERSION)))
-    return dict(drafter=dr, draft_k=k, k_table=kt, **({"gate_css": gcss} if gcss is not None else {}))
+    scope = (((records or {}).get(kind) or {}).get(chip) or {}).get("scope") if gated else None
+    return dict(drafter=dr, draft_k=k, k_table=kt, **({"gate_css": gcss} if gcss is not None else {}),
+                **({"gate_scope": scope} if gcss is not None and scope else {}))
 
 
 def gguf_draft(a, f, c, k):
@@ -599,13 +601,18 @@ def gguf_draft(a, f, c, k):
     return DraftModel(A2, c2, W2, k, declared=dict(id=ident, weights_sha256=sha))
 
 
-def gguf_spec_gate(eng, gate_css, keys):
+def gguf_spec_gate(eng, gate_css, keys, scope=None):
     """Speculation picked by a gate record (gguf_speculation's gate_css) stays on only when the built engine's own
-    component_set_sha, which holds the drafter's key, is the record's: else it is turned off before the warm-up (plain
-    decoding, one why line) and keys() makes the deployment keys again."""
-    if gate_css is None or not getattr(eng, "DK", 0) or eng.component_set_sha == gate_css:
+    component_set_sha, which holds the drafter's key, is the record's (a family record, scope "family": the engine's
+    family_set_sha, set by gguf_deployment): else it is turned off before the warm-up (plain decoding, one why line)
+    and keys() makes the deployment keys again."""
+    from .runtime.drafters import select as SEL
+    fam = scope == SEL.FAMILY
+    have = getattr(eng, "family_set_sha", None) if fam else eng.component_set_sha
+    if gate_css is None or not getattr(eng, "DK", 0) or have == gate_css:
         return
-    why = "the gate record is for another component set than this deployment's: plain decoding"
+    why = ("the family gate record is for another family component set than this deployment's: plain decoding" if fam
+           else "the gate record is for another component set than this deployment's: plain decoding")
     eng.drop_speculation()
     eng.spec_why = why                  # the reason Engine.spec_health gives
     log(json.dumps(dict(event="speculation", used=False, reason=why)))
@@ -634,6 +641,78 @@ def deployment_keys(eng, m, config_sha, layout_sha, kernel_bundle_sha=None, tp=1
         eng.spec_why = f"gated on {DR.chip_key()} for another component set: plain decoding"     # Engine.spec_health's reason
         key, eng.deployment_id, eng.component_set_sha = keys()
     return key
+
+
+def chip_limit():
+    """the smallest JAX bytes_limit over this host's devices, or None (CPU, or no figure)"""
+    import jax
+    try:
+        v = [int((x.memory_stats() or {})["bytes_limit"]) for x in jax.devices()]
+        return min(v) if v else None
+    except Exception:
+        return None
+
+
+def gguf_context(a, f, A, c, kt, name="", lim=None):
+    """--ctx and --slots of a GGUF file as `run` sets them: the context plan (auto | max, or --slots picked: from this chip's
+    memory), then the slot count that fits -> slots. lim: a chip limit to plan at (the record guard replays a record's)."""
+    from . import gguf as G
+    if not isinstance(a.ctx, int) or a.slots is None:
+        w0, _, big0 = G.need_bytes(f, c, 2048, 1, kernel_types=kt)
+        plan_context(a, lambda s_, n_: A.new_state(c, s_, n_), w0 + big0, getattr(c, "ctx_train", 0), name, limit=lim)
+    return gguf_slots(a, f, c, kt, lim=lim)
+
+
+def plan_context(a, new_state, fixed, trained, model="", tp=1, limit=None):
+    """--ctx (auto | max | N) and --slots (None = picked) -> a.ctx and a.slots as numbers, from what this chip holds
+    (runtime/context.py: weights + the slots' state from the model's own shapes + working memory, against the chip's
+    bytes_limit, capped at the trained context). Logs the plan as one JSON line and one line a person reads. An
+    explicit --ctx N with an explicit --slots is kept as given (the fit checks after this refuse it when it cannot fit).
+    Without a memory figure (CPU) auto and max run 2,048 tokens x 8 slots, as before. -> the Fit, or None."""
+    from .runtime import context as CX
+    want = CX.parse(a.ctx)
+    lim = chip_limit() if limit is None else limit
+
+    def state(s, c):
+        b = CX.eval_state(new_state, s, c)
+        return (2 * b if s >= 2 else b) / tp      # 2+ slots: the slot swap program holds a second copy (gguf slot_need)
+    drafter = (getattr(a, "speculation", None) not in (None, "auto", "off") or bool(getattr(a, "mtp", None))
+               or bool(getattr(a, "draft_model", None)) or bool(getattr(a, "drafter_dir", None)))
+    if not lim or (drafter and want in ("auto", "max")):
+        a.ctx = 2048 if want in ("auto", "max") else want
+        a.slots = 8 if a.slots is None else a.slots
+        why = ("a drafter's memory is not in the plan: 2,048 tokens unless --ctx N" if lim else
+               "no chip memory figure: 2,048 tokens unless --ctx N")
+        log(json.dumps(dict(event="context", ctx=a.ctx, slots=a.slots, why=why)))
+        return None
+    fit = CX.Fit(state, fixed, lim, trained)
+    if isinstance(want, int) and a.slots is not None:
+        ctx, slots, why = want, a.slots, "as given"
+    else:
+        try:
+            ctx, slots, why = fit.choose(want, a.slots)
+        except ValueError as e:                   # nothing fits: the fit checks after this refuse with the chips that fit
+            a.ctx = want if isinstance(want, int) else 2048
+            a.slots = a.slots if a.slots is not None else (1 if isinstance(want, int) else 8)
+            log(json.dumps(dict(event="context", ctx=a.ctx, slots=a.slots, why=f"nothing fits: {e}")))
+            return fit
+    a.ctx, a.slots = ctx, slots
+    if fit.trained and ctx > fit.trained:
+        log(f"mashbox: warning: --ctx {ctx:,} is longer than {model or 'the model'}'s trained context ({fit.trained:,}); "
+            f"answers that read past it may degrade")
+    log(json.dumps(CX.event(fit, ctx, slots, why)))
+    log(CX.line(fit, ctx, slots, why, model))
+    return fit
+
+
+def trained_context(d):
+    """max_position_embeddings from a Hugging Face config.json folder (text_config first), or 0"""
+    try:
+        with open(os.path.join(d, "config.json")) as f:
+            c = json.load(f)
+        return int((c.get("text_config") or c).get("max_position_embeddings") or c.get("max_position_embeddings") or 0)
+    except Exception:
+        return 0
 
 
 def fit_check(a, m, d, tp):
@@ -687,6 +766,22 @@ def fit_check(a, m, d, tp):
                      f"split over {tp}) and each chip here has {gb(have)}. {fix}.")
 
 
+def kv_store(a, tp=1):
+    """The K/V store every new_state of this process allocates (runtime/kvcache.STORE), set before the plan: bf16, or
+    int8 with MASHBOX_KV_CACHE=int8 (opt-in, an environment setting with no flag: 8-bit codes with one scale per position and head,
+    about half the K/V memory; one chip; not for gemma files)."""
+    from .runtime import kvcache
+    v = os.environ.get("MASHBOX_KV_CACHE", "").strip() or "bf16"
+    if v != "bf16" and tp > 1:
+        raise SystemExit(f"mashbox: MASHBOX_KV_CACHE={v} runs on one chip in this version; use --tensor-parallel-size 1")
+    try:
+        kvcache.set_store(v)
+    except ValueError as e:
+        raise SystemExit(f"mashbox: MASHBOX_KV_CACHE: {e}")
+    if v != "bf16":
+        log(json.dumps(dict(event="kv_cache", store=v)))
+
+
 def load(a):
     t0 = time.time()
     if draft_refusal(a):
@@ -704,6 +799,11 @@ def load(a):
         log(json.dumps(dict(event="tensor_parallel", tp=1, reason="the package has no shard module: one chip")))
         tp = 1
     dflash_slots(a)                                      # before the fit check and the kernels (built for 8 slots)
+    kv_store(a, tp)
+    if not isinstance(a.ctx, int) or a.slots is None:    # --ctx auto | max, or --slots picked: from this chip's memory
+        cfg0 = Q.Config(d)
+        wb0 = os.path.getsize(a.weights) if a.weights else int(hub.weights_row(m)["bytes"])
+        plan_context(a, lambda s, c: Q.new_state(cfg0, s, c), wb0 / tp, trained_context(d), m["id"], tp=tp)
     fit_check(a, m, d, tp)                               # before the weights download, check or load
     w = hub.weights_file(m, path=a.weights, log=log)
     from . import kernels as K
@@ -812,6 +912,7 @@ def _load_gguf_for_record(a, f, A, c, t0):
     from .gguf import tokenizer as GT
     from .runtime.engine import Engine
     from .runtime.chat import Chat
+    kv_store(a)                                         # MASHBOX_KV_CACHE: before the plan and the fit check read the state
     r = a.gguf
     if getattr(a, "tensor_parallel_size", 0) > 1:
         raise G.GGUFError("mashbox: GGUF files run on one chip in this version; --tensor-parallel-size is for models.json models")
@@ -819,7 +920,7 @@ def _load_gguf_for_record(a, f, A, c, t0):
         ops.load_kernels(log)
     line, warn = G.plan(f, c, kernel_types=frozenset() if a.no_kernels else None)
     kt = frozenset() if a.no_kernels else ops.kernel_types()
-    s = gguf_slots(a, f, c, kt)
+    s = gguf_context(a, f, A, c, kt, r.get("repo") or r["file"])
     if s != a.slots:
         log(json.dumps(dict(event="gguf_slots", slots=s, asked=a.slots, ctx=a.ctx)))
         ops.warn(f"mashbox: {a.slots} slots of {a.ctx} tokens do not fit this chip with this file; running --slots {s} "
@@ -835,15 +936,16 @@ def _load_gguf_for_record(a, f, A, c, t0):
     info["file"] = r["file"]
     from . import hub
     from .runtime.drafters import select as SEL
-    spec = gguf_speculation(a, c, A, records=SEL.catalog_records(hub.registry(), r), f=f)   # the catalog's sealed chip records
-    gate_css = spec.pop("gate_css", None)
+    spec = gguf_speculation(a, c, A, records=SEL.catalog_records(hub.registry(), r, f.get("general.architecture")),
+                            f=f)   # the catalog's sealed chip records: the file's own, else its architecture family's
+    gate_css, gate_scope = spec.pop("gate_css", None), spec.pop("gate_scope", None)
     eng = Engine(c, W, A, CTX=a.ctx, S=a.slots, K=a.steps, decode_kernels=None,
                  prefix_cache=a.prompt is None and not a.no_prefix_cache,
                  cache_ram=max(0, a.cache_ram) << 20, ckpts=a.ctx_checkpoints, ckpt_step=a.checkpoint_min_step,
                  attn_bytes=2e9 if a.ctx <= 8192 else 5e8,
                  trace=os.environ.get("MASHBOX_TRACE") == "1", spec_why=getattr(a, "spec_why", None), **spec)   # trace: per-token logit hashes for checks, as load()
-    gguf_deployment(eng, f, r, W)
-    gguf_spec_gate(eng, gate_css, lambda: gguf_deployment(eng, f, r, W))
+    gguf_deployment(eng, f, r, W, A)
+    gguf_spec_gate(eng, gate_css, lambda: gguf_deployment(eng, f, r, W, A), gate_scope)
     log(json.dumps(dict(event="loaded", weights_s=info["load_s"], gb=round(info["device_bytes"] / 1e9, 2), bpw=info["bpw"],
                         kernel_gb=round(info["kernel_bytes"] / 1e9, 2), reference_gb=round(info["reference_bytes"] / 1e9, 2),
                         resident_f32_gb=round(info["resident_f32_bytes"] / 1e9, 2))))
@@ -867,20 +969,27 @@ def gguf_file_sha(r):
     return (ids[0][0] if len(ids) == 1 else hashlib.sha256(" ".join(i[0] for i in ids).encode()).hexdigest()), ids
 
 
-def gguf_deployment(eng, f, r, W):
+def gguf_deployment(eng, f, r, W, A=None):
     """The GGUF file's deployment, as load() makes one for a models.json model (runtime/compile_key.py): deployment id
     and component set (/health, the startup log), and the prefix cache namespace. The file's sha256 (every shard of a
-    split file) stands for its weights, tokenizer and chat template, which it all holds."""
+    split file) stands for its weights, tokenizer and chat template, which it all holds. With the architecture module A,
+    also the family set (eng.family_set_sha: the same set with the file replaced by its general.architecture and A's
+    source sha256), which a family speculation gate is judged against."""
     import hashlib
     from . import gguf as G
     from .runtime import tenancy, compile_key as CK
+    from .runtime.drafters import select as SEL
     t = time.time()
     fsha, n, how = G.identity(r["path"])
     log(json.dumps(dict(event="gguf_identity", sha256=fsha, shards=n, how=how, seconds=round(time.time() - t, 1))))
     mid = r["repo"] or r["file"]
     _, eng.deployment_id, eng.component_set_sha = CK.for_engine(eng, mid, fsha, CK.weights_layout(W), kernel_bundle_sha=None, tp=1,
                                                               drafter=eng.drafter.key() if getattr(eng, "DK", 0) else None)
-    log(json.dumps(dict(event="deployment", deployment_id=eng.deployment_id, component_set_sha=eng.component_set_sha)))
+    dk = eng.drafter.key() if getattr(eng, "DK", 0) else None
+    eng.family_set_sha = None if A is None else CK.family_set(
+        eng, f.get("general.architecture"), CK.arch_source_sha(*SEL._modules(A)), kernel_bundle_sha=None, tp=1, drafter=dk)
+    log(json.dumps(dict(event="deployment", deployment_id=eng.deployment_id, component_set_sha=eng.component_set_sha,
+                        family_set_sha=eng.family_set_sha)))
     tmpl = f.get("tokenizer.chat_template")
     eng.set_namespace(tenancy.namespace(deployment=eng.deployment_id,
                                         model=dict(id=mid, weights=r["file"], config=fsha, component_set_sha=eng.component_set_sha),
@@ -1146,10 +1255,14 @@ def build_parser():
                                 "MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host a key made in "
                                 "~/.config/mashbox/api-key")
             p.add_argument("--ui", action="store_true", help="also serve the MASHBOX Chat page at http://127.0.0.1:<port>/")
-            p.add_argument("--ctx", type=int, default=2048, metavar="N", help="context per request in tokens (prompt plus answer)")
-            p.add_argument("--slots", type=int, default=8, metavar="N",
-                           help="requests decoded together; a catalog model's kernels are built for 8 and other values run it on "
-                                "plain JAX; at the default, a GGUF file takes as many as fit the chip's memory")
+            p.add_argument("--ctx", default="auto", metavar="N|max|auto",
+                           help="context per request in tokens (prompt plus answer): a number (32768 or 32k); max = the longest "
+                                "one request can have on this chip; auto (default) = the most slots (at most 8) with at least "
+                                "32,768 tokens each (or the model's trained context when shorter), at the longest context that "
+                                "fits them. The start-up log prints what this chip holds")
+            p.add_argument("--slots", type=int, default=None, metavar="N",
+                           help="requests decoded together; default: picked with --ctx (at most 8). A catalog model's kernels "
+                                "are built for 8 and other values run it on plain JAX")
             p.add_argument("--steps", type=int, default=8, metavar="N", help="decode steps per device call")
             p.add_argument("--mtp", type=int, metavar="K",
                            help="speculative decoding with the model's own multi-token-prediction head: K drafts per verify pass "

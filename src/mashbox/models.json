@@ -2562,6 +2562,116 @@
       }
     }
   ],
+  "speculation_families": {
+    "exaone": {
+      "ngram": {
+        "v6e-1": {
+          "status": "not_passed",
+          "record": "spec/ngram/exaone/v6e-1",
+          "record_sha256": "866d0adcd58811504b3c56788fa3104119ac406714b71706eb68076a621c7a5e",
+          "representative": "lgai-exaone-exaone-3-5-2-4b-instruct-q4-k-m",
+          "spec_step_version": 1,
+          "k_table": {
+            "1": 3,
+            "4": 0,
+            "16": 0,
+            "64": 0,
+            "256": 0
+          }
+        }
+      }
+    },
+    "granite": {
+      "ngram": {
+        "v6e-1": {
+          "status": "not_passed",
+          "record": "spec/ngram/granite/v6e-1",
+          "record_sha256": "d037719b02106419a14fee05582a2c985b048678064a8dd7cade8fce71fd03aa",
+          "representative": "ibm-granite-granite-3-3-2b-instruct-q4-k-m",
+          "spec_step_version": 1,
+          "k_table": {
+            "1": 3,
+            "4": 0,
+            "16": 0,
+            "64": 0,
+            "256": 0
+          }
+        }
+      }
+    },
+    "llama": {
+      "ngram": {
+        "v6e-1": {
+          "status": "not_passed",
+          "record": "spec/ngram/llama/v6e-1",
+          "record_sha256": "ee4abd9a9b7b75ab79a64390e42f0c2802a8b7649092d6dfbbbaf1943f5887b2",
+          "representative": "bartowski-llama-3-2-1b-instruct-q4-k-m",
+          "spec_step_version": 1,
+          "k_table": {
+            "1": 3,
+            "4": 0,
+            "16": 0,
+            "64": 0,
+            "256": 0
+          }
+        }
+      }
+    },
+    "qwen2": {
+      "ngram": {
+        "v6e-1": {
+          "status": "not_passed",
+          "record": "spec/ngram/qwen2/v6e-1",
+          "record_sha256": "d00f446d859f48c241b99ecbc2d66ba68eb740ffddf67ed5f12770a3272236b7",
+          "representative": "qwen-qwen2-5-1-5b-instruct-q4-k-m",
+          "spec_step_version": 1,
+          "k_table": {
+            "1": 3,
+            "4": 0,
+            "16": 0,
+            "64": 0,
+            "256": 0
+          }
+        }
+      }
+    },
+    "qwen3": {
+      "ngram": {
+        "v6e-1": {
+          "status": "not_passed",
+          "record": "spec/ngram/qwen3/v6e-1",
+          "record_sha256": "73e45845918800e5635d945b9fb3e90a7a36e598cb4b677c88cbd62132c0b427",
+          "representative": "qwen-qwen3-4b-q4-k-m",
+          "spec_step_version": 1,
+          "k_table": {
+            "1": 3,
+            "4": 0,
+            "16": 0,
+            "64": 0,
+            "256": 0
+          }
+        }
+      }
+    },
+    "qwen35": {
+      "ngram": {
+        "v6e-1": {
+          "status": "not_passed",
+          "record": "spec/ngram/qwen35/v6e-1",
+          "record_sha256": "3e8b110fb98bc89ca3f7aff68b3f94c9237699e3fdd8f875d883ed8ca9f2cc80",
+          "representative": "unsloth-qwen3-5-4b-q4-k-m",
+          "spec_step_version": 1,
+          "k_table": {
+            "1": 3,
+            "4": 0,
+            "16": 0,
+            "64": 0,
+            "256": 0
+          }
+        }
+      }
+    }
+  },
   "elsewhere": [
     {
       "id": "audio2face-3d-v3-0",

@@ -423,3 +423,130 @@ def test_mtp_draft_k_takes_1_to_k_max(run):
             cli.speculation(ns(k), m, None, 1, model=Q)
     for k in (1, kmax):
         assert cli.speculation(ns(k), m, None, 1, model=Q)["draft_k"] == k
+
+
+# family gates (models.json speculation_families; select.catalog_records): one gate run per architecture family, drafter
+# kind and chip covers every dense catalog file of that architecture; everything else decodes plain with a why line
+
+def _reg():
+    return json.load(open(os.path.join(ROOT, "src", "mashbox", "models.json")))
+
+
+def _ident(g):
+    return dict(repo=g["repo"], revision=g["revision"], file=g["file"])
+
+
+def _fam_entry(status="passed", fss="f" * 64, **kw):
+    from mashbox.runtime.spec_step import SPEC_STEP_VERSION
+    return dict(dict(status=status, record="spec/ngram/qwen3/v6e-1", record_sha256="e" * 64,
+                     representative="qwen-qwen3-4b-q4-k-m", spec_step_version=SPEC_STEP_VERSION, family_set_sha=fss,
+                     k_table={"1": 3, "4": 0, "16": 0, "64": 0, "256": 0}), **kw)
+
+
+DENSE = dict(format="gguf", verify=True, mtp_head=False, experts=0, mtp_layers=0, draft_given=False, trained=[],
+             trained_why=[], draft_models=[])
+
+
+def test_a_passed_family_gate_turns_on_every_dense_catalog_file_of_its_arch():
+    """one passed family entry: every dense gguf[] row of that arch picks n-gram, gated, on that chip, judged against
+    the deployment's family_set_sha (no per-file run); another chip, another family set or another arch stays plain"""
+    reg = _reg()
+    reg["speculation_families"] = {"qwen3": {"ngram": {"v6e-1": _fam_entry()}}}
+    rows = [g for g in reg["gguf"] if g["arch"] == "qwen3" and not g["moe"]]
+    assert len(rows) >= 2
+    for g in rows:
+        rec = SEL.catalog_records(reg, _ident(g), "qwen3")
+        kind, ok, why, gcss = SEL.pick(DENSE, "v6e-1", rec, css="f" * 64)
+        assert (kind, ok) == ("ngram", True) and "qwen3 family" in why[-1], (g["id"], why)
+        kind, ok, why, gcss = SEL.pick(DENSE, "v6e-1", rec, later=True)          # the GGUF load: the record stands in
+        assert (kind, ok, gcss) == ("ngram", True, "f" * 64)
+        assert SEL.pick(DENSE, "v5e-1", rec, css="f" * 64)[:2] == (None, False)  # another chip: one new family run
+        assert SEL.pick(DENSE, "v6e-4", rec, css="f" * 64)[:2] == (None, False)  # four chips (tensor parallel) is another key
+        kind, ok, why, _ = SEL.pick(DENSE, "v6e-1", rec, css="d" * 64)           # a fingerprint moved
+        assert kind is None and "another family component set" in why[-1]
+    for g in reg["gguf"]:
+        if g["arch"] != "qwen3":
+            assert SEL.catalog_records(reg, _ident(g), g["arch"]) == {}, g["id"]
+    assert SEL.catalog_records(reg, _ident(rows[0]), "llama") == {}     # the file's own architecture must be the row's
+
+
+def test_a_family_gate_never_reaches_moe_rows_files_off_the_catalog_or_a_files_own_entry():
+    reg = _reg()
+    reg["speculation_families"] = {"qwen3": {"ngram": {"v6e-1": _fam_entry()}}}
+    g = next(x for x in reg["gguf"] if x["arch"] == "qwen3")
+    assert SEL.catalog_records(reg, dict(repo="someone/else", revision="0" * 40, file="x.gguf"), "qwen3") == {}
+    moe = dict(g, moe=True)
+    assert SEL.family_records(reg, moe) == {}
+    own = dict(status="not_passed", record="r", record_sha256="e" * 64, component_set_sha="c" * 64)
+    g["speculation"] = {"ngram": {"v6e-1": own}}
+    rec = SEL.catalog_records(reg, _ident(g), "qwen3")
+    assert rec["ngram"]["v6e-1"] == own                                  # the file's own entry wins over its family's
+    assert SEL.pick(DENSE, "v6e-1", rec, css="f" * 64)[:2] == (None, False)
+    # MoE and no verify pass (Gemma) stay plain whatever the family says
+    for meta, word in ((dict(DENSE, experts=8), "MoE"), (dict(DENSE, verify=False), "no verify pass")):
+        kind, ok, why, _ = SEL.pick(meta, "v6e-1", {"ngram": {"v6e-1": dict(_fam_entry(), scope=SEL.FAMILY,
+                                                                              family="qwen3")}}, css="f" * 64)
+        assert kind is None and not ok and word in why[-1], why
+
+
+def test_every_catalog_file_without_a_passed_gate_decodes_plain_with_a_why_line():
+    """as shipped: for every gguf[] row, auto on a v6e-1 picks nothing unless the row's own or its family's entry
+    passed, and says why; a family with a not_passed entry names it"""
+    reg = _reg()
+    fams = reg.get("speculation_families") or {}
+    for g in reg["gguf"]:
+        rec = SEL.catalog_records(reg, _ident(g), g["arch"])
+        passed = any(e.get("status") == "passed" for per in rec.values() for e in per.values())
+        if passed:
+            continue
+        meta = dict(DENSE, experts=8 if g["moe"] else 0)
+        kind, ok, why, _ = SEL.pick(meta, "v6e-1", rec, css="f" * 64)
+        assert kind is None and not ok and why and why[-1], g["id"]
+        if not g["moe"] and (fams.get(g["arch"]) or {}).get("ngram", {}).get("v6e-1"):
+            assert f"the {g['arch']} family gate is not_passed" in why[-1], (g["id"], why)
+
+
+def test_shipped_family_entries_are_well_formed_and_the_validator_catches_bad_ones():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", os.path.join(ROOT, "tools", "hf_github_sync_check.py"))
+    SC = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(SC)
+
+    def probs(reg):
+        p = SC.Problems()
+        SC.spec_family_problems(reg, p)
+        return [str(x) for x in p]
+    reg = _reg()
+    assert probs(reg) == []
+    for arch, kinds in (reg.get("speculation_families") or {}).items():
+        for kind, per in kinds.items():
+            for chip, e in per.items():
+                assert e["status"] in ("passed", "not_passed") and SEL.sealed(e), (arch, chip)
+    bad = copy.deepcopy(reg)
+    bad["speculation_families"] = {"qwen3": {"ngram": {"v6e-1": _fam_entry(family_set_sha=None)},
+                                             "mtp": {"v6e-1": _fam_entry()}},
+                                   "nosuch": {"ngram": {"v6e-1": _fam_entry(representative="qwen-qwen3-4b-q4-k-m")}},
+                                   "llama": {"ngram": {"v6e-1": _fam_entry(status="not_passed")}}}
+    got = " | ".join(probs(bad))
+    for word in ("kinds", "no dense gguf[] row of this arch", "is not a dense gguf[] row of nosuch",
+                 "is not a dense gguf[] row of llama", "record spec/ngram/llama/v6e-1"):
+        assert word in got, (word, got)
+    bad["speculation_families"] = {"qwen3": {"ngram": {"v6e-1": _fam_entry(family_set_sha=None)}}}
+    assert "needs family_set_sha" in " | ".join(probs(bad))
+
+
+def test_the_page_names_a_passed_family_and_nothing_for_a_not_passed_one():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sync_check", os.path.join(ROOT, "tools", "hf_github_sync_check.py"))
+    SC = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(SC)
+    reg = _reg()
+    for m in reg["models"]:
+        for e in ((m.get("drafter") or {}).get("gate") or {}).values():
+            e["status"] = "not_passed"
+    for g in reg["gguf"]:
+        g.pop("speculation", None)
+    reg["speculation_families"] = {"qwen3": {"ngram": {"v6e-1": _fam_entry(status="not_passed")}}}
+    assert SC.gated_block(reg).startswith("- No drafter has passed")
+    reg["speculation_families"]["qwen3"]["ngram"]["v6e-1"]["status"] = "passed"
+    assert "copy from the conversation for every GGUF file of the `qwen3` architecture in the catalog on" in SC.gated_block(reg)

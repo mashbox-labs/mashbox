@@ -131,3 +131,6 @@ docs/models/lfm3-1-7b-coreml.md | `decode`: 1 token per call | the decode functi
 docs/models/lfm3-1-7b-coreml.md | `verify`: 8 tokens per call | the verify function's fixed input length (a shape of the model), not a measurement
 docs/models/lfm3-1-7b-coreml.md | reply length, which is 256 tokens unless you set it | the example program's default reply cap (a setting)
 docs/models/lfm3-1-7b-coreml.md | The context is 2048 tokens | the model's context length as built (a shape of the model), not a measurement
+docs/models/qwen3-8-27b.md | through the server (greedy, `--ctx 2048 --slots 8`) | the options the measured run used (a setting, not a measurement)
+docs/models/qwen3-8-27b.md | use TPU v6e and `--slots 8` | the slot count the kernel bundle is built for (a setting)
+docs/cli.md | with at least 32,768 tokens each | the engine's rule for the default context (runtime/context.py AGENT_CTX), a setting

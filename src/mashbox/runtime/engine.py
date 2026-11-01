@@ -57,6 +57,7 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
+from . import attention as ATT
 from . import faults
 from . import programs as PG
 from . import sampler as SP
@@ -447,11 +448,11 @@ class Engine:
             cap = max(1, min(self.S, self.tokens_per_call // T))
             p0m = max(w[2] for w in work[:cap])
             Tc = 0 if p0m == 0 else min(self.CTX, bucket(p0m, 128))
-            if Tc:      # keep the attention scores of one call (rows x heads x T x (Tc + T), f32 + bf16) under attn_bytes
-                per = 10 * self.c.H
-                while T > 16 and T * (Tc + T) * per > self.attn_bytes:
+            if Tc:      # keep the attention scores of one call (rows x heads x T x width, f32 + bf16) under attn_bytes;
+                per = 10 * self.c.H     # width = Tc + T, or one key block where the chunk runs blocked (runtime/attention.py)
+                while T > 16 and T * ATT.width(Tc, T) * per > self.attn_bytes:
                     T //= 2
-                cap = max(1, min(cap, int(self.attn_bytes // (T * (Tc + T) * per))))
+                cap = max(1, min(cap, int(self.attn_bytes // (T * ATT.width(Tc, T) * per))))
             grp = work[:cap]
             B = self._rows(len(grp), cap)
             toks, p0 = np.zeros((B, T), i32), np.zeros(B, i32)
@@ -598,9 +599,9 @@ class Engine:
             for Tc in Tcs:
                 T, cap = T0, cap0
                 if Tc:
-                    while T > 16 and T * (Tc + T) * per > self.attn_bytes:
+                    while T > 16 and T * ATT.width(Tc, T) * per > self.attn_bytes:
                         T //= 2
-                    cap = max(1, min(cap, int(self.attn_bytes // (T * (Tc + T) * per))))
+                    cap = max(1, min(cap, int(self.attn_bytes // (T * ATT.width(Tc, T) * per))))
                 for m in range(1, cap + 1):
                     for Tc_ in Tcs:
                         if Tc_ <= Tc:

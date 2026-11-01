@@ -2,6 +2,45 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.14
+
+### Decode attends against the K/V cache in key blocks; opt-in 8-bit K/V
+
+1. **`runtime/attention.py` (`attend_cache`), `runtime/kvcache.py` (`reader`):** decode and verify read the cache itself in blocks of 8,192 keys (prefill 2,048) with one online softmax, and only the blocks below the highest position a live row reads; the window is never copied whole. A window of at most 4,096 keys runs the code it ran before, bit for bit.
+2. **`runtime/kvcache.py` (`set_store`, store `int8`), `cli.py` (`kv_store`):** `MASHBOX_KV_CACHE=int8` stores each position's K and V as 8-bit codes with one float32 scale per head (2,176 bytes per position per group instead of 4,096); the scales multiply the scores and the weights inside each key block, so no window is dequantized whole. Reads and writes cover whole 32-position tiles, so an int8 context is a multiple of 32. One chip; refused for gemma files and rings. bfloat16 stays the default.
+3. **`models/qwen3_8_27b/model.py`, `shard.py`, `gguf/archs/dense.py`, `qwen35.py`, `gemma4.py`:** call `attend_cache` in place of reading and concatenating the cache.
+
+Why: on one TPU v6e chip, Qwen3.8-27B BQ8_R, one slot, decode at a 64K window went from 23.1 to 35.1 tokens/s and at 32K from 31.2 to 37.8; with `MASHBOX_KV_CACHE=int8` the chip holds one 131,072-token request (passkey 3/3), which bfloat16 K/V refuses at load.
+
+How existing models keep working: windows of 4,096 keys or fewer run unchanged code; without the setting the cache is bfloat16 as before; short-prompt greedy output at 32K and 64K is token-identical to the 4K run (4/4 each).
+
+### The engine sizes the context from the chip and says what it holds
+
+1. **`runtime/context.py` (new):** at load, the engine computes how many tokens this chip holds for this model: the weights, the slot state for a slot count and context (from the model's own `new_state`, by shapes only), and the working memory of one prefill call, against the chip's memory, capped at the model's trained context. It prints one line: the longest context one request can have, the context per slot at 1, 2, 4 and 8 slots, the trained context, and what it runs.
+2. **`cli.py` (`plan_context`, `trained_context`, `--ctx`, `--slots`):** `--ctx` takes a number, `max` or `auto`, and defaults to `auto`: the most slots (at most 8) with at least 32,768 tokens each (or the trained context when shorter), at the longest context that fits them, else one slot at the longest that fits. `--ctx max` is the longest one request can have; `--ctx N` takes the most slots that fit N, and refuses N with the longest that fits when nothing does. `--slots` defaults to picked. Every load path (catalog models, GGUF files, Hugging Face files) calls it before its fit check.
+3. **`hf/__init__.py`:** the same plan before the form is fitted. **`cli.gguf_context`:** a GGUF file's plan and slot count as `run` makes them, in one function the catalog's record guard replays (`tests/cpu/test_catalog.py`), so the guard checks the setting `run` now picks.
+
+Why: the default was 2,048 tokens x 8 slots on every chip, whatever the chip held, and nothing said what a longer setting would fit. On one TPU v6e chip, Qwen3.8-27B BQ8_R now starts at one slot x 63,488 tokens and says so; the old default stopped any request past 2,048 tokens.
+
+How existing models keep working: an explicit `--ctx N --slots M` runs as given, as before. Without a chip memory figure (CPU), and with a drafter asked for, `auto` stays 2,048 x 8. The kernel bundle is built for 8 slots, so a run the plan puts at fewer slots decodes on plain JAX; one request decoded at 41.2 tokens/s that way at 64k (38.6 tokens/s at 2,048 x 8 with the kernels), and `--slots 8` keeps the kernels with the longest context that fits 8 slots. A GGUF chip row's record is its zero-flag run, taken at 2,048 x 8; the zero-flag run now plans another setting, so the record guard (`test_supported_rows_have_records`, required at the release gate) names each such row until it has a new zero-flag record. The test fixture's record is the one the new default makes (8 x 4,096 for its 4,096-token file).
+
+### A GGUF file's fit check counts the rows the engine makes
+
+1. **`gguf/__init__.py` (`rows`, `need_bytes`, `slot_need`), `gguf/archs/gemma4.py` (`state_bytes`):** the slot state is counted for `slots` rows at 1 or 2 slots and `slots + 1` above, as `Engine` allocates it (no scratch row at 2 slots or fewer).
+
+Why: the check counted a scratch row the engine does not make, so it doubled the state of one slot and refused settings that fit: Llama-3.2-3B IQ4_XS at 131,072 x 1 was refused as "state 30.06 GB" for 15.03 GB of K/V on one TPU v6e chip.
+
+How existing models keep working: at 3 slots or more nothing changes; at 1 or 2 slots the check now asks for less, never more.
+
+### Long prompts prefill in key blocks instead of shrinking the chunk
+
+1. **`runtime/attention.py` (new):** the one full-attention core every model calls (`models/qwen3_8_27b/model.py`, `gguf/archs/qwen35.py`, `dense.py`, `gemma4.py`). A prefill call of 16 tokens or more against more than 4,096 keys runs over the keys in blocks of 2,048 with an online softmax; every other call (decode, verify, short windows) runs the dense form the models ran before, unchanged.
+2. **`runtime/engine.py` (`prefill`):** the attention budget of a call counts one key block for a blocked call, so the chunk stays 256-512 tokens at any window instead of halving to 16.
+
+Why: one TPU v6e chip, Qwen3.8-27B BQ8_R, one slot: prefill went from 1,296 to 4,143 tokens/s at a 32k prompt and from 537 to 3,277 tokens/s at 64k (a 65k prompt in 20 s instead of 2 min); start to ready went from 145.9 s to 68.4 s at 64k.
+
+How existing models keep working: dense calls are bit-identical to the old code (CPU test); a blocked call matches the dense form within op tolerance (`tests/cpu/test_attention_blocked.py`). On the chip, the passkey held at every depth (64k 3/3, 32k 6/6) and four short greedy prompts gave the same tokens as before. Peak memory at 64k rose from 32.63 GB to 32.79 GB.
+
 ## 0.1.13
 
 ### A decode call at one input row runs on its own kernel class

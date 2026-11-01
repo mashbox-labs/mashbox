@@ -37,9 +37,10 @@ from jax import lax
 
 from ... import ops
 from ...runtime import kvcache
+from ...runtime import attention
 from ..reader import GGUFError
 from ...moe import MoEError, detect_gguf
-from .qwen35 import rms, kv_read, kv_write, _T, CONTRACTED_SMALL, role, new_stats, book, tied_head, routes
+from .qwen35 import rms, kv_write, _T, CONTRACTED_SMALL, role, new_stats, book, tied_head, routes
 from . import rope as yarn_rope
 
 f32, bf16 = jnp.float32, jnp.bfloat16
@@ -323,18 +324,13 @@ def make_forward(c, decode_kernels=None):
             mask = jnp.concatenate([m1, m2], -1)
         else:
             mask = m2
+        hi = attention.cache_hi(p0, Tc, keep) if Tc else None
         x = ops.take_rows(W["embed"], toks)
         x = (x.astype(f32) * np.float32(c.emb_scale) if c.emb_scale != 1.0 else x).astype(act)
 
         def attend(l, q, k, v):
-            if Tc:
-                kc, vc = kv_read(Kc, Vc, l, slots, Tc, contig, KV, HD)
-                kk, vv = jnp.concatenate([kc, k], 1), jnp.concatenate([vc, v], 1)
-            else:
-                kk, vv = k, v
-            s = jnp.einsum("btkgd,bskd->bkgts", q, kk, preferred_element_type=f32) * scale
-            p = jax.nn.softmax(jnp.where(mask[:, None, None], s, NEG), -1).astype(act)
-            return jnp.einsum("bkgts,bskd->btkgd", p, vv, preferred_element_type=f32).astype(act)
+            rd = kvcache.reader(Kc, Vc, l, slots, contig, KV, HD)
+            return attention.attend_cache(q, rd, Tc, k, v, mask, scale, act, hi=hi)
 
         def proj(h, w, name, bias):
             y = lin_(h, w[name])

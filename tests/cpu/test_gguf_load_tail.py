@@ -38,7 +38,9 @@ def test_gguf_load_sets_the_deployment_namespace_and_trace(tmp_path, monkeypatch
     assert eng.deployment_id and eng.component_set_sha, "no deployment id or component set for a GGUF file"
     assert eng.trace is True
     dep = [e for e in ev if e["event"] == "deployment"]
-    assert dep == [dict(event="deployment", deployment_id=eng.deployment_id, component_set_sha=eng.component_set_sha)]
+    assert dep == [dict(event="deployment", deployment_id=eng.deployment_id, component_set_sha=eng.component_set_sha,
+                        family_set_sha=eng.family_set_sha)]
+    assert len(eng.family_set_sha) == 64 and eng.family_set_sha != eng.component_set_sha     # the file's family set
     ident = next(e for e in ev if e["event"] == "gguf_identity")
     assert ident["sha256"] == hashlib.sha256(open(p, "rb").read()).hexdigest() and ident["how"] == ["read"]
     assert getattr(eng, "cache_ns", None) or getattr(eng, "namespace", None), "no prefix cache namespace"

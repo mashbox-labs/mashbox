@@ -169,11 +169,16 @@ class TPModel:
         kvs, kv5 = P(None, None, None, "tp"), P(None, None, None, "tp", None)
         q5, k4 = P(None, None, "tp", None, None), P(None, None, "tp", None)
 
-        def attend(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=False):
-            def core(Kc, Vc, g, q, k, v, mask, slots):
-                return QM.attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=contig)
-            f = smap(core, mesh, (kvs, kvs, P(), q5, k4, k4, P(), P()), q5)
-            return f(Kc, Vc, g, q, k, v, mask, slots)
+        def attend(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=False, hi=None):
+            if hi is None:
+                def core(Kc, Vc, g, q, k, v, mask, slots):
+                    return QM.attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=contig)
+                return smap(core, mesh, (kvs, kvs, P(), q5, k4, k4, P(), P()), q5)(Kc, Vc, g, q, k, v, mask, slots)
+
+            def core_hi(Kc, Vc, g, q, k, v, mask, slots, hi):
+                return QM.attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=contig, hi=hi)
+            f = smap(core_hi, mesh, (kvs, kvs, P(), q5, k4, k4, P(), P(), P()), q5)
+            return f(Kc, Vc, g, q, k, v, mask, slots, hi)
 
         def kv_write(Kc, Vc, slots, pos, ks, vs):
             return smap(QM.kv_write_one, mesh, (kvs, kvs, P(), P(), kv5, kv5), (kvs, kvs))(Kc, Vc, slots, pos, ks, vs)
@@ -210,6 +215,8 @@ class TPModel:
         if extra_groups:
             raise NotImplementedError("speculative decoding runs on one chip (no tensor parallel)")
         f32, bf16 = jnp.float32, jnp.bfloat16
+        if kvcache.STORE != "bf16":
+            raise NotImplementedError(f"MASHBOX_KV_CACHE={kvcache.STORE} runs on one chip (no tensor parallel)")
         kv = kvcache.shape(c.NG, S + 1, CTX, c.KV, c.HD)
         r, cs = (c.NG, c.FI - 1, S + 1, c.HV, c.DK, c.DV), (c.NG, c.FI - 1, S + 1, c.CK - 1, c.CONV)
         key = (kv, r, cs)

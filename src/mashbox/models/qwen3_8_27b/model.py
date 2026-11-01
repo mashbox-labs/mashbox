@@ -20,6 +20,7 @@ from jax import lax
 
 from ...runtime import activation_edits as AE
 from ...runtime import kvcache
+from ...runtime import attention
 from ...runtime.activation_edits import ActivationEdits  # noqa: F401  (the engine interface; re-exported for model users)
 
 f32, bf16 = jnp.float32, jnp.bfloat16
@@ -275,18 +276,12 @@ def new_state(c, S, CTX, extra_groups=0):
 
 
 # ---------------------------------------------------------------------------------------------------------------- forward
-def attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=False):
-    """Full-attention core on one chip: read slot rows of group g's K/V cache (positions < Tc; contig: the rows are slots
-    0..B-1, one slice), append this call's k, v, masked softmax. q (B,T,KV,G,HD), k / v (B,T,KV,HD), mask (B,T,Tc+T) ->
-    o (B,T,KV,G,HD) bf16."""
-    if Tc:
-        kc, vc = kvcache.read_heads(Kc, Vc, g, slots, Tc, contig, k.shape[2], k.shape[3])
-        kk, vv = jnp.concatenate([kc, k], 1), jnp.concatenate([vc, v], 1)
-    else:
-        kk, vv = k, v
-    s = jnp.einsum("btkgd,bskd->bkgts", q, kk, preferred_element_type=f32) * scale
-    p = jax.nn.softmax(jnp.where(mask[:, None, None], s, NEG), -1).astype(bf16)
-    return jnp.einsum("bkgts,bskd->btkgd", p, vv, preferred_element_type=f32).astype(bf16)
+def attend_one(Kc, Vc, g, q, k, v, mask, slots, Tc, scale, contig=False, hi=None):
+    """Full-attention core on one chip: slot rows of group g's K/V cache (positions < Tc; contig: the rows are slots
+    0..B-1, one slice) and this call's k, v, masked softmax (runtime/attention.attend_cache; hi: cached positions any live
+    row reads). q (B,T,KV,G,HD), k / v (B,T,KV,HD), mask (B,T,Tc+T) -> o (B,T,KV,G,HD) bf16."""
+    rd = kvcache.reader(Kc, Vc, g, slots, contig, k.shape[2], k.shape[3])
+    return attention.attend_cache(q, rd, Tc, k, v, mask, scale, bf16, hi=hi)
 
 
 def kv_write_one(Kc, Vc, slots, pos, ks, vs):
@@ -366,6 +361,7 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
             mask = jnp.concatenate([m1, m2], -1)
         else:
             mask = m2
+        hi = attention.cache_hi(p0, Tc, keep) if Tc else None
         fresh = p0 == 0
         if edits is None:
             x = embed(W["embed"], toks)
@@ -409,7 +405,7 @@ def make_forward(c, decode_kernels=None, attend=attend_one, kv_write=kv_write_on
             q, k = rms_norm(q, w["qn"], eps), rms_norm(k, w["kn"], eps)
             q, k = rope_partial(q, cos, sin, RD), rope_partial(k, cos, sin, RD)
             o = attend(Kc if Kl is None else Kl, Vc if Vl is None else Vl, g, q.reshape(B, T, KV, G, HD), k, v, mask, slots, Tc,
-                       scale, contig=contig).reshape(B, T, H * HD)
+                       scale, contig=contig, hi=hi).reshape(B, T, H * HD)
             o = o * jax.nn.sigmoid(gate.astype(f32)).astype(bf16)
             return linear(o, w["wo"], pj), k, v
 

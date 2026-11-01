@@ -26,7 +26,7 @@ gcloud compute tpus tpu-vm ssh mashbox-1 --zone=us-east5-b --command='python3 -m
 gcloud compute tpus tpu-vm delete mashbox-1 --zone=us-east5-b --quiet
 ```
 
-The second line installs `mashbox` with Python 3.12 ([Install](install.md) has the other ways), picks the `Q4_K_M` file from the repo, downloads it, prints the file's block types, their share of the weights and which of them run on the kernels, then prints the answer. At the default `--slots 8` it takes as many request slots as fit the chip's memory and says so. A file that does not fit even one request stops before loading and names the chips it would fit on, if any. The GGUF reader comes with the package, and the kernels download by themselves ([Kernels](#kernels)).
+The second line installs `mashbox` with Python 3.12 ([Install](install.md) has the other ways), picks the `Q4_K_M` file from the repo, downloads it, prints the file's block types, their share of the weights and which of them run on the kernels, then prints the answer. A file that does not fit even one request stops before loading and names the chips it would fit on, if any. The GGUF reader comes with the package, and the kernels download by themselves ([Kernels](#kernels)).
 
 Sampling works as for every other model: `--temperature`, `--top-p`, `--top-k` and `--seed` next to `--prompt` ([Command line](cli.md#mashbox-run)). [Supported models](supported-models.md) lists the models and files with a passing chip test, and the command for each.
 

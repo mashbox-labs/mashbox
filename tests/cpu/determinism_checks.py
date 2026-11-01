@@ -35,7 +35,10 @@ MAX_NEW = int(os.environ.get("D_MAX_NEW", "256"))
 cfg = Q.Config(os.path.join(WD, "tiny"))
 W, _ = QW.load(os.path.join(WD, "tiny-bf16.bshj"), cfg)
 a = cli.build_parser().parse_args(["run", "qwen3-8-27b"])
-DEFAULTS = dict(CTX=a.ctx, S=a.slots, K=a.steps, prefix_cache=True, cache_ram=max(0, a.cache_ram) << 20,
+# --ctx auto and an unset --slots are sized from the chip's memory when `mashbox run` starts (cli.plan_context); this CPU
+# check has no chip plan, so it keeps the fixed shape it was written for (2,048 tokens x 8 slots) whenever the CLI leaves it
+# to the chip, and the CLI's own numbers when they are numbers.
+DEFAULTS = dict(CTX=a.ctx if isinstance(a.ctx, int) else 2048, S=a.slots if a.slots else 8, K=a.steps, prefix_cache=True, cache_ram=max(0, a.cache_ram) << 20,
                 ckpts=a.ctx_checkpoints, ckpt_step=a.checkpoint_min_step, trace=True)
 rng = np.random.default_rng(61)
 

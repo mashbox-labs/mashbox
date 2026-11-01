@@ -463,6 +463,48 @@ def test_st_s10_gate_needs_component_set_step_version_and_k(fams, monkeypatch):
     assert on.component_set_sha != plain.component_set_sha
 
 
+def test_family_gate_holds_for_every_file_of_the_arch_and_moves_with_its_fingerprint(fams, monkeypatch):
+    """a family gate entry (models.json speculation_families) is judged against the deployment's family_set_sha: the
+    same for two files of one architecture at the same shapes and drafter (their component sets differ), another for
+    another architecture, other slots or another draft length; gguf_speculation carries the family scope, and
+    gguf_spec_gate keeps speculation only when the built engine's family set is the record's"""
+    from mashbox import cli
+    from mashbox.gguf import open_model
+    c, W, A = fams["llama-f32"]
+    f, _, _ = open_model(PATHS["llama-f32"], act=jnp.float32)
+    on1, on2 = (Engine(c, W, A, CTX=128, S=2, K=4, drafter=NG.NGram(3), draft_k=3) for _ in range(2))
+    cli.gguf_deployment(on1, f, dict(path=PATHS["llama-f32"], repo="a/one", file="one.gguf"), W, A)
+    cli.gguf_deployment(on2, f, dict(path=PATHS["llama-f32"], repo="b/two", file="two.gguf"), W, A)
+    assert on1.component_set_sha != on2.component_set_sha and on1.family_set_sha == on2.family_set_sha
+    wider = Engine(c, W, A, CTX=128, S=4, K=4, drafter=NG.NGram(3), draft_k=3)
+    k2 = Engine(c, W, A, CTX=128, S=2, K=4, drafter=NG.NGram(2), draft_k=2)
+    for e in (wider, k2):
+        cli.gguf_deployment(e, f, dict(path=PATHS["llama-f32"], repo="a/one", file="one.gguf"), W, A)
+        assert e.family_set_sha != on1.family_set_sha
+    c3, W3, A3 = fams["qwen3-f32"]
+    f3, _, _ = open_model(PATHS["qwen3-f32"], act=jnp.float32)
+    q = Engine(c3, W3, A3, CTX=128, S=2, K=4, drafter=NG.NGram(3), draft_k=3)
+    cli.gguf_deployment(q, f3, dict(path=PATHS["qwen3-f32"], repo="a/one", file="one.gguf"), W3, A3)
+    assert q.family_set_sha != on1.family_set_sha
+    fss = on1.family_set_sha
+    ent = dict(status="passed", record="spec/ngram/llama/v6e-1", record_sha256="e" * 64, family_set_sha=fss,
+               spec_step_version=SS.SPEC_STEP_VERSION, k_table={"1": 3, "8": 0}, scope=SEL.FAMILY, family="llama")
+    monkeypatch.setattr(DR, "chip_key", lambda: "v6e-1")
+    lines = []
+    monkeypatch.setattr(cli, "log", lines.append)
+    got = cli.gguf_speculation(SimpleNamespace(speculation=None, draft_k=None), c, A, records={"ngram": {"v6e-1": ent}})
+    assert got.pop("gate_css") == fss and got.pop("gate_scope") == SEL.FAMILY and got["drafter"].kind == "ngram"
+    assert "llama family" in json.loads(lines[-1])["reason"]
+    redo = []
+    eng = Engine(c, W, A, CTX=128, S=2, K=4, **got)
+    eng.family_set_sha, eng.component_set_sha = fss, "d" * 64      # a file's own set never decides a family entry
+    cli.gguf_spec_gate(eng, fss, lambda: redo.append(1), SEL.FAMILY)
+    assert eng.DK == 3 and redo == []
+    eng.family_set_sha = "d" * 64
+    cli.gguf_spec_gate(eng, fss, lambda: redo.append(1), SEL.FAMILY)
+    assert eng.DK == 0 and redo == [1] and "family component set" in lines[-1]
+
+
 def test_forced_ngram_on_a_catalog_model_checks_applies(monkeypatch):
     """--speculation ngram on a models.json model runs only where select.applies says so (a verify pass, not MoE)"""
     from mashbox import cli

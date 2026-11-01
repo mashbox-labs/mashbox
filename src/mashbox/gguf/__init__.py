@@ -137,8 +137,11 @@ def need_bytes(f, c, ctx, slots, kernel_types=frozenset(), roles=None, tokens=20
     act = np.dtype(c.act).itemsize
     # an architecture with a state layout of its own (f None: a caller that passes roles and a config, no file)
     sb = getattr(archs.module(f.arch), "state_bytes", None) if f is not None else None
-    kv = sb(c, ctx, slots) if sb is not None else 2 * c.NG * (slots + 1) * ctx * c.KV * c.HD * act
-    rec = 0 if sb is not None else c.NG * (c.FI - 1) * (slots + 1) * (c.HV * c.DK * c.DV * 4 + (c.CK - 1) * c.CONV * act)
+    n = rows(slots)
+    from ..runtime import kvcache
+    per = sum(kvcache.rows_kv(c.KV, c.HD)) if kvcache.STORE == "int8" else 2 * c.KV * c.HD * act   # int8: packed rows
+    kv = sb(c, ctx, slots) if sb is not None else c.NG * n * ctx * per
+    rec = 0 if sb is not None else c.NG * (c.FI - 1) * n * (c.HV * c.DK * c.DV * 4 + (c.CK - 1) * c.CONV * act)
     sh = [tuple(int(v) for v in f.tensors[n].shape) for n in mult
           if ops.weight_path(f.tensors[n].type, f.tensors[n].shape, kernel_types=kernel_types) == "exact"]
     big = max([ops.exact_chunk_rows(s[-2], s[-1]) * s[-1] * 4 for s in sh if len(s) >= 2], default=0)
@@ -159,11 +162,17 @@ def _limit():
         return None
 
 
+def rows(slots):
+    """state rows the engine makes for `slots` slots: one scratch row above 2 slots (Engine.__init__: S <= 2 calls never
+    have a padding row)"""
+    return slots + 1 if slots > 2 else slots
+
+
 def slot_need(f, c, ctx, slots, kernel_types=frozenset()):
     """-> (weights + float32 scratch + the slot state, the same + the scratch that moving the state takes: the state and one
     more row, since jit_swap asked for 5.00 GiB = 10 rows at 8 slots = 9 rows of Qwen3-32B Q4_K_M on one v6e chip)"""
     w, st, big = need_bytes(f, c, ctx, slots, kernel_types)
-    return w + big + st, w + big + st + st // (slots + 1) * (slots + 2)
+    return w + big + st, w + big + st + st // rows(slots) * (rows(slots) + 1)
 
 
 def fit_slots(f, c, ctx, slots, kernel_types=frozenset(), lim=None):
