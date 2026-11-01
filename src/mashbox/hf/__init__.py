@@ -285,6 +285,9 @@ def load(a, log=None):
     held = archs.held(f.arch, r["path"], moe=archs.moe_file(f))     # as a GGUF file: a MoE file with no passing row of its own, one line
     if held:
         raise HFError(held)
+    if not isinstance(a.ctx, int) or a.slots is None:   # --ctx auto | max, or --slots picked: from this chip's memory (bf16 form)
+        w0, _, big0 = G.need_bytes(f, c, 2048, 1, kernel_types=kt)
+        cli.plan_context(a, lambda s_, n_: A.new_state(c, s_, n_), w0 + big0, getattr(c, "ctx_train", 0), r["repo"])
     form, s, why = fit_form(f, A, c, a.ctx, a.slots, kt, step_down=a.slots == 8)   # 8 = the default; an explicit --slots is kept
     if s != a.slots:
         log(json.dumps(dict(event="hf_slots", slots=s, asked=a.slots, ctx=a.ctx)))

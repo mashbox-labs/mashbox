@@ -50,8 +50,10 @@ def _as_file(monkeypatch, name):
 
 
 def _scratch(st, slots):
-    """the scratch moving the state takes: the state (slots + 1 rows) and one more row"""
-    return st // (slots + 1) * (slots + 2)
+    """the scratch moving the state takes: the state (slots + 1 rows above 2 slots, else slots rows: the engine's scratch
+    row exists only above 2 slots) and one more row"""
+    r = slots + 1 if slots > 2 else slots
+    return st // r * (r + 1)
 
 
 def test_the_scratch_is_what_jit_swap_asked_for(monkeypatch):

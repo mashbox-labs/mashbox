@@ -604,10 +604,11 @@ def test_run_args_resolve_load_and_generate_on_cpu(monkeypatch, tmp_path):
     monkeypatch.setenv("MASHBOX_CACHE", str(tmp_path / "cache"))
     monkeypatch.setattr(cli, "setup_cache", lambda d=None: str(tmp_path / "xla"))     # no global JAX cache dir in tests
     a = cli.build_parser().parse_args(["run", str(m)])
-    assert (a.ctx, a.slots, a.no_kernels) == (2048, 8, False)
+    assert (a.ctx, a.slots, a.no_kernels) == ("auto", None, False)
     a.hf = hf.resolve(str(m))
     logs = []
     model, eng, chat, info, _ = hf.load(a, log=logs.append)
+    assert (a.ctx, a.slots) == (2048, 8)                  # no chip memory figure on CPU: the plan keeps 2,048 x 8
     ev = {json.loads(x)["event"]: json.loads(x) for x in logs if x.startswith("{")}
     assert ev["hf_plan"]["form"] == "bf16" and ev["hf_plan"]["arch"] == "qwen3" and ev["loaded"]["form"] == "bf16"
     assert info["form"] == "bf16" and model["id"] == str(m)

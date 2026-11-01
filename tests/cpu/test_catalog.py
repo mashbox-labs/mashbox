@@ -47,7 +47,7 @@ ROW = {"id": "tiny-qwen3-gguf-q4-k-m", "model": "tiny-qwen3", "publisher": "some
        "license": "apache-2.0", "license_link": "https://huggingface.co/someone/Tiny-Qwen3-GGUF/blob/main/LICENSE",
        "base": "Qwen/Tiny-Qwen3", "in": "text", "out": "text", "run": "mashbox run someone/Tiny-Qwen3-GGUF:Q4_K_M",
        "experimental": False,
-       "chips": {"v6e": {"status": "passing", "accelerator": "v6e-1", "ctx": 2048, "slots": 8, "kernel_path": "exact",
+       "chips": {"v6e": {"status": "passing", "accelerator": "v6e-1", "ctx": 4096, "slots": 8, "kernel_path": "exact",
                          "measured": {"decode_tok_s_1_user": 50.5, "decode_tok_s_8_users": 300.25}}}}
 BUNDLE = {"for": "gguf", "file": f"mashbox_engine_kernels-{REG['version']}-py3-none-any.whl",
           "url": "https://example.com/b.whl", "sha256": "b" * 64, "jax": "0.11.2", "libtpu": "0.0.48.*",
@@ -72,7 +72,10 @@ def problems(reg):
 
 
 def with_row(row=None, bundle=None):
+    """the catalog with only this gguf[] row: without speculation_families, whose representatives are rows it drops
+    (test_drafter_gate.py checks the shipped families)"""
     reg = copy.deepcopy(REG)
+    reg.pop("speculation_families", None)
     reg["gguf"] = [copy.deepcopy(row or ROW)]
     reg["engine_kernels"] = [copy.deepcopy(bundle)] if bundle else []
     return reg
@@ -326,6 +329,7 @@ def test_one_sorted_tree_whatever_the_order_of_the_rows():
             dict(ROW, id="tiny-qwen3-gguf-q4-k-m-b", publisher="Another", repo="Another/Tiny-Qwen3-GGUF",
                  sha256="e" * 64, run="mashbox run Another/Tiny-Qwen3-GGUF:Q4_K_M")]
     reg = copy.deepcopy(REG)
+    reg.pop("speculation_families", None)       # its representatives are rows this catalog drops
     reg["gguf"] = copy.deepcopy(rows)
     assert problems(reg) == []
     want = [("MASHBOX Labs", [(m["id"], m["name"], [m["id"]]) for m in sorted(
@@ -1490,7 +1494,7 @@ def run_problems(g, r, e, rec, header, man, listed, read, under, work, chip, wha
     and the fit's inputs (fit: the chip's bytes_limit, which is the run's memory.bytes_limit, and the kernel types it
     ran). The row's record ran `mashbox run <file>` with no flag and no MASHBOX_ variable. A forced-slot record of the
     run is listed under forced, ran with flags and backs no number; every record in the seal is one of the two. The
-    fit is re-run with this tree's code (cli.gguf_slots): the sealed header (the file's bytes up to its tensor data)
+    fit is re-run with this tree's code (cli.gguf_context: the context plan and slots): the sealed header (the file's bytes up to its tensor data)
     with a sparse tail to the file's size, the parser's defaults for the record's argv, the record's bytes_limit, and
     the release bundle's kernel types and plane sizes (kernel_path bundle) or none (exact). The same header gives the
     file's expert count (its own metadata, never a record field), which must be the row's moe."""
@@ -1579,9 +1583,9 @@ def run_problems(g, r, e, rec, header, man, listed, read, under, work, chip, wha
             out.append(f"{what}: the sealed header's metadata has {experts} experts, the row says moe {g['moe']}")
         if have != sorted(g["types"]):
             return out + [f"{what}: the sealed header's block types are {have}, the row says {sorted(g['types'])}"]
-        f, _, c = G.open_model(str(dst))
+        f, A, c = G.open_model(str(dst))
         a = cli.build_parser().parse_args(argv)
-        s = cli.gguf_slots(a, f, c, ops.kernel_types(), lim=lim)
+        s = cli.gguf_context(a, f, A, c, ops.kernel_types(), lim=lim)     # the context plan and slots, as run makes them
         own, G._limit = G._limit, lambda: lim       # then run's own check at the record's limit (cli.load_gguf)
         try:
             G.check_fits(f, c, a.ctx, s, kernel_types=ops.kernel_types())
@@ -2946,7 +2950,7 @@ def _fake_records(base, edit=None):
     row = dict(ROW, arch=fx.arch, bytes=path.stat().st_size, types=btypes, chips={"v6e": dict(
         ROW["chips"]["v6e"], kernel_path="bundle", measured={"decode_tok_s_1_user": 51.2, "decode_tok_s_8_users": 500.0})})
     parts = {"rec": {"file": row["file"], "code_sha": f"{commit[:7]}+kq-{kq[:7]}", "device": "TPU v6 lite",
-                     "n_devices": 1, "ctx": 2048, "slots": 8, "weights": {"file": row["file"], "reference_bytes": 0},
+                     "n_devices": 1, "ctx": 4096, "slots": 8, "weights": {"file": row["file"], "reference_bytes": 0},
                      "invocation": {"argv": ["run", f"/models/{row['file']}"], "env": {}},
                      "fit": {"bytes_limit": V6E, "kernel_types": quant}, "memory": {"bytes_limit": V6E},
                      "versions": dict(RUN_VERSIONS), "impl": {n: "c" * 64 for n in quant},
@@ -3252,7 +3256,7 @@ BAD_FORMS = {
     "the record ran on another chip type": (_set("rec", lambda r: r.__setitem__("device", "TPU v5 lite")),
                                             "accelerator v6e-1, the record ran on TPU v5 lite x1"),
     "the row's ctx is not the record's": (_set("reg", lambda r: r["gguf"][0]["chips"]["v6e"].__setitem__("ctx", 32768)),
-                                          "ctx 32768, the record ran 2048"),
+                                          "ctx 32768, the record ran 4096"),
     "the row's slots are not the record's": (_set("reg", lambda r: r["gguf"][0]["chips"]["v6e"].__setitem__(
         "slots", 64)), "slots 64, the record ran 8"),
     "passing with other divergences and no settle": (_others(16),
@@ -3350,7 +3354,7 @@ BAD_FORMS = {
     "a scratch record: slots 1, ctx 1, --slots 1": (_in_place("rec", lambda r: (r.update(slots=1, ctx=1), r[
         "invocation"]["argv"].extend(["--slots", "1"]))), "--slots 1`; the row's record is the zero-flag run"),
     "a fit the candidate does not give": (_in_place("rec", lambda r: (r["fit"].update(bytes_limit=60_000_000), r[
-        "memory"].update(bytes_limit=60_000_000))), "the candidate's fit gives 1 slots of 2048 tokens"),
+        "memory"].update(bytes_limit=60_000_000))), "the candidate's fit gives 2 slots of 2048 tokens"),
     "a limit the candidate refuses the file at": (_in_place("rec", lambda r: (r["fit"].update(bytes_limit=30_000_000), r[
         "memory"].update(bytes_limit=30_000_000))), "the candidate refuses this file at bytes_limit 30000000"),
     "a fit limit that is not the run's": (_in_place("rec", lambda r: r["fit"].update(bytes_limit=16_909_334_528)),

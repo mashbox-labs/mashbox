@@ -845,7 +845,7 @@ def test_a_one_chip_v5e_host_points_to_the_v5e_4(host):
 
 
 def test_too_long_a_context_names_ctx_and_slots(host):
-    msg = stop_line(host("v5e", 4), "--ctx", "262144")
+    msg = stop_line(host("v5e", 4), "--ctx", "262144", "--slots", "8")   # 262144 x 1 fits a v5e-4 (tp 4); x 8 does not
     assert "does not fit on 4 TPU v5e chips" in msg and "Lower --ctx or --slots" in msg
 
 

@@ -31,6 +31,7 @@ from jax import lax
 from ... import ops
 from ...moe import ffn as MF
 from ...runtime import kvcache
+from ...runtime import attention
 from ...models.qwen3_8_27b import model as M
 from ..reader import GGUFError
 from ...moe import MoEError, detect_gguf
@@ -445,6 +446,7 @@ def make_forward(c, decode_kernels=None):
             mask = jnp.concatenate([m1, m2], -1)
         else:
             mask = m2
+        hi = attention.cache_hi(p0, Tc, keep) if Tc else None
         fresh = p0 == 0
         x = ops.take_rows(W["embed"], toks).astype(act)
 
@@ -486,14 +488,8 @@ def make_forward(c, decode_kernels=None):
             return lin_(o, w["out"]), r1, c1
 
         def attend(g, q, k, v):
-            if Tc:
-                kc, vc = kv_read(Kc, Vc, g, slots, Tc, contig, KV, HD)
-                kk, vv = jnp.concatenate([kc, k], 1), jnp.concatenate([vc, v], 1)
-            else:
-                kk, vv = k, v
-            s = jnp.einsum("btkgd,bskd->bkgts", q, kk, preferred_element_type=f32) * scale
-            p = jax.nn.softmax(jnp.where(mask[:, None, None], s, NEG), -1).astype(act)
-            return jnp.einsum("bkgts,bskd->btkgd", p, vv, preferred_element_type=f32).astype(act)
+            rd = kvcache.reader(Kc, Vc, g, slots, contig, KV, HD)
+            return attention.attend_cache(q, rd, Tc, k, v, mask, scale, act, hi=hi)
 
         def full_attn(h, w, g):
             qg = lin_(h, w["wq"]).reshape(B, T, H, 2 * HD)

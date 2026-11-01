@@ -47,4 +47,4 @@ For coding agents that work on this repo, or that run its models for a person.
 | `No matching distribution found for jax[tpu]==0.11.2` | plain pip ran on the chip's Python 3.10: install with the uv line above |
 | `mashbox: command not found` | use the full path `~/.local/bin/mashbox` |
 | `<model> is not in mashbox <version>` | that model is not in the installed version: pick one from the README's Models table |
-| out of memory | use the chip type the model's row lists, with nothing else running on it; for Qwen3.8-27B keep the default `--ctx 2048 --slots 8` |
+| out of memory | use the chip type the model's row lists, with nothing else running on it |

@@ -674,6 +674,74 @@ def validate_catalog(reg, problems):
                     problems.add(where, f"chips.{ch}: kernel_path bundle, but no engine_kernels row for {ch} has {lack}")
         if "speculation" in g:
             gguf_spec_problems(g, chips, problems, where)
+    if "speculation_families" in reg:
+        spec_family_problems(reg, problems)
+
+
+SPEC_FAMILY_KEYS = ("status", "record", "record_sha256", "representative", "spec_step_version", "k_table")
+
+
+def spec_family_problems(reg, problems):
+    """speculation_families {arch: {kind: {chip key: entry}}} in form: one gate per architecture family, drafter kind and
+    chip, run on one representative file, which every dense gguf[] row of that arch inherits (runtime/drafters/select.py
+    catalog_records). The arch has a dense catalog row; kinds are the GGUF ones (n-gram); the chip key is the engine's
+    (family-devices); an entry has a status passed or not_passed, its record "spec/<kind>/<arch>/<chip key>" with that
+    record's SHA256SUMS sha256, the representative (a dense gguf[] row id of that arch), the runs' speculation step
+    version and a k_table as a row's. A passed entry also holds family_set_sha (64 hex: the deployment's family set it
+    was measured at, compile_key.family_set) and stands only beside its representative's passing kernel-path QUICK on
+    that chip family and chip count."""
+    fams = reg["speculation_families"]
+    where = "models.json speculation_families"
+    if not isinstance(fams, dict):
+        problems.add(where, "must be {arch: {kind: {chip key: entry}}}")
+        return
+    rows = {g.get("id"): g for g in reg.get("gguf") or [] if isinstance(g, dict)}
+    for arch, kinds in fams.items():
+        dense = [g for g in rows.values() if g.get("arch") == arch and not g.get("moe")]
+        if not dense:
+            problems.add(where, f"{arch}: no dense gguf[] row of this arch inherits it")
+        if not isinstance(kinds, dict) or not kinds or set(kinds) - set(GGUF_SPEC_KINDS):
+            problems.add(where, f"{arch}: kinds {sorted(kinds) if isinstance(kinds, dict) else kinds!r}; a family's gate "
+                                f"entries are {list(GGUF_SPEC_KINDS)} only")
+            continue
+        for kind, per in kinds.items():
+            for ck, e in (per.items() if isinstance(per, dict) else ()):
+                w = f"{arch}.{kind}.{ck}"
+                m = CHIP_KEY_RE.match(str(ck))
+                if not m:
+                    problems.add(where, f"{w}: the chip key is the engine's chip_key (family-devices, e.g. v6e-1)")
+                    continue
+                if not isinstance(e, dict) or any(k not in e for k in SPEC_FAMILY_KEYS):
+                    problems.add(where, f"{w} needs {SPEC_FAMILY_KEYS}")
+                    continue
+                if e["status"] not in ("passed", "not_passed"):
+                    problems.add(where, f"{w}: status passed or not_passed (the outcome of its sealed runs)")
+                if e["record"] != f"spec/{kind}/{arch}/{ck}":
+                    problems.add(where, f"{w}: record spec/{kind}/{arch}/{ck}")
+                if not isinstance(e["record_sha256"], str) or not HEX64_RE.match(e["record_sha256"]):
+                    problems.add(where, f"{w}: record_sha256 must be 64 hex")
+                rep = rows.get(e["representative"])
+                if rep is None or rep.get("arch") != arch or rep.get("moe"):
+                    problems.add(where, f"{w}: representative {e['representative']!r} is not a dense gguf[] row of {arch}")
+                if not isinstance(e["spec_step_version"], int) or isinstance(e["spec_step_version"], bool):
+                    problems.add(where, f"{w}: spec_step_version must be the runs' integer version")
+                kt = e["k_table"]
+                if (not isinstance(kt, dict) or set(kt) != set(GGUF_SPEC_BUCKETS)
+                        or any(not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 8 for v in kt.values())):
+                    problems.add(where, f"{w}: k_table {kt!r}: k 0-8 at every row bucket {list(GGUF_SPEC_BUCKETS)}")
+                if e["status"] != "passed":
+                    continue
+                if not isinstance(e.get("family_set_sha"), str) or not HEX64_RE.match(e["family_set_sha"]):
+                    problems.add(where, f"{w}: a passed entry needs family_set_sha (64 hex)")
+                if not (isinstance(kt, dict) and any(kt.values())):
+                    problems.add(where, f"{w}: a passed entry has k > 0 at one or more row buckets")
+                fam, n = m.group(1), int(m.group(2))
+                r = ((rep or {}).get("chips") or {}).get(fam)
+                r = r if isinstance(r, dict) else {}
+                count = r.get("chip_count") or int(str(r.get("accelerator") or "x-0").rsplit("-", 1)[-1] or 0)
+                if r.get("status") != "passing" or r.get("kernel_path") != "bundle" or count != n:
+                    problems.add(where, f"{w}: a passed family entry needs its representative's passing kernel-path "
+                                        f"QUICK on {n} {fam} chip{'s' * (n != 1)}")
 
 
 def gguf_spec_problems(g, chips, problems, where):
@@ -1929,7 +1997,8 @@ TURN_ON = "`--mtp K`, `--speculation ngram` or, on Qwen3.8-27B, `--speculation d
 
 def gated_block(reg):
     """The block between <!-- gated:start --> and <!-- gated:end --> in docs/speculation.md: what `auto` turns on, from
-    models.json's drafter gates ({chip: entry} in models[].drafter.gate and per kind in gguf[].speculation). `auto` turns
+    models.json's drafter gates ({chip: entry} in models[].drafter.gate, per kind in gguf[].speculation, and per arch and
+    kind in speculation_families, which every dense catalog file of that arch inherits). `auto` turns
     a drafter on only where its entry says "passed" (cli.speculation, drafters/select.gated), so the page names exactly
     those entries, and says nothing is on when none has passed."""
     def chip(c):
@@ -1943,12 +2012,15 @@ def gated_block(reg):
         on += [f"{DRAFTER_NAME.get(k, k)} for `{g['repo']}` `{g['file']}` on {chip(c)}"
                for k, chips in sorted((g.get("speculation") or {}).items())
                for c, e in sorted(chips.items()) if e.get("status") == "passed"]
+    for arch, kinds in sorted((reg.get("speculation_families") or {}).items()):
+        on += [f"{DRAFTER_NAME.get(k, k)} for every GGUF file of the `{arch}` architecture in the catalog on {chip(c)}"
+               for k, chips in sorted(kinds.items()) for c, e in sorted(chips.items()) if e.get("status") == "passed"]
     if not on:
         return ("- No drafter has passed its checks on a chip in this release, so `auto` decodes without speculation. "
                 f"Turn it on with {TURN_ON}.")
-    return ("- `auto` turns speculation on only where a drafter passed its checks for that model on that chip. In this "
-            f"release: {'; '.join(on)}. Everywhere else `auto` decodes without speculation; turn it on there with "
-            f"{TURN_ON}.")
+    return ("- `auto` turns speculation on only where a drafter passed its checks for that model, or for its "
+            f"architecture, on that chip. In this release: {'; '.join(on)}. Everywhere else `auto` decodes without "
+            f"speculation; turn it on there with {TURN_ON}.")
 
 
 CLI_NOTE =("Generated from the argparse parsers in src/mashbox/cli.py and src/mashbox/tpu/__init__.py by "

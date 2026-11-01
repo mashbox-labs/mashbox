@@ -15,6 +15,13 @@ Order (one drafter per deployment):
   3 ngram        any architecture with a verify pass
 On a chip, the first that applies AND has a passed gate record for this chip wins (auto). A forced kind (--speculation
 <kind>) runs where it applies, gated or not, and then says "not gated on this chip". Each rank gives one why line.
+
+Family gates (prove once, inherit everywhere): models.json speculation_families {arch: {kind: {chip: entry}}} holds one
+gate per architecture family, drafter kind and chip, run on one representative file. Every dense catalog gguf[] row of
+that arch inherits it (catalog_records), unless the row has its own entry for that kind and chip. A family entry is
+judged against the deployment's family_set_sha (compile_key.family_set: the component set with the file replaced by its
+architecture and the architecture module's source sha256), never against one file's component_set_sha. A new
+architecture, a new chip or a moved family_set_sha means one new family run; until then that file decodes plain.
 """
 def _modules(model):
     """the architecture module and the module its make_forward lives in (a package re-exports it)"""
@@ -166,41 +173,82 @@ def sealed(g):
     return bool((g or {}).get("record")) and isinstance(s, str) and len(s) == 64 and set(s) <= HEX
 
 
-def catalog_records(reg, r):
-    """The speculation gate records {kind: {chip: entry}} of the catalog's gguf[] row for this GGUF file (r: the GGUF
-    resolver's dict), matched on the file's identity: repo, revision and file of a Hugging Face file, or the row's sha256
-    where r carries the file's sha256. Never a name. {} when no row matches (plain decoding unless a flag forces one)."""
+def catalog_row(reg, r):
+    """The catalog's gguf[] row for this GGUF file (r: the GGUF resolver's dict), matched on the file's identity: repo,
+    revision and file of a Hugging Face file, or the row's sha256 where r carries the file's sha256. Never a name. None
+    when no row matches."""
     for g in (reg or {}).get("gguf") or []:
         same_hub = r.get("repo") and (g.get("repo"), g.get("revision"), g.get("file")) == (r.get("repo"), r.get("revision"),
                                                                                           r.get("file"))
         same_sha = r.get("sha256") and g.get("sha256") == r.get("sha256")
         if same_hub or same_sha:
-            return g.get("speculation") or {}
-    return {}
+            return g
+    return None
+
+
+FAMILY = "family"       # gate entry scope of an entry inherited from speculation_families
+
+
+def family_records(reg, g, arch=None):
+    """The family gate entries {kind: {chip: entry}} a catalog gguf[] row g inherits from models.json
+    speculation_families[g.arch]: a dense row only (MoE verify is not built), and only when the file's own architecture
+    (arch, its general.architecture; None = not read) is the row's. Each entry is returned with scope "family" and
+    its family, so the gate judges it against the deployment's family_set_sha. {} for anything else."""
+    if not g or g.get("moe") or not g.get("arch") or (arch is not None and arch != g["arch"]):
+        return {}
+    fam = ((reg or {}).get("speculation_families") or {}).get(g["arch"]) or {}
+    return {kind: {chip: dict(e, scope=FAMILY, family=g["arch"]) for chip, e in (per or {}).items() if isinstance(e, dict)}
+            for kind, per in fam.items() if isinstance(per, dict)}
+
+
+def catalog_records(reg, r, arch=None):
+    """The speculation gate records {kind: {chip: entry}} for this GGUF file (r: the GGUF resolver's dict; arch: the
+    file's general.architecture): its catalog gguf[] row's own entries, and for every kind and chip the row has none for,
+    the entry its architecture family passed or failed (family_records). Never a name. {} when no row matches (plain
+    decoding unless a flag forces one)."""
+    g = catalog_row(reg, r)
+    if g is None:
+        return {}
+    out = {kind: dict(per) for kind, per in family_records(reg, g, arch).items()}
+    for kind, per in (g.get("speculation") or {}).items():       # the file's own entry wins over its family's
+        out.setdefault(kind, {}).update(per or {})
+    return out
 
 
 def gated(rec, chip, css):
     """the gate record of one drafter kind ({chip: entry}) for this chip and this deployment -> (passed, why). Passed only
     when the entry says passed for this deployment's component_set_sha (which holds the drafter's key) and this engine's
-    SPEC_STEP_VERSION, with k > 0 at one or more row buckets of its k_table."""
+    SPEC_STEP_VERSION, with k > 0 at one or more row buckets of its k_table. A family entry (scope "family") holds its
+    family_set_sha instead, and css is then this deployment's family set."""
     from ..spec_step import SPEC_STEP_VERSION
     if chip is None:
         return False, "not on a TPU"
     g = (rec or {}).get(chip) or {}
     if g.get("status") != "passed":
+        if g.get("scope") == FAMILY and g.get("status"):
+            return False, f"not gated on this chip ({chip}): the {g.get('family')} family gate is {g.get('status')}"
         return False, f"not gated on this chip ({chip})"
     if not sealed(g):
         return False, f"not gated on this chip ({chip}): the record is not sealed (record and record_sha256)"
+    fam = g.get("scope") == FAMILY
     if css is None:
         return False, f"not gated on this chip ({chip}): the deployment's component set is not known"
-    if g.get("component_set_sha") != css:
-        return False, f"not gated on this chip ({chip}): the record is for another component set"
+    if gate_sha(g) != css:
+        return False, (f"not gated on this chip ({chip}): the {g.get('family')} family record is for another family "
+                       "component set (one new family run)" if fam else
+                       f"not gated on this chip ({chip}): the record is for another component set")
     if g.get("spec_step_version") != SPEC_STEP_VERSION:
         return False, (f"not gated on this chip ({chip}): the record measured speculation step version "
                        f"{g.get('spec_step_version')}, this engine runs {SPEC_STEP_VERSION}")
     if not any(int(k) > 0 for k in (g.get("k_table") or {}).values()):
         return False, f"not gated on this chip ({chip}): the record has k = 0 at every row bucket"
-    return True, f"gated on {chip} ({g.get('record')})"
+    return True, (f"gated on {chip} for the {g.get('family')} family ({g.get('record')})" if fam
+                  else f"gated on {chip} ({g.get('record')})")
+
+
+def gate_sha(g):
+    """the sha a gate entry is judged against: a family entry's family_set_sha, a file's own entry's component_set_sha"""
+    return (g or {}).get("family_set_sha" if (g or {}).get("scope") == FAMILY else "component_set_sha")
 
 
 def pick(meta, chip, records=None, forced=None, css=None, later=False):
@@ -227,7 +275,7 @@ def pick(meta, chip, records=None, forced=None, css=None, later=False):
         c = css(kind) if callable(css) else css
         stand = c is None and later and chip is not None
         if stand:
-            c = ((rec or {}).get(chip) or {}).get("component_set_sha")
+            c = gate_sha((rec or {}).get(chip))
         g, gw = gated(rec, chip, c)
         if not g:
             why.append(f"{w}; {gw}")

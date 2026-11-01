@@ -26,7 +26,7 @@ Tested means the drafter runs in `mashbox`'s own tests on small files of that ki
 
 | Option | What it does |
 |---|---|
-| `--speculation auto` | The default. Picks a drafter from the model file (see [How auto picks a drafter](#how-auto-picks-a-drafter)) and turns it on only where that drafter passed its checks for this model on this chip. Everywhere else the model decodes without speculation. |
+| `--speculation auto` | The default. Picks a drafter from the model file (see [How auto picks a drafter](#how-auto-picks-a-drafter)) and turns it on only where that drafter passed its checks on this chip, for this model or for its architecture (see [Checked once per architecture](#checked-once-per-architecture)). Everywhere else the model decodes without speculation. |
 | `--speculation off` | Never speculate. |
 | `--speculation mtp` | The model's own multi-token-prediction (MTP) head. |
 | `--speculation ngram` | Copy from the conversation: the drafter looks up the last few tokens earlier in the request and proposes the tokens that followed them there. |
@@ -49,11 +49,17 @@ Speculation runs on one chip. A model from the catalog on more than one chip (`-
 1. **A trained drafter made for this model** (DFlash, DFlare or EAGLE3), matched by the model's tokenizer and shape. `auto` does not pick one in this release, so it moves on to the next one. The DFlash drafter for Qwen3.8-27B runs when you pick it with `--speculation dflash --drafter-dir DIR`: your pick, not gated on this chip.
 2. **The model's own MTP head**, when the file has one and `mashbox` implements that head for the file's format. Qwen3.8-27B ships one with its `.bshj` weights.
 3. **A smaller model with the same tokenizer**. `auto` does not look one up in this release, so it moves on to the next one. One you give with `--draft-model` runs as `--speculation draft` does: your pick, not gated on this chip.
-4. **Copy from the conversation** (n-gram prompt lookup), on the GGUF files listed for it in [Where it runs](#where-it-runs).
+4. **Copy from the conversation** (n-gram prompt lookup), on the GGUF files listed for it in [Where it runs](#where-it-runs). Its checks pass for a whole architecture at once (see [Checked once per architecture](#checked-once-per-architecture)).
 
 On Qwen3.8-27B, `auto` looks at the MTP head only. Copy from the conversation runs there when you pick it with `--speculation ngram`.
 
 When nothing in the list has passed its checks on this chip, the model decodes without speculation and the start-up line says why. Turn it on yourself with `--speculation ngram` or `--mtp K`.
+
+## Checked once per architecture
+
+Copy from the conversation is checked on one GGUF file of each architecture on each chip. When that file passes, `auto` turns it on for every GGUF file of the same architecture in the catalog on that chip, with no run of its own. The checks hold only for the same code: a change to the architecture's code, to the kernels, to the context and slots the check ran at, or to the drafter's settings starts a new check, and until it passes those files decode without speculation. A file whose own check is in the catalog follows its own result, not its architecture's. A GGUF file outside the catalog, a mixture-of-experts file and a Gemma file never take an architecture's result: they decode without speculation unless you pick a drafter.
+
+The start-up line names the result it used: `gated on v6e-1 for the qwen3 family (...)` when the architecture's check passed, or `the qwen3 family gate is not_passed` when it did not.
 
 ## Check it is on
 

@@ -37,8 +37,8 @@ mashbox run MODEL [options]
 | `--port N` | `8000` | server port; 0 picks a free one, named in the "listening" log line (and "ui" with --ui) |
 | `--api-key-file FILE` |  | require an API key from FILE on /v1 requests: one per line, a key or a key then its tenant's name; keys of one tenant share one prompt cache and one waiting queue, and a key without a name is its own tenant; only you may read or write FILE (chmod 600). Also MASHBOX_API_KEY=k1,k2. Default: none on 127.0.0.1, and on any other --host a key made in ~/.config/mashbox/api-key |
 | `--ui` | off | also serve the MASHBOX Chat page at http://127.0.0.1:<port>/ |
-| `--ctx N` | `2048` | context per request in tokens (prompt plus answer) |
-| `--slots N` | `8` | requests decoded together; a catalog model's kernels are built for 8 and other values run it on plain JAX; at the default, a GGUF file takes as many as fit the chip's memory |
+| `--ctx N|max|auto` | `auto` | context per request in tokens (prompt plus answer): a number (32768 or 32k); max = the longest one request can have on this chip; auto (default) = the most slots (at most 8) with at least 32,768 tokens each (or the model's trained context when shorter), at the longest context that fits them. The start-up log prints what this chip holds |
+| `--slots N` |  | requests decoded together; default: picked with --ctx (at most 8). A catalog model's kernels are built for 8 and other values run it on plain JAX |
 | `--steps N` | `8` | decode steps per device call |
 | `--mtp K` |  | speculative decoding with the model's own multi-token-prediction head: K drafts per verify pass (1 to 3; 0 = off). Default: on only on chips where it passed its checks, else off. Uses the model's draft file (Qwen3.8-27B: --mtp 2); one chip only |
 | `--mtp-file FILE` |  | a local draft .bshj file instead of the download (its sha256 is still checked) |

@@ -124,14 +124,7 @@ def sw(engine_commit=None):
 def for_engine(eng, model_id, config_sha, weights_layout_sha, kernel_bundle_sha=None, tp=1, drafter=None,
                chip_=None, sw_=None, flags_=None, activation_edits=None, mesh=None):
     """-> (compile_key dict, deployment_id, component_set_sha) for an Engine (runtime/engine.py)."""
-    comps = {"kernel_bundle_sha": kernel_bundle_sha, "bindings": {"decode": list(getattr(eng, "kernels", []) or [])},
-             "sampler": SAMPLER, "attention": ATTENTION, "kv_format": "contig", "max_ctx": eng.CTX, "slots": eng.S,
-             "steps_per_call": eng.K, "chunk": eng.chunk, "tokens_per_call": eng.tokens_per_call,
-             "attn_bytes": eng.attn_bytes, "budget_busy": eng.budget_busy, "budget_idle": eng.budget_idle,
-             "prefix_cache": bool(eng.prefix_cache), "host_cache": getattr(eng, "host", None) is not None,
-             "kv_block": eng.kv_block, "trace": bool(eng.trace), "tp": tp,
-             "spec_method": None if not getattr(eng, "DK", 0) else
-             f"{getattr(getattr(eng, 'drafter', None), 'kind', 'mtp')}@{eng.DK}x{getattr(eng, 'NR', 1)}"}
+    comps = components(eng, kernel_bundle_sha, tp)
     model = {"model_id": model_id, "config_sha": config_sha, "weights_layout_sha": weights_layout_sha}
     fl = flags() if flags_ is None else flags_
     cs = component_set(model, comps, activation_edits, fl, drafter)
@@ -139,6 +132,44 @@ def for_engine(eng, model_id, config_sha, weights_layout_sha, kernel_bundle_sha=
     key = {"v": V, "chip": chip(tp, mesh) if chip_ is None else chip_, "sw": sw() if sw_ is None else sw_, "flags": fl,
            "model": model, "components": comps, "activation_edits": cs["activation_edits"], "component_set_sha": cs_sha}
     return key, sha(key), cs_sha
+
+
+def arch_source_sha(*modules):
+    """sha256 over the source files of an architecture's modules (the module and the one its forward lives in): path
+    base name and the sha256 of its bytes, in name order. None when a module has no source file."""
+    files = sorted({getattr(m, "__file__", None) for m in modules if m is not None})
+    if not files or None in files:
+        return None
+    h = hashlib.sha256()
+    for p in files:
+        with open(p, "rb") as fh:
+            h.update(os.path.basename(p).encode() + b"\0" + hashlib.sha256(fh.read()).hexdigest().encode() + b"\n")
+    return h.hexdigest()
+
+
+def family_set(eng, arch, arch_sha, kernel_bundle_sha=None, tp=1, drafter=None, flags_=None, activation_edits=None):
+    """-> family_set_sha: the component set of this deployment with the file replaced by its architecture family (the
+    architecture name and its modules' source sha256, arch_source_sha). Two files of one architecture at the same
+    context, slots, kernels, sampler, flags and drafter have the same family_set_sha; a family speculation gate entry
+    (models.json speculation_families) is judged against it. None when the architecture or its source is not known."""
+    if not arch or not arch_sha:
+        return None
+    model = {"family": arch, "arch_source_sha": arch_sha}
+    return sha(component_set(model, components(eng, kernel_bundle_sha, tp), activation_edits,
+                             flags() if flags_ is None else flags_, drafter))
+
+
+def components(eng, kernel_bundle_sha=None, tp=1):
+    """the engine's components of a component set: kernels, sampler, attention, context and batch shapes, caches,
+    tensor parallel and the speculation method"""
+    return {"kernel_bundle_sha": kernel_bundle_sha, "bindings": {"decode": list(getattr(eng, "kernels", []) or [])},
+            "sampler": SAMPLER, "attention": ATTENTION, "kv_format": "contig", "max_ctx": eng.CTX, "slots": eng.S,
+            "steps_per_call": eng.K, "chunk": eng.chunk, "tokens_per_call": eng.tokens_per_call,
+            "attn_bytes": eng.attn_bytes, "budget_busy": eng.budget_busy, "budget_idle": eng.budget_idle,
+            "prefix_cache": bool(eng.prefix_cache), "host_cache": getattr(eng, "host", None) is not None,
+            "kv_block": eng.kv_block, "trace": bool(eng.trace), "tp": tp,
+            "spec_method": None if not getattr(eng, "DK", 0) else
+            f"{getattr(getattr(eng, 'drafter', None), 'kind', 'mtp')}@{eng.DK}x{getattr(eng, 'NR', 1)}"}
 
 
 def check_cache(provenance, component_set_sha):
