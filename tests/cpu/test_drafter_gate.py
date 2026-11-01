@@ -347,7 +347,7 @@ def test_health_reason_from_every_plain_path_of_the_models_json_load(run, monkey
         "forced failure (MASHBOX_FAULT=force:speculation): plain decoding"
     monkeypatch.delenv("MASHBOX_FAULT")
     picked = {"drafter": "the --speculation ngram pick"}
-    monkeypatch.setattr(cli, "forced_drafter", lambda *x: picked)
+    monkeypatch.setattr(cli, "forced_drafter", lambda *x, **k: picked)
 
     def flag():
         a = argparse.Namespace(mtp=None, mtp_file=None, speculation="ngram", draft_k=None)

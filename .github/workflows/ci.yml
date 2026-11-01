@@ -18,6 +18,7 @@ jobs:
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
       any: ${{ steps.select.outputs.any }}
+      t2r_video: ${{ steps.select.outputs.t2r_video }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -48,7 +49,7 @@ jobs:
           done
 
   contracts:
-    # Every contract (tests/contracts: op/, tok/, arch/, path/run) on CPU against its reference, the same for every pull
+    # Every contract (tests/contracts: op/, tok/, arch/, path/run, spec/, fit/, kv/) on CPU against its reference, the same for every pull
     # request: no area pick, no torch, no model download, no chip. Results (id, status, fingerprint) go to the summary.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -62,11 +63,11 @@ jobs:
       - name: Install (CPU JAX, no torch)
         run: |
           python3 -m pip install -q uv==0.13.6
-          uv pip install --system -q -e ".[cpu]" pytest
+          uv pip install --system -q -e ".[cpu]" pytest safetensors   # safetensors: the drafter fixtures of tests/contracts/test_decode_contracts.py
       - name: Contracts
         env:
           MASHBOX_CONTRACTS_OUT: ${{ runner.temp }}/contracts.json
-        run: python3 -m pytest tests/contracts -q -p no:cacheprovider -rs --durations=10
+        run: python3 -m pytest tests/contracts -q -p no:cacheprovider -rsxX --durations=10
       - name: Contract results
         if: always()
         run: python3 tools/ci_select.py --contracts-summary "$RUNNER_TEMP/contracts.json" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -137,9 +138,11 @@ jobs:
           esac
           echo "T1 ok"
 
-  track2rig-video:
-    # The video step's own package: Python 3.10, as the tracker it wraps. CPU tests only (no tracker, no GPU).
+  track2rig-video-tests:
+    # The video step's own package: Python 3.10, as the tracker it wraps. CPU tests only (no tracker, no GPU). Runs when a
+    # file of the package or of CI changed (tools/ci_select.py t2r_video); the required check is the track2rig-video gate below.
     needs: t0
+    if: needs.t0.outputs.t2r_video == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -151,3 +154,26 @@ jobs:
           python-version: "3.10"
       - run: python3 -m pip install -q "./packages/track2rig-video[test]"
       - run: python3 -m pytest -q -p no:cacheprovider packages/track2rig-video/tests
+
+  track2rig-video:
+    # The one required check of the video package: green when its tests passed, or when the change touched nothing of it
+    # and the tests were skipped. Red when T0 failed, or when the tests were picked and failed, were cancelled or did not run.
+    needs: [t0, track2rig-video-tests]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: The video package tests passed or were not needed
+        env:
+          T0: ${{ needs.t0.result }}
+          PICKED: ${{ needs.t0.outputs.t2r_video }}
+          T: ${{ needs.track2rig-video-tests.result }}
+        run: |
+          echo "t0=$T0 picked=$PICKED tests=$T"
+          if [ "$T0" != "success" ]; then echo "T0 did not pass: $T0"; exit 1; fi
+          case "$PICKED" in
+            true) [ "$T" = "success" ] || { echo "the video package tests did not pass: $T"; exit 1; } ;;
+            false) [ "$T" = "skipped" ] || { echo "the tests ran although the change touched nothing of the package: $T"; exit 1; } ;;
+            *) echo "T0 gave no video pick"; exit 1 ;;
+          esac
+          echo "track2rig-video ok"

@@ -310,8 +310,8 @@ def speculation(a, m, cfg, tp, component_set_sha=None, later=False, model=None):
             raise SystemExit(f"--speculation mtp: {m['id']} has no MTP head in models.json")
         k = dk if dk is not None else dr["k_default"]
     elif sv in ("ngram", "draft"):
-        return forced_drafter(sv, dk, tp, model, cfg)
-    elif sv == "dflash":
+        return forced_drafter(sv, dk, tp, model, cfg, by_decode=by_decode(a))
+    elif sv in ("dflash", "block"):
         return dflash_drafter(a, dk, tp, model, cfg)
     if k is not None and not (1 if sv == "mtp" else 0) <= k <= kmax:      # --draft-k 0 is never off
         raise SystemExit(f"--draft-k {k}: use 1 to {kmax}" if sv == "mtp" else f"--mtp {k}: use 0 (off) to {kmax}")
@@ -417,7 +417,7 @@ def draft_refusal(a, gguf=None):
     return None
 
 
-DFLASH_GGUF = ("--speculation dflash runs on a model from the catalog whose forward gives the drafter its layer outputs, "
+DFLASH_GGUF = ("--speculation dflash or block runs on a model from the catalog whose forward gives the drafter its layer outputs, "
                "not on a GGUF file")
 
 
@@ -426,14 +426,14 @@ def dflash_refusal(a, gguf=None):
     from the catalog only (a GGUF forward gives no layer outputs). The line every run path stops with (draft_refusal
     calls this first), else None. gguf: whether the target is a GGUF file (default: a.gguf is set)."""
     sv, dd = getattr(a, "speculation", None), getattr(a, "drafter_dir", None)
-    if dd and sv != "dflash":
-        return f"--drafter-dir is the drafter of --speculation dflash, not of --speculation {sv or 'auto'}"
-    if sv != "dflash":
+    if dd and sv not in ("dflash", "block"):
+        return f"--drafter-dir is the drafter of --speculation dflash or block, not of --speculation {sv or 'auto'}"
+    if sv not in ("dflash", "block"):
         return None
     if bool(getattr(a, "gguf", None)) if gguf is None else gguf:
         return DFLASH_GGUF
     if not dd:
-        return ("--speculation dflash needs --drafter-dir DIR: the DFlash drafter's folder (config.json and "
+        return (f"--speculation {sv} needs --drafter-dir DIR: the DFlash drafter's folder (config.json and "
                 "model.safetensors); docs/speculation.md names the drafter to download for each model")
     return None
 
@@ -451,16 +451,26 @@ def dflash_drafter(a, k, tp, model, cfg):
     if why:
         raise SystemExit(why)
     if tp > 1:
-        raise SystemExit("--speculation dflash: speculative decoding runs on one chip (no tensor parallel)")
+        raise SystemExit(f"--speculation {a.speculation}: speculative decoding runs on one chip (no tensor parallel)")
     fwd = sys.modules.get(getattr(getattr(model, "make_forward", None), "__module__", None) or "")
     if not (getattr(model, "LAYER_TAPS", False) or getattr(fwd, "LAYER_TAPS", False)):
-        raise SystemExit("--speculation dflash: this model's forward does not give a drafter its layer outputs "
+        raise SystemExit(f"--speculation {a.speculation}: this model's forward does not give a drafter its layer outputs "
                          "(its architecture declares no LAYER_TAPS)")
     d = a.drafter_dir
     if not os.path.isfile(os.path.join(d, "config.json")):
         raise SystemExit(f"--drafter-dir {d}: no config.json there; give the drafter's folder (config.json and model.safetensors)")
+    c0 = json.load(open(os.path.join(d, "config.json")))
+    causal = bool((c0.get("dflash_config") or {}).get("causal_head", c0.get("causal_head")))
+    jet = a.speculation == "block"
+    if causal != jet:
+        raise SystemExit(f"--drafter-dir {d}: " + ("a causal block drafter: use --speculation block" if causal else
+                                                   "a DFlash drafter (no causal head): use --speculation dflash"))
+    if jet:                     # the block drafter (causal head): drafters/block.py
+        from .runtime.drafters import block as JS
+        if not isinstance(a.ctx, int):
+            raise SystemExit("--speculation block needs a context in tokens (its ring holds the whole context)")
     try:
-        bs = DF.Config(d).bs
+        bs = (JS.Config(d, a.ctx) if jet else DF.Config(d)).bs
     except (NotImplementedError, KeyError, ValueError) as e:
         raise SystemExit(f"--drafter-dir {d}: not a DFlash 2 drafter this version runs: {e}")
     k = bs - 1 if k is None else k
@@ -469,11 +479,12 @@ def dflash_drafter(a, k, tp, model, cfg):
     files = sorted(f for f in os.listdir(d) if f.endswith(".safetensors"))
     sha = tenancy.file_sha256(os.path.join(d, files[0])) if len(files) == 1 else None    # the deployment's drafter key
     try:
-        dr = DF.DFlash(model, cfg, d, k, weights_sha256=sha)
+        dr = JS.Block(model, cfg, d, k, weights_sha256=sha, window=a.ctx,
+                        weights=os.environ.get("MASHBOX_DRAFTER_WEIGHTS", "").strip() or "bf16") if jet else DF.DFlash(model, cfg, d, k, weights_sha256=sha)
     except (NotImplementedError, KeyError, ValueError) as e:
-        raise SystemExit(f"--speculation dflash: {e}")
+        raise SystemExit(f"--speculation {a.speculation}: {e}")
     log("speculation: not gated on this chip")
-    log(json.dumps(dict(event="speculation", used=True, method="dflash", draft_k=k, gated=False, reason="--speculation dflash",
+    log(json.dumps(dict(event="speculation", used=True, method="block" if jet else "dflash", draft_k=k, gated=False, reason="--speculation " + a.speculation,
                         spec_step_version=SPEC_STEP_VERSION)))
     return dict(drafter=dr, draft_k=k)
 
@@ -482,16 +493,22 @@ def dflash_slots(a):
     """--speculation dflash at --slots' default (8) runs 1 slot: the drafter's weights and its K/V ring per slot come on
     top of the model's, and on a TPU v6e-1 the 8-bit Qwen3.8-27B with the drafter at 8 slots ran out of memory where 1
     slot fits. --slots N runs as given."""
-    if getattr(a, "speculation", None) == "dflash" and a.slots in (None, 8):
-        log("mashbox: --speculation dflash runs one request at a time (--slots 1): with the drafter, 8 slots did not fit "
+    if getattr(a, "speculation", None) in ("dflash", "block") and a.slots in (None, 8):
+        log(f"mashbox: --speculation {a.speculation} runs one request at a time (--slots 1): with the drafter, 8 slots did not fit "
             "a TPU v6e-1's memory. --slots N sets it")
         log(json.dumps(dict(event="dflash_slots", slots=1, asked=8)))
         a.slots = 1
 
 
-def forced_drafter(kind, k, tp, model, cfg):
+def by_decode(a):
+    """True when --speculation was set by --decode (long's n-gram), not given: where it does not apply, decode runs plain"""
+    return "speculation" in ((getattr(a, "_decode", None) or {}).get("set") or {})
+
+
+def forced_drafter(kind, k, tp, model, cfg, by_decode=False):
     """--speculation ngram | draft on a models.json model: the drafter where it applies to the model's metadata (select.py:
-    a verify pass, not MoE), not gated on this chip, so never certified"""
+    a verify pass, not MoE), not gated on this chip, so never certified. Set by --decode (by_decode) rather than given,
+    a drafter that does not apply runs plain with the reason logged instead of refusing"""
     from .runtime.drafters import select as SEL
     from .runtime.spec_step import SPEC_STEP_VERSION
     if kind == "draft":
@@ -499,9 +516,14 @@ def forced_drafter(kind, k, tp, model, cfg):
     k = 3 if k is None else k
     if not 1 <= k <= 8:
         raise SystemExit(f"--draft-k {k}: use 1 to 8")
-    if tp > 1:
+    if tp > 1 and not by_decode:
         raise SystemExit(f"--speculation {kind}: speculative decoding runs on one chip (no tensor parallel)")
     ok, why = SEL.applies("ngram", SEL.meta_of(model, cfg, "bshj"))
+    if tp > 1 and by_decode:
+        ok, why = False, "speculative decoding runs on one chip (no tensor parallel)"
+    if not ok and by_decode:
+        log(json.dumps(dict(event="speculation", used=False, reason=f"--decode long: {kind}: {why}")))
+        return {}
     if not ok:
         raise SystemExit(f"--speculation {kind}: {why}")
     from .runtime.drafters.ngram import NGram
@@ -523,7 +545,7 @@ def gguf_speculation(a, c, A, records=None, f=None):
     from .runtime.drafters import select as SEL
     from .runtime.spec_step import SPEC_STEP_VERSION
     sv, k = getattr(a, "speculation", None), getattr(a, "draft_k", None)
-    if sv == "dflash":
+    if sv in ("dflash", "block"):
         raise GGUFError(f"mashbox: {DFLASH_GGUF}")
     given = getattr(a, "draft_gguf", None)
     forced = "draft_model" if sv == "draft" or (given and sv in (None, "auto")) else sv
@@ -539,8 +561,10 @@ def gguf_speculation(a, c, A, records=None, f=None):
     kind, gated, why, gcss = SEL.pick(SEL.meta_of(A, c, "gguf", getattr(c, "nextn", 0), draft_given=bool(given)), chip,
                                       records=records, forced=forced, later=True)
     if kind is None:
-        if forced not in (None, "auto", "off"):
+        if forced not in (None, "auto", "off") and not by_decode(a):
             raise GGUFError(f"mashbox: --speculation {sv}: {why[-1] if why else 'does not apply'}")
+        if by_decode(a):
+            return off(f"--decode long: {why[-1] if why else sv + ': does not apply'}")
         return off("; ".join(why))
     kt = {}
     if gated:       # the record's measured draft length per row bucket reaches the engine (k = 0: that bucket runs plain)
@@ -675,9 +699,27 @@ def plan_context(a, new_state, fixed, trained, model="", tp=1, limit=None):
 
     def state(s, c):
         b = CX.eval_state(new_state, s, c)
-        return (2 * b if s >= 2 else b) / tp      # 2+ slots: the slot swap program holds a second copy (gguf slot_need)
+        return ((2 * b if s >= 2 else b)          # 2+ slots: the slot swap program holds a second copy (gguf slot_need)
+                + CX.int8_take_bytes(new_state, s, c)) / tp     # 8-bit K/V: the host tier's block copy's temporary
     drafter = (getattr(a, "speculation", None) not in (None, "auto", "off") or bool(getattr(a, "mtp", None))
                or bool(getattr(a, "draft_model", None)) or bool(getattr(a, "drafter_dir", None)))
+    if (getattr(a, "_decode", None) or {}).get("setting") == "long" and getattr(a, "speculation", None) == "ngram" \
+            and not (getattr(a, "mtp", None) or getattr(a, "draft_model", None) or getattr(a, "drafter_dir", None)):
+        from .runtime.drafters import ngram as NG   # --decode long's n-gram: no weights; its programs' measured memory
+        drafter = False
+        fixed = fixed + NG.WORK_FIXED_BYTES / tp
+        st_ng = state
+
+        def state(s, c):                    # noqa: F811
+            return st_ng(s, c) + NG.WORK_BYTES_PER_POSITION * s * c / tp
+    dplan = drafter_plan(a)                 # a block drafter's weights, per-slot ring and working memory, from shapes
+    if dplan:
+        drafter = False                     # counted below: the plan knows this drafter's memory
+        fixed = fixed + dplan["fixed"] / tp
+        st0 = state
+
+        def state(s, c):                    # noqa: F811
+            return st0(s, c) + dplan["state"](s, c) / tp
     if not lim or (drafter and want in ("auto", "max")):
         a.ctx = 2048 if want in ("auto", "max") else want
         a.slots = 8 if a.slots is None else a.slots
@@ -688,6 +730,11 @@ def plan_context(a, new_state, fixed, trained, model="", tp=1, limit=None):
     fit = CX.Fit(state, fixed, lim, trained)
     if isinstance(want, int) and a.slots is not None:
         ctx, slots, why = want, a.slots, "as given"
+        if dplan and fit.need(slots, ctx) > lim:
+            raise SystemExit(f"mashbox: --ctx {ctx:,} x {slots} slot{'s' if slots > 1 else ''} with the {dplan['method']} "
+                             f"drafter does not fit this chip ({fit.need(slots, ctx) / 1e9:.2f} GB of {lim / 1e9:.2f} GB, "
+                             f"the drafter's weights, ring and working memory counted); the longest that fits "
+                             f"{slots} slot{'s' if slots > 1 else ''} is {fit.longest(slots):,} tokens")
     else:
         try:
             ctx, slots, why = fit.choose(want, a.slots)
@@ -700,9 +747,60 @@ def plan_context(a, new_state, fixed, trained, model="", tp=1, limit=None):
     if fit.trained and ctx > fit.trained:
         log(f"mashbox: warning: --ctx {ctx:,} is longer than {model or 'the model'}'s trained context ({fit.trained:,}); "
             f"answers that read past it may degrade")
-    log(json.dumps(CX.event(fit, ctx, slots, why)))
-    log(CX.line(fit, ctx, slots, why, model))
+    ev = CX.event(fit, ctx, slots, why)
+    if dplan:
+        ev.update(drafter=dplan["method"], drafter_fixed_bytes=int(dplan["fixed"] / tp))
+    log(json.dumps(ev))
+    log(CX.line(fit, ctx, slots, why, model) + (f" Counted: the {dplan['method']} drafter (weights, its ring per slot and "
+                                                f"its working memory)." if dplan else ""))
     return fit
+
+
+def decode_fast_kv(a, new_state, fixed, trained, tp):
+    """--decode fast: bf16 K/V when the plan with the drafter counted reaches decode.FAST_MIN_CTX for one user, else 8-bit
+    K/V when that does, else run as auto (the drafter flags fast set are taken back, with one line saying why)"""
+    import copy
+    from .runtime import context as CX, decode as DEC, kvcache
+    lim = chip_limit()
+    if not lim:
+        return
+    got = {}
+    for kv in ("bf16", "int8"):
+        kvcache.set_store(kv)
+        b = copy.copy(a)
+        b.ctx, b.slots = "max", 1
+        dp = drafter_plan(b)
+        st = (lambda s, c: (CX.eval_state(new_state, s, c) + CX.int8_take_bytes(new_state, s, c)) / tp     # as plan_context
+              + (dp["state"](s, c) / tp if dp else 0))
+        got[kv] = CX.Fit(st, fixed + (dp["fixed"] / tp if dp else 0), lim, trained).longest(1)
+    kvcache.set_store("bf16")
+    pick = DEC.fast_kv(got["bf16"], got["int8"])
+    log(json.dumps(dict(event="decode_fast_kv", longest_bf16=got["bf16"], longest_int8=got["int8"], pick=pick)))
+    if pick == "int8":
+        os.environ["MASHBOX_KV_CACHE"] = "int8"
+        a._decode["set"]["kv"] = "int8"
+    elif pick is None:
+        for k in ("speculation", "drafter_dir", "draft_k", "slots", "ctx"):
+            if k in a._decode["set"]:
+                setattr(a, k, {"ctx": "auto"}.get(k))
+        a._decode.update(setting="auto", set={}, why=f"--decode fast: with the drafter counted one user gets "
+                         f"{max(got.values()):,} tokens here, under {DEC.FAST_MIN_CTX:,}; running as auto")
+
+
+def drafter_plan(a):
+    """--speculation block --drafter-dir DIR (a causal block drafter): its plan_bytes, else None (other
+    drafters are not in the plan: plan_context keeps them at 2,048 tokens unless --ctx N)"""
+    d = getattr(a, "drafter_dir", None)
+    if getattr(a, "speculation", None) != "block" or not d or not os.path.isfile(os.path.join(d, "config.json")):
+        return None
+    try:
+        c0 = json.load(open(os.path.join(d, "config.json")))
+    except (OSError, ValueError):
+        return None
+    if not (c0.get("dflash_config") or {}).get("causal_head", c0.get("causal_head")):
+        return None
+    from .runtime.drafters import block as JS
+    return JS.plan_bytes(d, os.environ.get("MASHBOX_DRAFTER_WEIGHTS", "").strip() or "bf16")
 
 
 def trained_context(d):
@@ -798,11 +896,16 @@ def load(a):
                              f"use --tensor-parallel-size 1")
         log(json.dumps(dict(event="tensor_parallel", tp=1, reason="the package has no shard module: one chip")))
         tp = 1
+    from .runtime import decode as DEC
+    from . import kernels as K0
+    a._decode = DEC.resolve(a, m, K0.chip_family(), fetch_drafter=lambda e: hub.drafter_dir(e, log), log=log, tp=tp)
     dflash_slots(a)                                      # before the fit check and the kernels (built for 8 slots)
+    cfg0 = Q.Config(d)
+    wb0 = os.path.getsize(a.weights) if a.weights else int(hub.weights_row(m)["bytes"])
+    if a._decode["setting"] == "fast" and "kv" not in a._decode["set"] and not os.environ.get("MASHBOX_KV_CACHE"):
+        decode_fast_kv(a, lambda s, c: Q.new_state(cfg0, s, c), wb0 / tp, trained_context(d), tp)
     kv_store(a, tp)
     if not isinstance(a.ctx, int) or a.slots is None:    # --ctx auto | max, or --slots picked: from this chip's memory
-        cfg0 = Q.Config(d)
-        wb0 = os.path.getsize(a.weights) if a.weights else int(hub.weights_row(m)["bytes"])
         plan_context(a, lambda s, c: Q.new_state(cfg0, s, c), wb0 / tp, trained_context(d), m["id"], tp=tp)
     fit_check(a, m, d, tp)                               # before the weights download, check or load
     w = hub.weights_file(m, path=a.weights, log=log)
@@ -844,6 +947,14 @@ def load(a):
                  attn_bytes=2e9 if a.ctx <= 8192 else 5e8,       # long context: smaller prefill chunks, less HBM
                  trace=os.environ.get("MASHBOX_TRACE") == "1")   # per-token logit hashes for checks (log event "trace")
     chat = Chat(d)
+    if getattr(a, "_decode", None):
+        from .runtime import decode as DEC
+        from . import kernels as K1
+        on = bool(getattr(eng, "DK", 0))
+        meth = ("block" if type(eng.drafter).__name__ == "Block" else getattr(a, "speculation", None)) if on else None
+        line = DEC.report(m, K1.chip_family(), a._decode, a.ctx, a.slots, meth, eng.DK if on else None)
+        if line:
+            log(line)
     from .runtime import tenancy, compile_key as CK
     # the deployment's compile key and component set (runtime/compile_key.py): /health, the startup log, the namespace
     key = deployment_keys(eng, m, tenancy.file_sha256(os.path.join(d, "config.json")), CK.weights_layout(W),
@@ -912,6 +1023,11 @@ def _load_gguf_for_record(a, f, A, c, t0):
     from .gguf import tokenizer as GT
     from .runtime.engine import Engine
     from .runtime.chat import Chat
+    from .runtime import decode as DEC
+    from . import kernels as K0
+    a._decode = DEC.resolve(a, {"id": a.gguf.get("repo") or a.gguf.get("path")}, K0.chip_family(), log=log)
+    if a._decode["why"]:
+        log(a._decode["why"])
     kv_store(a)                                         # MASHBOX_KV_CACHE: before the plan and the fit check read the state
     r = a.gguf
     if getattr(a, "tensor_parallel_size", 0) > 1:
@@ -1263,6 +1379,10 @@ def build_parser():
             p.add_argument("--slots", type=int, default=None, metavar="N",
                            help="requests decoded together; default: picked with --ctx (at most 8). A catalog model's kernels "
                                 "are built for 8 and other values run it on plain JAX")
+            p.add_argument("--decode", choices=("auto", "fast", "long"), default=None,
+                           help="auto (default): as today. fast: speculation with the model's block drafter, one user, the "
+                                "longest context that fits with it. long: one user, the longest context that fits, with a small "
+                                "drafter (n-gram). Flags you give win. Also MASHBOX_DECODE")
             p.add_argument("--steps", type=int, default=8, metavar="N", help="decode steps per device call")
             p.add_argument("--mtp", type=int, metavar="K",
                            help="speculative decoding with the model's own multi-token-prediction head: K drafts per verify pass "
@@ -1270,24 +1390,27 @@ def build_parser():
                                 "model's draft file (Qwen3.8-27B: --mtp 2); one chip only")
             p.add_argument("--mtp-file", metavar="FILE",
                            help="a local draft .bshj file instead of the download (its sha256 is still checked)")
-            p.add_argument("--speculation", choices=("auto", "off", "mtp", "ngram", "draft", "dflash"),
+            p.add_argument("--speculation", choices=("auto", "off", "mtp", "ngram", "draft", "dflash", "block"),
                            help="speculative decoding. auto (default): the first drafter that applies to the model file, in this "
                                 "order: 1 a trained drafter made for this model (auto picks none in this release); 2 the model's own MTP "
                                 "head; 3 a smaller draft model with the same tokenizer (only one you give with --draft-model); "
                                 "4 n-gram over the request's own text (llama, qwen2, qwen3, qwen35, exaone and granite GGUF files), on only where it passed its checks on this chip (Qwen3.8-27B reads its MTP head "
                                 "only); off; or force one kind (then it says 'not gated on this chip'). dflash: the DFlash block drafter "
-                                "from --drafter-dir (Qwen3.8-27B), never picked by auto. One chip only")
+                                "from --drafter-dir (Qwen3.8-27B), never picked by auto. block: the causal block drafter from "
+                                "--drafter-dir (Qwen3.8-27B; --decode fast picks it), never picked by auto. One chip only")
             p.add_argument("--draft-k", type=int, metavar="K",
                            help="drafts per verify pass for a drafter you pick: ngram 1 to 8 (default 3); draft 1 to 8 (default 3); "
-                                "mtp 1 to the head's k_max (Qwen3.8-27B: 1 to 3, default 2); dflash 1 to 7 (default 7)")
+                                "mtp 1 to the head's k_max (Qwen3.8-27B: 1 to 3, default 2); dflash 1 to 7 (default 7); "
+                                "block 1 to 15 (default 15)")
             p.add_argument("--draft-model", metavar="FILE",
                            help="--speculation draft with this draft model: a smaller GGUF file or repo (as the model argument) "
                                 "with the same tokenizer, a llama, qwen2, qwen3, exaone or granite file; for a GGUF model "
                                 "only. Its weights and cache take chip memory next to the model's")
             p.add_argument("--drafter-dir", metavar="DIR",
-                           help="--speculation dflash with the DFlash drafter in DIR: its config.json and model.safetensors "
-                                "(for Qwen3.8-27B, the Hugging Face repo z-lab/Qwen3.8-27B-DFlash2). It runs one request at "
-                                "a time unless --slots N is given")
+                           help="the drafter of --speculation dflash or block, in DIR: its config.json and model.safetensors "
+                                "(for Qwen3.8-27B, the Hugging Face repo z-lab/Qwen3.8-27B-DFlash2 for dflash, "
+                                "JetSpec/jetspec-plus-plus-qwen3p8-27b for block). It runs one request at a time unless "
+                                "--slots N is given")
             p.add_argument("--tensor-parallel-size", "-tp", type=int, default=0, metavar="N",
                            help="chips to split the model across, as vLLM (1, 2 or 4); default: the chips of this host, at most 4 "
                                 "(1 on a TPU v6e-1, 4 on a TPU v5e-4 or v6e-4)")
@@ -1310,6 +1433,10 @@ def build_parser():
     p.add_argument("model", help="what `run` takes: a model in `mashbox models`, a .gguf file or GGUF repo[:quant tag], or "
                    "a model folder or safetensors repo")
     p.add_argument("--no-download", action="store_true", help="for a GGUF repo: only show which file llama.cpp's rule picks")
+    p = sub.add_parser("plan", help="what --decode auto, fast and long give a catalog model on a chip, from its row's "
+                       "measured records; nothing is loaded and no chip is needed")
+    p.add_argument("model", help="a model in `mashbox models`")
+    p.add_argument("--chip", default=None, help="chip family, e.g. v6e (default: every chip in the model's row)")
     return ap
 
 
@@ -1343,10 +1470,27 @@ def dispatch(argv):
         return cmd_env(a)
     if a.cmd == "models":
         return cmd_models(a)
+    if a.cmd == "plan":
+        return cmd_plan(a)
     if not has_jax():                                    # run, download and inspect read every model with JAX
         log(no_jax(a.cmd, a.model))
         return 2
     return cmd_target(a, argv)
+
+
+def cmd_plan(a):
+    """`mashbox plan MODEL [--chip C]`: the three decode settings per chip from the row (runtime/decode.plan_lines)"""
+    from .runtime import decode as DEC
+    try:
+        m = hub.model_entry(a.model)
+    except SystemExit as e:
+        log(str(e))
+        return 2
+    chips = [a.chip] if a.chip else list((m.get("chips") or {}).keys())
+    for c in chips:
+        print("\n".join(DEC.plan_lines(m, c)))
+    print(f"run with: mashbox run {m['id']} --decode fast|long")
+    return 0
 
 
 def host_note(a):

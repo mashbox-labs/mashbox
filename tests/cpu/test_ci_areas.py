@@ -194,9 +194,11 @@ def test_a_change_to_gguf_rows_only_runs_the_gguf_tests_and_the_tests_that_read_
                for f in CS.area_files(CS.ROWS, areas)} - {model, "core", "gguf"}    # keeps the rows leg, which runs it
     assert set(both) == {model, "core", "gguf"} | ({CS.ROWS} if outside else set()), (both, outside)
     assert pick(reg, "top") == []                                  # top-level fields feed the views only (T0)
-    for code in ("src/mashbox/cli.py", "src/mashbox/catalog.py", "tools/gguf_rows.py", "tools/hf_github_sync_check.py",
-                 "tests/cpu/test_catalog.py", "some/new/kind/of/file.cfg"):
-        assert pick(reg + views + [code], "rows") == every, code   # rows plus any other file: the full pick
+    for code in ("src/mashbox/cli.py", "src/mashbox/catalog.py", "some/new/kind/of/file.cfg"):
+        assert pick(reg + views + [code], "rows") == every, code   # rows plus core code or a new kind of file: the full pick
+    for code in ("tools/gguf_rows.py", "tools/hf_github_sync_check.py", "tests/cpu/test_catalog.py"):
+        p = set(pick(reg + views + [code], "rows")) - {CS.ROWS}     # rows plus a tool or a core-named test: the rows pick
+        assert {"gguf", "core"} <= p < set(every), (code, p)       # and the core legs (the tests that read it), not every model
     assert CS.select(["tools/docs_lint_allow.txt"], areas) == []    # only T0's docs lint reads the allow counts
 
 
@@ -460,3 +462,75 @@ def test_pr_ci_skips_the_timing_gates_runs_and_the_sweep_runs_them():
     step = ci.split("- name: CPU tests of", 1)[1].split("\n      - ", 1)[0]
     assert re.search(r'^\s+MASHBOX_SKIP_TIMING: "1"', step, re.M) and '-m "$AREA and not t0 and not quarantine and not timing"' in step
     assert "MASHBOX_SKIP_TIMING" not in (ROOT / ".github" / "workflows" / "sweep.yml").read_text()
+
+
+def test_a_core_named_test_file_runs_the_core_legs_only():
+    """A change to a tests/cpu file whose name carries no model id runs the core T1 legs (the file is one of them), not every
+    model's legs; a model's test runs that model; core CODE still runs everything."""
+    areas = CS.model_areas()
+    assert CS.classify("tests/cpu/test_sampler.py", areas) == {CS.CORE_TESTS}
+    assert CS.select(["tests/cpu/test_sampler.py"], areas) == ["core"]
+    assert CS.select(["tests/cpu/engine_batch_checks.py"], areas) == ["core"]
+    assert CS.select(["tests/cpu/test_hy_nomas_port.py"], areas) == ["hy_nomas"]
+    assert CS.select(["src/mashbox/runtime/engine.py"], areas) == sorted(set(areas) | {"core"})
+
+
+def test_a_tool_runs_the_tests_that_name_it():
+    """tools/<name>.py runs the areas of the tests that name the tool; a tool no test names runs every area; the selector
+    itself runs every area."""
+    areas = CS.model_areas()
+    every = sorted(set(areas) | {"core"})
+    users = CS.tool_users("tools/gguf_rows.py", areas)
+    assert "gguf" in users and CS.CORE_TESTS in users, users         # test_gguf_makers.py (gguf) and test_catalog.py (core) name it
+    picked = set(CS.select(["tools/gguf_rows.py"], areas)) - {CS.ROWS}
+    assert {"core", "gguf"} <= picked < set(every), picked
+    assert CS.select(["tools/gguf_check.py"], areas) == ["gguf"]       # the explicit GGUF_FILES rule still wins
+    unnamed = "tools/zz" + "_no_test_names_this.py"                  # built from two strings so this file itself does not name it
+    assert CS.tool_users(unnamed, areas) == set()
+    assert CS.select([unnamed], areas) == every                        # a tool no test names: every area
+    assert CS.select(["tools/ci_select.py"], areas) == sorted(set(areas) | {"core"})
+
+
+def test_the_video_package_job_runs_only_when_its_files_change(tmp_path):
+    """The track2rig-video tests run when a file of packages/track2rig-video/ or of CI changes, and the required check
+    `track2rig-video` is a gate (like t1): green when the tests passed or were not needed, red when picked and not green."""
+    import re
+    import subprocess
+    assert CS.t2r_video(["packages/track2rig-video/src/x.py"]) and CS.t2r_video([".github/workflows/ci.yml"]) and CS.t2r_video(None)
+    assert not CS.t2r_video(["README.md", "src/mashbox/runtime/engine.py", "tests/cpu/test_track2rig.py"])
+    assert CS.select(["packages/track2rig-video/src/x.py"], CS.model_areas()) == ["track2rig"]   # its area, not every model
+    wf = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+    assert re.search(r"^      t2r_video: \$\{\{ steps\.select\.outputs\.t2r_video \}\}$", wf, re.M)
+    tests = re.search(r"\n  (track2rig-video-tests):\n((?:(?:    .*)?\n)+)", wf)
+    assert tests and re.search(r"^    if: needs\.t0\.outputs\.t2r_video == 'true'$", tests.group(2), re.M)
+    job = re.search(r"\n  (track2rig-video):\n((?:(?:    .*)?\n)+)", wf)
+    assert job, "no track2rig-video gate"
+    body = job.group(2)
+    assert re.search(r"^    needs: \[t0, track2rig-video-tests\]$", body, re.M) and re.search(r"^    if: always\(\)$", body, re.M)
+    step = re.search(r"\n( +)- name: The video package tests passed or were not needed\n(?: +env:\n(?: +[A-Z0-9]+: .*\n)+)? +run: \|\n((?:(?:\1    .*)?\n)+)",
+                     body + "\n")
+    assert step, "no gate step"
+    script = "\n".join(line[len(step.group(1)) + 4:] for line in step.group(2).splitlines())
+
+    def gate(t0, picked, t):
+        env = {"PATH": "/usr/bin:/bin", "T0": t0, "PICKED": picked, "T": t}
+        return subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True).returncode
+
+    assert gate("success", "false", "skipped") == 0
+    assert gate("success", "true", "success") == 0
+    for t in ("failure", "cancelled", "skipped", ""):
+        assert gate("success", "true", t) != 0, t
+    assert gate("success", "false", "success") != 0
+    assert gate("failure", "", "skipped") != 0
+    assert gate("success", "", "skipped") != 0
+
+
+def test_views_workflow_runs_on_its_render_inputs_only():
+    """The Views workflow (a second check of the rendered views; T0 keeps the first) runs only when a render input changes."""
+    import re
+    wf = (ROOT / ".github" / "workflows" / "views.yml").read_text()
+    on = wf[wf.index("\non:"):wf.index("\npermissions:")]
+    assert on.count("paths:") == 2, on                                 # push and pull_request each carry a paths list
+    for want in ("models.json", "src/mashbox/models.json", "src/mashbox/catalog.py", "README.md", "llms.txt", "docs/**", "hf/**",
+                 "templates/**", "tools/hf_github_sync_check.py", ".github/workflows/views.yml"):
+        assert on.count(want) >= 2, want                               # in both lists

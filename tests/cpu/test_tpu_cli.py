@@ -455,6 +455,14 @@ def test_agents_settings_and_run_args_reach_the_chip(cloud, capsys):
     assert "Coding agents base URL" in out and "agents-on-tpu" in out and "--agents --restart" not in out
 
 
+def test_decode_reaches_the_chip(cloud):
+    """mashbox tpu up MODEL --decode long|fast: the chip's mashbox run gets the same --decode"""
+    read = cloud(plain={Z[0]: "ok"})
+    assert up("--decode", "long") == 0
+    script = [c for c in read()["calls"] if "--command" in c and "mashbox-install.sh" in c[c.index("--command") + 1]][0]
+    assert "run qwen3-8-27b --decode long" in script[script.index("--command") + 1]
+
+
 def test_restart_flag(cloud):
     read = cloud(plain={Z[0]: "ok"})
     assert up("--restart") == 0
@@ -869,7 +877,7 @@ def test_top_help_lists_tpu_and_every_tpu_command_has_help(capsys):
         cli.main(["--help"])
     out = capsys.readouterr().out
     flat = " ".join(out.split())        # argparse wraps help lines at the terminal width
-    assert "{env,tpu,run,download,models,inspect}" in flat and "mashbox tpu --help" in flat, out
+    assert "{env,tpu,run,download,models,inspect,plan}" in flat and "mashbox tpu --help" in flat, out
     with pytest.raises(SystemExit):
         cli.main(["tpu", "--help"])
     out = capsys.readouterr().out

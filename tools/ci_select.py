@@ -50,13 +50,18 @@ T0_ONLY_FILES = {"llms.txt", "LICENSE", "LICENSE-KERNELS", ".github/pull_request
                  "tools/docs_lint_allow.txt"}  # the docs-lint allow counts: only tools/docs_lint.py reads them, in T0
 CORE_DIRS = ("src/mashbox/runtime/", ".github/workflows/", "tools/")
 CORE_FILES = {"pyproject.toml", "tests/conftest.py"}
+TOOLS_EVERYWHERE = {"tools/ci_select.py"}      # the selection itself: a change to it runs every area (every other tools/*.py runs
+                                                # the areas of the CPU tests that name it, tool_users; a tool no test names runs every area)
+T2R_VIDEO_DIRS = ("packages/track2rig-video/",)  # the track2rig-video job (its own package and interpreter) runs on these
+T2R_VIDEO_FILES = {".github/workflows/ci.yml", "tools/ci_select.py"}
 SHARDS = {"core": 12, "qwen3_8_27b": 4, CLIENTS: 2, "gguf_rows": 5}   # T1 jobs per area (default 1); core is ~70 test files, about 1,400 tests
 # A file in SPLIT runs as that many parts, each its own shard unit (FILE@K/M; --args-of passes --ci-part to pytest, and
 # tests/conftest.py keeps part K's tests: the file's test groups dealt round robin, a group = what the module's
 # ci_part(item) returns, else each test alone). For a file whose one module fixture outlasts a shard, or whose many
 # tests together do (test_aot_table, test_catalog, test_drafters: each test is short, so its parts split its time).
 SPLIT = {"tests/cpu/test_spec_in_step.py": 3, "tests/cpu/test_qwen3_8_27b.py": 4, "tests/cpu/test_tp_batched.py": 3,
-         "tests/cpu/test_aot_table.py": 3, "tests/cpu/test_catalog.py": 2, "tests/cpu/test_drafters.py": 2}
+         "tests/cpu/test_aot_table.py": 3, "tests/cpu/test_catalog.py": 2, "tests/cpu/test_drafters.py": 2,
+         "tests/cpu/test_block_drafter.py": 2}
 # Approximate seconds per T1 test file on a CI runner, used only to split an area's files into shards of even time.
 # A file missing here counts as SECONDS_DEFAULT; a name here with no file is ignored. Refresh it from a CI run's
 # per-file times when a shard runs long. Only files this repository ships are listed (a name here ships with it).
@@ -80,6 +85,7 @@ SECONDS = {
     "tests/cpu/test_app_quit.py": 2,
     "tests/cpu/test_app_security.py": 10,
     "tests/cpu/test_app_tunnel_guard.py": 13,
+    "tests/cpu/test_block_drafter.py": 502,  # 4 CPUs, one process
     "tests/cpu/test_catalog.py": 488,
     "tests/cpu/test_chat_module.py": 2,
     "tests/cpu/test_chat_relay_guard.py": 2,
@@ -183,8 +189,27 @@ def tpu_file_users(path, areas):
     return {test_area(p.name, areas) for p in (ROOT / "tests" / "cpu").glob("*.py") if name in p.read_text()}
 
 
+def tool_users(path, areas):
+    """tools/<name>.py -> the areas of the tests/cpu files (outside T0) that name it: a core-named test gives CORE_TESTS (the
+    core legs, not every model). Empty when no test names it."""
+    stem = path.rsplit("/", 1)[-1][:-3]
+    rx = re.compile(rf"\b{re.escape(stem)}\b")
+    out = set()
+    for p in (ROOT / "tests" / "cpu").glob("test_*.py"):
+        if p.name not in T0_TESTS and rx.search(p.read_text()):
+            a = test_area(p.name, areas)
+            out.add(CORE_TESTS if a == "core" else a)
+    return out
+
+
+def t2r_video(files):
+    """True when the track2rig-video job must run: no file list (every area), a file of its package, or the CI files."""
+    return files is None or any(f.startswith(T2R_VIDEO_DIRS) or f in T2R_VIDEO_FILES for f in files)
+
+
 def classify(path, areas, base=None, head=None):
-    """The areas one changed path selects: a set of area names, {'core'}, or an empty set (T0 only)."""
+    """The areas one changed path selects: a set of area names, {'core'}, {CORE_TESTS} (the core legs only), or an empty
+    set (T0 only)."""
     if path.startswith("tests/tpu/"):
         return tpu_file_users(path, areas)
     if path in T0_ONLY_FILES or path.startswith(T0_ONLY_DIRS) or path.endswith(".md"):
@@ -195,6 +220,10 @@ def classify(path, areas, base=None, head=None):
         return {"gguf"}
     if path in ("models.json", "src/mashbox/models.json"):
         return registry_areas(base, head) if base else {"core"}
+    if path.startswith(T2R_VIDEO_DIRS):
+        return {"track2rig"} if "track2rig" in areas else set()   # plus the track2rig-video job (t2r_video)
+    if path.startswith("tools/") and path.endswith(".py") and path not in TOOLS_EVERYWHERE:
+        return tool_users(path, areas) or {"core"}  # a tool no test names: every area (never silently untested)
     if path in CORE_FILES or path.startswith(CORE_DIRS):
         return {"core"}
     parts = path.split("/")
@@ -204,7 +233,8 @@ def classify(path, areas, base=None, head=None):
         a = parts[1].replace("-", "_")
         return {a} if a in areas else {"core"}
     if parts[:2] == ["tests", "cpu"] and len(parts) == 3:
-        return {test_area(parts[2], areas)}
+        a = test_area(parts[2], areas)
+        return {CORE_TESTS} if a == "core" else {a}    # a core-named test file is one of the core legs' own files
     return {"core"}                             # src/mashbox/*.py, models/__init__.py and anything unclaimed
 
 
@@ -429,7 +459,8 @@ def main(argv=None):
     if a.github_output:
         include = jobs(picked, whole=a.whole_files)
         with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-            fh.write(f"matrix={json.dumps({'include': include})}\nany={'true' if picked else 'false'}\n")
+            fh.write(f"matrix={json.dumps({'include': include})}\nany={'true' if picked else 'false'}\n"
+                     f"t2r_video={'true' if t2r_video(files) else 'false'}\n")
     return 0
 
 

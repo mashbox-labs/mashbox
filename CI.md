@@ -20,8 +20,13 @@ Three tiers. Each change runs only what it can break, and every test has to earn
 | a model's `models.json` row | yes | that model, plus core tests (the CLI and `mashbox tpu` tests read the rows) |
 | `gguf` rows in `models.json` | yes | `gguf`, plus the `gguf_rows` job: the CPU tests outside `gguf` that read the rows (catalog, model lists, card and docs sync, speculation records) |
 | `src/mashbox/models/<id>/`, `apps/<id>/`, `tests/cpu/test_<id>*.py` | yes | that model |
-| core: `src/mashbox/*.py`, `src/mashbox/runtime/`, `pyproject.toml`, `tests/conftest.py`, `.github/workflows/`, `tools/` | yes | every model, plus core tests |
+| any other `tests/cpu/test_*.py` or helper in `tests/cpu/` | yes | the core legs only (the file is one of them), not every model |
+| `tools/<name>.py` (not `ci_select.py`) | yes | the areas of the CPU tests that name the tool (core-named tests: the core legs only); a tool no test names: every model |
+| `packages/track2rig-video/` | yes | `track2rig` (its tests name the package), plus the `track2rig-video` job |
+| core: `src/mashbox/*.py`, `src/mashbox/runtime/`, `pyproject.toml`, `tests/conftest.py`, `.github/workflows/`, `tools/ci_select.py`, other `tools/` files | yes | every model, plus core tests |
 | any path not listed here | yes | every model (a new kind of file is never silently untested) |
+
+Two jobs sit outside the areas. `track2rig-video` (the video package's own tests, Python 3.10) runs when a file under `packages/track2rig-video/` or a CI file changes; its required check is a gate that is green when the tests passed or were not needed. The Views workflow runs only when a render input changes (`models.json`, its packaged copy, `src/mashbox/catalog.py`, `README.md`, `llms.txt`, `docs/`, `hf/`, `templates/`, the render tools); T0's view check runs on every change regardless.
 
 Run the same thing locally:
 

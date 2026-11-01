@@ -9,6 +9,11 @@ type, never by file. So a row's record names the contracts of its kinds, not the
   tok/<tokenizer>                 the file's tokenizer: tok/<tokenizer.ggml.pre> for "gpt2" vocabularies, tok/spm for
                                   SentencePiece ("llama"), tok/gemma4 for gemma4 vocabularies; ids vs llama.cpp's
   path/run                        `mashbox run` through the CLI, resolver, loader, engine, sampler, chat and server
+
+A `--decode fast | long` record on a chip stands on decode_contracts (tests/contracts/test_decode_contracts.py):
+  spec/<method>                   the drafter inside the batched step: G-D1 tie-aware, on == off where there are no ties
+  fit/plan                        the context plan with the drafter counted
+  kv/int8                         the 8-bit K/V store a long record's passkey run used
 """
 import argparse
 import hashlib
@@ -77,6 +82,24 @@ def row_state(contract_set, named, results, named_cases=None):
     if broken:
         return BROKEN, broken + moved
     return (FLAGGED, moved) if moved else (VALID, [])
+
+
+def decode_contracts(setting, method=None, kv="bf16"):
+    """the contract set of a `--decode` record on a chip (models.json chips.<chip>.measured.decode.<setting>): fit/plan
+    and path/run always; fast adds spec/<method> (the drafter it runs, e.g. spec/block); a record on 8-bit K/V adds
+    kv/int8 (its passkey run stands on the store). A drafter approved on a model and chip stays approved while
+    row_state over this set is VALID; FLAGGED (a fingerprint moved) means one re-run of that record, BROKEN means none
+    holds. auto has no record of its own: it is the row's other records."""
+    if setting not in ("fast", "long"):
+        raise ValueError(f"{setting}: fast or long")
+    if setting == "fast" and not method:
+        raise ValueError("fast names the drafter it runs (method)")
+    if kv not in ("bf16", "int8"):
+        raise ValueError(f"{kv}: bf16 or int8")
+    ids = {"fit/plan", PATH_RUN} | ({f"spec/{method}"} if setting == "fast" else set())
+    if kv == "int8":
+        ids.add("kv/int8")
+    return sorted(ids)
 
 
 # ---- the guard reader: `python3 tools/contracts.py check` (tests/contracts/test_guard_reader.py holds its rules) ----

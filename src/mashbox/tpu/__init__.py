@@ -1300,7 +1300,8 @@ def cmd_up(a):
         save_state(name, project=project, zone=zone, model=m["id"], qr=qrname, max_hours=a.max_hours, created=now())
     try:
         say(f"Installing mashbox on {name} with install.sh ...")
-        extra = (c["agents"]["run_args"] if a.agents and c.get("agents") else []) + list(a.run_args)
+        extra = ((c["agents"]["run_args"] if a.agents and c.get("agents") else []) + list(a.run_args)
+                 + (["--decode", a.decode] if getattr(a, "decode", None) else []))
         if a.agents and not c.get("agents"):
             raise Stop(f"{m['id']} has no coding-agent settings")
         res = remote_setup(m, project, zone, name, extra, a.restart)
@@ -1500,6 +1501,9 @@ def main(argv):
     u.add_argument("--queue-minutes", type=float, default=60.0, help="how long to wait for a queued chip (default 60; 0 = no queued requests)")
     u.add_argument("--yes", action="store_true", help="create without asking")
     u.add_argument("--agents", action="store_true", help="start the server with the coding-agent settings of the model's row")
+    u.add_argument("--decode", choices=("auto", "fast", "long"), default=None,
+                   help="the server's decode setting (mashbox run --decode): auto, fast or long; its start line on the chip "
+                        "says what runs")
     u.add_argument("--restart", action="store_true", help="stop a running server (Ctrl-C, SIGINT) and start it again")
     helps = dict(down="delete a mashbox chip and its queued request",
                  status="list this project's mashbox chips and queued requests",

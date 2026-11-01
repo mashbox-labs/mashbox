@@ -94,3 +94,21 @@ def test_a_new_architecture_only_adds_path_run_cases():
                        capture_output=True, text=True, cwd=ROOT, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
     got = {ln.split("::", 1)[1] for ln in r.stdout.splitlines() if "::test_catalog_refusal_on_the_run_path" in ln}
     assert got == {f"test_catalog_refusal_on_the_run_path[{a}]" for a in archs.ARCHS}, r.stdout[-3000:] + r.stderr[-2000:]
+
+
+def test_decode_contract_sets():
+    """a --decode record's set: fast names its drafter's spec/ id, an 8-bit K/V record adds kv/int8 (its passkey stands on
+    it), and nothing else; a drafter approval holds while row_state over the set is VALID"""
+    assert C.decode_contracts("fast", "block") == ["fit/plan", "path/run", "spec/block"]
+    assert C.decode_contracts("fast", "block", "int8") == ["fit/plan", "kv/int8", "path/run", "spec/block"]
+    assert C.decode_contracts("long", kv="int8") == ["fit/plan", "kv/int8", "path/run"]
+    assert C.decode_contracts("long") == ["fit/plan", "path/run"]
+    for bad in (("auto",), ("fast",), ("long", None, "fp8")):
+        with pytest.raises(ValueError):
+            C.decode_contracts(*bad)
+    s = C.decode_contracts("fast", "block")
+    res = {i: {"status": "PASS", "fingerprint": "f-" + i, "cases": 1} for i in s}
+    named = {i: "f-" + i for i in s}
+    assert C.row_state(s, named, res) == (C.VALID, [])
+    assert C.row_state(s, named, {**res, "spec/block": {**res["spec/block"], "fingerprint": "g"}})[0] == C.FLAGGED
+    assert C.row_state(s, named, {**res, "spec/block": {**res["spec/block"], "status": "FAIL"}})[0] == C.BROKEN
