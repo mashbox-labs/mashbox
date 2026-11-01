@@ -381,7 +381,7 @@ def test_a_job_that_ends_during_its_guard_check_is_never_used(monkeypatch, tmp_p
             "print('  Local URL     http://127.0.0.1:9/   (SSH tunnel)'); sys.stdout.flush()")
     j = holder["job"] = app.Job("up", "m1", [sys.executable, "-u", "-c", code, "tpu", "up"])
     assert wait(lambda: j.checked and not j.running())
-    time.sleep(0.2)
+    assert wait(lambda: j.refused or j.ok)        # the reader thread decides once guarded() returns, after the job ended
     assert j.refused and not j.ok and added == []
 
 
