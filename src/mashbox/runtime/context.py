@@ -144,6 +144,21 @@ def event(fit, ctx, slots, why):
                 work_bytes=int(work_bytes(ctx)), need_bytes=int(fit.need(slots, ctx)))
 
 
+def int8_take_bytes(new_state, slots, ctx):
+    """bytes of the device temporary the engine's K/V block copy (Engine.kv_take, the host tier's program) holds with the
+    8-bit K/V store: the whole largest 8-bit K/V leaf, every slot (measured on a TPU v6e-1: temp_size of
+    kv_take = 16 x S x CTX x 1152 bytes at (1, 16384), (1, 32768) and (2, 16384), the codes-and-scales leaf; the bf16
+    store's copy holds no temporary). 0 with the bf16 store."""
+    from . import kvcache as KVC
+    if KVC.STORE != "int8":
+        return 0
+    import jax
+    import numpy as np
+    st = jax.eval_shape(lambda: new_state(slots - 1 if slots <= 2 else slots, ctx))
+    return max([math.prod(x.shape) for x in jax.tree.leaves(st) if np.dtype(x.dtype) == np.int8 and len(x.shape) == 4]
+               or [0])
+
+
 def eval_state(new_state, slots, ctx):
     """bytes of the engine's slot state for (slots, ctx), from shapes only (jax.eval_shape: nothing allocated). The engine
     adds one scratch slot above 2 slots (Engine.new_state)."""

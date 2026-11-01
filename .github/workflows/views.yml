@@ -7,7 +7,11 @@ name: Views
 on:
   push:
     branches: [main]
+    paths: [models.json, src/mashbox/models.json, src/mashbox/catalog.py, README.md, llms.txt, "docs/**", "hf/**",
+            "templates/**", tools/hf_github_sync_check.py, tools/model_lists.py, tools/gguf_rows.py, .github/workflows/views.yml]
   pull_request:
+    paths: [models.json, src/mashbox/models.json, src/mashbox/catalog.py, README.md, llms.txt, "docs/**", "hf/**",
+            "templates/**", tools/hf_github_sync_check.py, tools/model_lists.py, tools/gguf_rows.py, .github/workflows/views.yml]
   workflow_dispatch:
 permissions:
   contents: read

@@ -4,6 +4,18 @@ Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry
 
 ## 0.1.14
 
+### `--decode auto | fast | long`, the block drafter, and a plan that counts the drafter
+
+1. **`runtime/decode.py` (new), `cli.py` (`--decode`, `decode_fast_kv`, `mashbox plan`), `tpu/__init__.py`:** one server-wide setting. `auto` (the default) changes nothing. `fast` runs the model's block drafter from its models.json `drafters` row (fetched by revision, sha256 checked), one user, int8 drafter weights, at the longest context that fits with the drafter counted (8-bit K/V when bf16 K/V does not reach 16,384 tokens); a model with no block drafter, or no fit, runs as `auto` with one line saying why. `long` runs one user at the longest context that fits, 8-bit K/V where its passkey record passed, and n-gram speculation; it never loads a memory-heavy drafter. Flags given explicitly win and are listed on the start line. The start line gives the context, the drafter and the measured tok/s from `chips.<chip>.measured.decode` records only ("not measured on this chip" otherwise). `mashbox plan MODEL` prints the three settings from the records without loading anything; `mashbox tpu up ... --decode` passes the setting to the chip.
+2. **`runtime/drafters/block.py` (new), `--speculation block`:** a causal block drafter behind DRAFTER_ABI 2: one pass over a block of the anchor plus tokens drawn from the committed positions, from the target's own layer outputs, with a context ring as long as the context. Method from the JetSpec++ paper (arXiv 2610.19792); weights from the drafter folder it is given. `auto` never picks it.
+3. **`cli.py` (`plan_context`, `drafter_plan`):** the context plan counts a block drafter's weights as loaded, its per-slot state (by shapes) and its working memory, and refuses an explicit `--ctx` x `--slots` that does not fit with it before load.
+4. **`tools/contracts.py` (`decode_contracts`), `tests/contracts/test_decode_contracts.py`:** contract kinds `spec/block`, `fit/plan` and `kv/int8`; a fast or long record names their fingerprints, so a drafter approved on a model and chip holds until one of them moves.
+5. **`runtime/context.py` (`int8_take_bytes`), `cli.py` (`plan_context`, `decode_fast_kv`), `runtime/drafters/ngram.py`:** with 8-bit K/V the plan counts the temporary of the server's K/V block copy (the whole 8-bit K/V leaf), and `long` counts its n-gram programs' memory; where n-gram does not apply (no verify pass, MoE, tensor parallel) `long` decodes plain and says why.
+
+Why: one switch for speed or length, the same on every model; before this the drafter's memory was not in the plan and long contexts with a drafter ran out of memory at load, and a server at `--ctx max` with 8-bit K/V ran out of memory at load (Qwen3.8-27B on one TPU v6e chip: planned 119,808 tokens; the server now plans 69,632 and starts).
+
+How existing models keep working: `--decode` defaults to `auto`, which is the previous behaviour; no model without a `drafters` row changes; `--speculation dflash` is unchanged and a causal drafter given to it is refused by name.
+
 ### Decode attends against the K/V cache in key blocks; opt-in 8-bit K/V
 
 1. **`runtime/attention.py` (`attend_cache`), `runtime/kvcache.py` (`reader`):** decode and verify read the cache itself in blocks of 8,192 keys (prefill 2,048) with one online softmax, and only the blocks below the highest position a live row reads; the window is never copied whole. A window of at most 4,096 keys runs the code it ran before, bit for bit.
@@ -40,6 +52,15 @@ How existing models keep working: at 3 slots or more nothing changes; at 1 or 2 
 Why: one TPU v6e chip, Qwen3.8-27B BQ8_R, one slot: prefill went from 1,296 to 4,143 tokens/s at a 32k prompt and from 537 to 3,277 tokens/s at 64k (a 65k prompt in 20 s instead of 2 min); start to ready went from 145.9 s to 68.4 s at 64k.
 
 How existing models keep working: dense calls are bit-identical to the old code (CPU test); a blocked call matches the dense form within op tolerance (`tests/cpu/test_attention_blocked.py`). On the chip, the passkey held at every depth (64k 3/3, 32k 6/6) and four short greedy prompts gave the same tokens as before. Peak memory at 64k rose from 32.63 GB to 32.79 GB.
+
+### Q6_K's matmul unpacks its 6-bit codes without a float32 step
+
+1. **`models.json` (both copies):** the `engine_kernels` row names `mashbox_engine_kernels` 0.1.14. Only the Q6_K matmul kernel classes change: the 6-bit code is now formed in int8 from the low and high bit planes and takes the same int8 to bfloat16 conversion as every other int8 type, instead of a float32 subtraction over the whole code array. Every other 0.1.13 payload is in the package byte for byte, and the planes, dequant and repack are unchanged, so each weight keeps one copy of its planes, packed as before.
+2. **`ops/bundle.py`: no change.**
+
+Why: on one TPU v6e chip, a 151936 x 2560 Q6_K head takes 369.8 us instead of 473.6 us at one input row.
+
+How existing models keep working: the outputs equal 0.1.13's bit for bit. This was checked for 17 quantized types on 10 weight shapes, at rows 1 to 8 and 64, plain and through the layer form (170 cases, 0 differing bits, planes equal). The time to the first token and peak memory are no higher than with 0.1.13 on the two files measured, and every catalog GGUF file was checked and measured again on this package.
 
 ## 0.1.13
 

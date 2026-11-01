@@ -1102,3 +1102,26 @@ def test_speculation_draft_is_refused_on_both_load_paths(tmp_path, monkeypatch):
     _, A, c = open_model(FXT.build("llama-f32", str(tmp_path)), act=jnp.float32)
     with pytest.raises(GGUFError, match=r"--speculation draft: draft_model: no draft model given \(--draft-model\)"):
         cli.gguf_speculation(SimpleNamespace(speculation="draft", draft_k=None), c, A)
+
+
+def test_decode_long_ngram_runs_plain_where_it_does_not_apply(fams, monkeypatch):
+    """--decode long sets the n-gram drafter; on a model where it does not apply (no verify pass, MoE, tensor parallel)
+    decode runs plain with the reason logged, where --speculation ngram given by the person still refuses"""
+    from mashbox import cli
+    from mashbox.models import qwen3_8_27b as Q
+    lines = []
+    monkeypatch.setattr(cli, "log", lines.append)
+    assert cli.forced_drafter("ngram", 3, 1, SimpleNamespace(), SimpleNamespace(), by_decode=True) == {}
+    assert "--decode long: ngram:" in lines[-1] and "no verify pass" in lines[-1]
+    assert cli.forced_drafter("ngram", 3, 1, Q, SimpleNamespace(E=8), by_decode=True) == {}
+    assert cli.forced_drafter("ngram", 3, 4, Q, SimpleNamespace(), by_decode=True) == {} and "one chip" in lines[-1]
+    with pytest.raises(SystemExit, match="one chip"):
+        cli.forced_drafter("ngram", 3, 4, Q, SimpleNamespace())
+    c, W, A = fams["llama-f32"]
+    import mashbox.runtime.drafters.select as SEL
+    monkeypatch.setattr(SEL, "pick", lambda *a_, **k_: (None, False, ["ngram: the architecture has no verify pass"], None))
+    a = SimpleNamespace(speculation="ngram", draft_k=None, _decode={"setting": "long", "set": {"speculation": "ngram"}})
+    assert cli.gguf_speculation(a, c, A) == {} and "--decode long: ngram: the architecture has no verify pass" in lines[-1]
+    from mashbox.gguf import GGUFError
+    with pytest.raises(GGUFError, match="no verify pass"):
+        cli.gguf_speculation(SimpleNamespace(speculation="ngram", draft_k=None), c, A)

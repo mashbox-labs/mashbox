@@ -170,6 +170,19 @@ def draft_file(m, path=None, log=print):
     return verify(p, row["sha256"], log)
 
 
+def drafter_dir(e, log=print):
+    """Local folder of a drafter row from models.json `drafters` (repo, revision, files [{name, sha256}]): each file
+    downloaded at the pinned revision into the cache and its sha256 checked; the publisher's bytes, unchanged."""
+    d = os.path.join(cache_home(), "drafters", e["repo"].replace("/", "--"), e["revision"])
+    for f in e["files"]:
+        p = os.path.join(d, f["name"])
+        if not os.path.exists(p):
+            fetch(e["repo"], f["name"], e["revision"], local_dir=d)
+        if os.environ.get("MASHBOX_VERIFY", "1") != "0":
+            verify(p, f["sha256"], log)
+    return d
+
+
 def compile_cache(m, cache_dir, log=print, tp=1):
     """Unpack the model's XLA compile cache (models.json files[] row with kind "xla-cache") into cache_dir when its
     deployment and jax, jaxlib and libtpu match this setup, so the first run loads its programs instead of compiling them.

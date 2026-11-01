@@ -58,6 +58,14 @@ def find(seq, K, n_max=N_MAX, n_min=N_MIN):
     return []
 
 
+# The device memory the n-gram drafter's speculation programs (the verify forward at k + 1 positions and its helpers)
+# add over plain decoding, at 1 slot with 8-bit K/V: warm-up peak with --speculation ngram less --speculation off, the
+# same --ctx, through `mashbox run` (TPU v6e-1, a 27B hybrid target in BQ8_R, k 3): 381.8 MB at 32,768 and
+# 430.6 MB at 65,536 tokens, i.e. about 0.333 GB plus 1,491 bytes a position; planned as 0.34 GB plus 1,500 a position.
+WORK_FIXED_BYTES = 0.34e9
+WORK_BYTES_PER_POSITION = 1500
+
+
 class NGram(Drafter):
     kind = "ngram"
     extra_groups = 0
