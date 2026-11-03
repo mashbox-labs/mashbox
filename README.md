@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.14/docs/assets/banner-dark.png">
-    <img alt="MASHBOX Labs" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.14/docs/assets/banner-light.png" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.15/docs/assets/banner-dark.png">
+    <img alt="MASHBOX Labs" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.15/docs/assets/banner-light.png" width="100%">
   </picture>
 </p>
 
@@ -16,14 +16,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.14/LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
+  <a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.15/LICENSE"><img alt="Licence: Apache-2.0" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
   <a href="#tpu-v6e-and-v5e"><img alt="TPU v6e" src="https://img.shields.io/badge/TPU-v6e-ff5a1f"></a>
   <a href="https://docs.astral.sh/uv/"><img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776ab?logo=python&logoColor=white"></a>
   <a href="https://huggingface.co/mashbox-labs"><img alt="Hugging Face" src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-mashbox--labs-ffcc4d"></a>
   <a href="https://x.com/mashboxgg"><img alt="X" src="https://img.shields.io/badge/X-%40mashboxgg-000000?logo=x"></a>
 </p>
 
-<p align="center"><a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/models/qwen3-8-27b.md"><img alt="Qwen3.8-27B on one TPU v6e chip" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.14/hf/qwen3-8-27b/assets/hero.gif" width="100%"></a></p>
+<p align="center"><a href="https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/models/qwen3-8-27b.md"><img alt="Qwen3.8-27B on one TPU v6e chip" src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.15/hf/qwen3-8-27b/assets/hero.gif" width="100%"></a></p>
 <p align="center"><b>Qwen3.8-27B</b> on one TPU v6e chip: first-time install to first answer (sped up 10x).</p>
 
 ## Install
@@ -36,7 +36,7 @@ curl -fsSL https://mashbox.gg/install.sh | sh
 mashbox tpu up qwen3-8-27b
 ```
 
-Line 2 needs the Google Cloud CLI, signed in to a project with billing and the TPU API turned on; [Run on Google Cloud TPU](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/google-cloud.md) steps 1 to 5 do that from a new Google account. It prints the chip's price per hour and asks before it creates anything. Then it installs the same `mashbox` version on the chip and starts the server there, reached through an SSH tunnel from your machine. `mashbox tpu down mashbox-qwen3-8-27b` deletes the chip, and if you forget, the chip deletes itself at its max lifetime.
+Line 2 needs the Google Cloud CLI, signed in to a project with billing and the TPU API turned on; [Run on Google Cloud TPU](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/google-cloud.md) steps 1 to 5 do that from a new Google account. It prints the chip's price per hour and asks before it creates anything. Then it installs the same `mashbox` version on the chip and starts the server there, reached through an SSH tunnel from your machine. `mashbox tpu down mashbox-qwen3-8-27b` deletes the chip, and if you forget, the chip deletes itself at its max lifetime.
 
 On a machine that has a TPU, such as a Cloud TPU VM you created yourself, the same line 1 installs the TPU version and `mashbox run` runs a model there:
 
@@ -45,7 +45,7 @@ curl -fsSL https://mashbox.gg/install.sh | sh
 mashbox run qwen3-8-27b --prompt "Write a haiku about the sea."
 ```
 
-If the shell does not find `mashbox` after line 1, `~/.local/bin` is not on your `PATH`: line 1 printed the `export PATH=...` line for this terminal, or call it as `~/.local/bin/mashbox`. To do the same by hand with `gcloud`, one chip and one answer: [Quickstart](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/quickstart.md).
+If the shell does not find `mashbox` after line 1, `~/.local/bin` is not on your `PATH`: line 1 printed the `export PATH=...` line for this terminal, or call it as `~/.local/bin/mashbox`. To do the same by hand with `gcloud`, one chip and one answer: [Quickstart](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/quickstart.md).
 
 What each install adds:
 
@@ -65,12 +65,12 @@ curl -fsSL https://mashbox.gg/install.sh | MASHBOX_EXTRAS=tpu,hy-nomas sh
 `mashbox run` fetches the compiled TPU kernels a model uses by itself, so there is nothing to install or pick. They come from two places. The engine kernel package, used for GGUF files and Hugging Face models, is one file attached to a mashbox release on GitHub; `models.json` lists it under `engine_kernels`, with the chips and the JAX version it is built for. Each MASHBOX build that ships kernels has its own kernel package in its Hugging Face repo, under `kernels/`. `mashbox run` checks every file against its sha256 in `models.json` before it uses it. When no package fits the chip and the JAX version, the model runs without one, on plain JAX, which is slower, and the log says so.
 <!-- install:end -->
 
-The chip bills from create to delete: one TPU v6e chip is $2.70 an hour at Google's on-demand [list price](https://cloud.google.com/tpu/pricing). Qwen3.8-27B's options, chips and results: [docs/models/qwen3-8-27b.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/models/qwen3-8-27b.md).
+The chip bills from create to delete: one TPU v6e chip is $2.70 an hour at Google's on-demand [list price](https://cloud.google.com/tpu/pricing). Qwen3.8-27B's options, chips and results: [docs/models/qwen3-8-27b.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/models/qwen3-8-27b.md).
 
 ## Models
 
 <!-- models:start -->
-**37 models and files run in mashbox: 4 MASHBOX builds and 33 GGUF files of 20 models.**
+**38 models and files run in mashbox: 5 MASHBOX builds and 33 GGUF files of 20 models.**
 
 **MASHBOX builds**
 
@@ -78,10 +78,11 @@ Models we port or make ourselves. A BSHJ build is our weights file for the model
 
 | Model | What it does | Chips | Measured | Weights |
 |---|---|---|---|---|
-| **[Hy-Nomas](https://github.com/mashbox-labs/mashbox/tree/v0.1.14/src/mashbox/models/hy_nomas)**<br>by Tencent Hunyuan | World model: text and movement keys in, video out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | Compute per second of video, quality preset, Tencent decoder, 1.00 = real time: **1.045 s** (TPU v6e-4)<br>Compute per second of video, quality preset, MASHBOX Fast decoder: **0.689 s** (TPU v6e-4) | [Hy-Nomas-TPU](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU) |
-| **[Qwen3.8-27B](https://github.com/mashbox-labs/mashbox/tree/v0.1.14/src/mashbox/models/qwen3_8_27b)**<br>by Qwen | LLM: text in, text out | TPU v5e (v5e-4): Supported<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | **38.1 vs 31.4 tok/s** vs vLLM on the same chip, 1 request at a time; **74.84 tok/s** with speculative decoding (--mtp 2), 1 request at a time, greedy; 37.77 tok/s with it off; **326.6 vs 1,606.7 s** first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type (TPU v6e-1). [All results](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) | [Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) |
-| **[Track2Rig](https://github.com/mashbox-labs/mashbox/tree/v0.1.14/src/mashbox/models/track2rig)**<br>by MASHBOX Labs<br>Experimental | Rigging: 3D point tracks in, rig (JSON and glTF) out | CPU: Supported<br>TPU v5e: Not tested yet<br>TPU v6e: Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | **0.784% vs 0.915%** held-out error vs SSDR at the same bone count, synthetic test set with noisy, partly hidden tracks, % of body size, lower is better; **6.24% vs 7.73%** joint error vs SSDR, % of body size, lower is better (CPU, AMD EPYC 7502P). [All results](https://huggingface.co/mashbox-labs/Track2Rig) | [Track2Rig](https://huggingface.co/mashbox-labs/Track2Rig) |
-| **[TRELLIS.2](https://github.com/mashbox-labs/mashbox/tree/v0.1.14/src/mashbox/models/trellis_2)**<br>by Microsoft<br>Experimental | image-to-3d: an RGBA image (background cut out) in, a textured 3D mesh (GLB) out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | One picture in, a textured GLB out: the whole command: **15 min 32.4 s to 30 min 11.7 s** (TPU v6e-1)<br>Picture in to mesh out: the model's stages on the chip, with the host work between them: **46.7 s to 1 min 37.5 s** (TPU v6e-1) | [TRELLIS.2-TPU](https://huggingface.co/mashbox-labs/TRELLIS.2-TPU) |
+| **[Hy-Nomas](https://github.com/mashbox-labs/mashbox/tree/v0.1.15/src/mashbox/models/hy_nomas)**<br>by Tencent Hunyuan | World model: text and movement keys in, video out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): One chip: the full pipeline fits on a single TPU v6e chip (32 GB), 2.46 s of compute per second of video, main model quantized. This version of `mashbox run` starts on a v6e-4<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | Compute per second of video, quality preset, Tencent decoder, 1.00 = real time: **1.045 s** (TPU v6e-4)<br>Compute per second of video, quality preset, MASHBOX Fast decoder: **0.689 s** (TPU v6e-4) | [Hy-Nomas-TPU](https://huggingface.co/mashbox-labs/Hy-Nomas-TPU) |
+| **[maya1](https://github.com/mashbox-labs/mashbox/tree/v0.1.15/src/mashbox/models/maya1)**<br>by Maya Research<br>Experimental | Voice: text, and a voice name or a voice description in, 24 kHz mono speech (WAV or raw 16-bit PCM) out | TPU v5e (v5e-1): Supported<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | First audio, one request, decoded while it is generated: **0.266 to 0.269 s** (TPU v6e-1)<br>Compute per second of audio, one request at a time, whole take: **0.536 to 0.545 s** (TPU v6e-1) | [maya1-TPU](https://huggingface.co/mashbox-labs/maya1-TPU) |
+| **[Qwen3.8-27B](https://github.com/mashbox-labs/mashbox/tree/v0.1.15/src/mashbox/models/qwen3_8_27b)**<br>by Qwen | LLM: text in, text out | TPU v5e (v5e-4): Supported<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Supported | **38.1 vs 31.4 tok/s** vs vLLM on the same chip, 1 request at a time; **74.84 tok/s** with speculative decoding (--mtp 2), 1 request at a time, greedy; 37.77 tok/s with it off; **326.6 vs 1,606.7 s** first start to ready, weights on disk, empty compile caches, vs vLLM on the same chip type (TPU v6e-1). [All results](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) | [Qwen3.8-27B-TPU](https://huggingface.co/mashbox-labs/Qwen3.8-27B-TPU) |
+| **[Track2Rig](https://github.com/mashbox-labs/mashbox/tree/v0.1.15/src/mashbox/models/track2rig)**<br>by MASHBOX Labs<br>Experimental | Rigging: 3D point tracks in, rig (JSON and glTF) out | CPU: Supported<br>TPU v5e: Not tested yet<br>TPU v6e: Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | **0.784% vs 0.915%** held-out error vs SSDR at the same bone count, synthetic test set with noisy, partly hidden tracks, % of body size, lower is better; **6.24% vs 7.73%** joint error vs SSDR, % of body size, lower is better (CPU, AMD EPYC 7502P). [All results](https://huggingface.co/mashbox-labs/Track2Rig) | [Track2Rig](https://huggingface.co/mashbox-labs/Track2Rig) |
+| **[TRELLIS.2](https://github.com/mashbox-labs/mashbox/tree/v0.1.15/src/mashbox/models/trellis_2)**<br>by Microsoft<br>Experimental | image-to-3d: an RGBA image (background cut out) in, a textured 3D mesh (GLB) out | TPU v5e: Not tested yet<br>TPU v6e (v6e-1): Supported<br>TPU v5p slice (v5p-8): Not tested yet<br>TPU v6e slice (v6e-4): Not tested yet | One picture in, a textured GLB out: the whole command: **15 min 32.4 s to 30 min 11.7 s** (TPU v6e-1)<br>Picture in to mesh out: the model's stages on the chip, with the host work between them: **46.7 s to 1 min 37.5 s** (TPU v6e-1) | [TRELLIS.2-TPU](https://huggingface.co/mashbox-labs/TRELLIS.2-TPU) |
 
 **GGUF files that run in our engine**
 
@@ -236,7 +237,6 @@ Models we publish that `mashbox run` does not start in this version. Each names 
 | **Audio2Face-3D v3.0**<br>by NVIDIA | Speech audio to face motion for skin, tongue, jaw and eyes. | TPU | [Audio2Face-3D-v3.0-TPU](https://huggingface.co/mashbox-labs/Audio2Face-3D-v3.0-TPU) | [How to use](https://huggingface.co/mashbox-labs/Audio2Face-3D-v3.0-TPU#load) |
 | **Granite Speech 4.1 2B**<br>by IBM | Speech recognition and speech translation. | TPU | [granite-speech-4.1-2b-TPU](https://huggingface.co/mashbox-labs/granite-speech-4.1-2b-TPU) | [How to use](https://huggingface.co/mashbox-labs/granite-speech-4.1-2b-TPU#load) |
 | **LFM3-1.7B**<br>by Liquid AI | Text generation, as a Core ML model. | Apple Neural Engine | [LFM3-1.7B-CoreML](https://huggingface.co/mashbox-labs/LFM3-1.7B-CoreML) | [How to use](https://mashbox.gg/docs/models/lfm3-1-7b-coreml) |
-| **maya1 and the SNAC 24 kHz decoder**<br>by Maya Research | Text to speech from a voice description and the text to say. | TPU | [maya1-TPU](https://huggingface.co/mashbox-labs/maya1-TPU) | [How to use](https://huggingface.co/mashbox-labs/maya1-TPU#load) |
 | **Real-ESRGAN x2plus and x4plus**<br>by Xintao Wang | Image upscaling. | TPU | [Real-ESRGAN-TPU](https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU) | [How to use](https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU#load) |
 | **Whisper large-v3-turbo**<br>by OpenAI | Speech recognition in 100 languages, as a Core ML model. | Apple Neural Engine | [whisper-large-v3-turbo-coreml-ane](https://huggingface.co/mashbox-labs/whisper-large-v3-turbo-coreml-ane) | [How to use](https://mashbox.gg/docs/models/whisper-large-v3-turbo-coreml-ane) |
 | **Z-Image-Turbo**<br>by Tongyi-MAI | Text to image. | TPU | [Z-Image-Turbo-TPU](https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU) | [How to use](https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU#load) |
@@ -249,9 +249,9 @@ Every number names the chip it was measured on; each model's guide has all its r
 <!-- charts:start -->
 Each chart names the hardware on both sides.
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.14/docs/media/charts/01-qwen38-27b-time-to-ready-dark.png"><img alt="Qwen3.8-27B: time to ready on one TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, asia-northeast1-b, on demand) vs one TPU v6e-1 (Google Cloud, us-east5-b)." src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.14/docs/media/charts/01-qwen38-27b-time-to-ready-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.15/docs/media/charts/01-qwen38-27b-time-to-ready-dark.png"><img alt="Qwen3.8-27B: time to ready on one TPU v6e-1. Hardware: one TPU v6e-1 (Google Cloud, asia-northeast1-b, on demand) vs one TPU v6e-1 (Google Cloud, us-east5-b)." src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.15/docs/media/charts/01-qwen38-27b-time-to-ready-light.png" width="100%"></picture>
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.14/docs/media/charts/03-qwen3-30b-a3b-quality-vs-size-dark.png"><img alt="Qwen3-30B-A3B: quality vs file size, 20 files. Hardware: a frozen llama.cpp CPU scorer (16 threads, AMD EPYC 7502P / 7B13) vs the same scorer and the same 10,240 positions for every rival file." src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.14/docs/media/charts/03-qwen3-30b-a3b-quality-vs-size-light.png" width="100%"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.15/docs/media/charts/03-qwen3-30b-a3b-quality-vs-size-dark.png"><img alt="Qwen3-30B-A3B: quality vs file size, 20 files. Hardware: a frozen llama.cpp CPU scorer (16 threads, AMD EPYC 7502P / 7B13) vs the same scorer and the same 10,240 positions for every rival file." src="https://raw.githubusercontent.com/mashbox-labs/mashbox/v0.1.15/docs/media/charts/03-qwen3-30b-a3b-quality-vs-size-light.png" width="100%"></picture>
 
 <sub>Qwen3-30B-A3B is not in this package: this chart compares quantized files of it, each scored the same way.</sub>
 <!-- charts:end -->
@@ -262,8 +262,8 @@ Each chart names the hardware on both sides.
 - **Fits on fewer chips.** Qwen3.8-27B runs on a single TPU v6e chip (32 GB) from a 26.94 GB weights file at 8.01 bits per weight, with 99.72% top-1 agreement against Qwen's own bf16 weights.
 - **Fast starts.** Models ship their compiled TPU kernels, and Qwen3.8-27B also ships a precompiled compile cache for TPU v6e, so a start skips compiling: Qwen3.8-27B on TPU v6e-1 is ready in 69.6 s with it, 326.6 s without it.
 - **An OpenAI-compatible server** for the language models, with batching: 8 requests at once share the chip.
-- **Works with Claude Code, Codex and Pi.** The server also speaks the Anthropic Messages and OpenAI Responses APIs, so coding agents can use a model you serve as their LLM: [Use with coding agents](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/agents-on-tpu.md).
-- **Docs for coding agents.** [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/AGENTS.md) gives an agent the rules and the steps to set up a chip, run a model and delete the chip; [llms.txt](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/llms.txt) lists the docs.
+- **Works with Claude Code, Codex and Pi.** The server also speaks the Anthropic Messages and OpenAI Responses APIs, so coding agents can use a model you serve as their LLM: [Use with coding agents](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/agents-on-tpu.md).
+- **Docs for coding agents.** [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/AGENTS.md) gives an agent the rules and the steps to set up a chip, run a model and delete the chip; [llms.txt](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/llms.txt) lists the docs.
 - **Named files.** Every weights file on Hugging Face is named by its type (for example `Qwen3.8-27B-BQ8_R.bshj`), with size, bits per weight and measured quality next to it.
 
 ## TPU v6e and v5e
@@ -277,19 +277,19 @@ Each chart names the hardware on both sides.
 | Create with | `--accelerator-type=v6e-1 --version=v2-alpha-tpuv6e` | `--accelerator-type=v5litepod-1 --version=v2-alpha-tpuv5-lite` |
 | Zones to try first | us-east5-b, europe-west4-a | us-central1-a |
 
-v6e is the default. A model too big for one v5e chip (16 GB) splits across the 4 chips of a v5e-4 when its row says so; the models table says which chips each model runs on. Specs from Google's [v6e](https://cloud.google.com/tpu/docs/v6e) and [v5e](https://cloud.google.com/tpu/docs/v5e) pages. More in [docs/chips.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/chips.md).
+v6e is the default. A model too big for one v5e chip (16 GB) splits across the 4 chips of a v5e-4 when its row says so; the models table says which chips each model runs on. Specs from Google's [v6e](https://cloud.google.com/tpu/docs/v6e) and [v5e](https://cloud.google.com/tpu/docs/v5e) pages. More in [docs/chips.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/chips.md).
 
-TPU v6e (one chip and a v6e-4) against one NVIDIA H100 at Google Cloud list prices, with the memory bandwidth of each and the cost per 1M output tokens of Qwen3.8-27B (27B parameters, dense): [TPU or GPU: price and bandwidth](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/tpu-vs-gpu.md).
+TPU v6e (one chip and a v6e-4) against one NVIDIA H100 at Google Cloud list prices, with the memory bandwidth of each and the cost per 1M output tokens of Qwen3.8-27B (27B parameters, dense): [TPU or GPU: price and bandwidth](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/tpu-vs-gpu.md).
 
 ## Open code, compiled kernels
 
-The source of the model ports, CLI, runtime, demo apps and docs is in this repo, under Apache-2.0. The TPU kernels (our Culet kernels) ship compiled, as files that `mashbox run` fetches and checks by itself, with a precompiled compile cache where we built one; [Install](#install) says where each kernel package comes from. Models that list plain JAX as tested also run without them, slower. The compiled files are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/LICENSE-KERNELS): free for personal use, research and evaluation, and for any use by companies under US$1M annual revenue. Larger companies in production: hello@mashbox.gg.
+The source of the model ports, CLI, runtime, demo apps and docs is in this repo, under Apache-2.0. The TPU kernels (our Culet kernels) ship compiled, as files that `mashbox run` fetches and checks by itself, with a precompiled compile cache where we built one; [Install](#install) says where each kernel package comes from. Models that list plain JAX as tested also run without them, slower. The compiled files are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/LICENSE-KERNELS): free for personal use, research and evaluation, and for any use by companies under US$1M annual revenue. Larger companies in production: hello@mashbox.gg.
 
 ## Coding agents
 
-**Use a model as your agent's LLM.** Claude Code, Codex and Pi work with every LLM that `mashbox run` serves: start the server, open the tunnel, set the agent's base URL. Settings for each agent and measured results: [Use with coding agents](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/agents-on-tpu.md).
+**Use a model as your agent's LLM.** Claude Code, Codex and Pi work with every LLM that `mashbox run` serves: start the server, open the tunnel, set the agent's base URL. Settings for each agent and measured results: [Use with coding agents](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/agents-on-tpu.md).
 
-**Let an agent set it up.** [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/AGENTS.md) gives an agent the rules and the steps, from a Google account to a run and a deleted chip, and tells it to ask you before anything that costs money. [llms.txt](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/llms.txt) lists the docs.
+**Let an agent set it up.** [AGENTS.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/AGENTS.md) gives an agent the rules and the steps, from a Google account to a run and a deleted chip, and tells it to ask you before anything that costs money. [llms.txt](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/llms.txt) lists the docs.
 
 ## Community and links
 
@@ -298,14 +298,14 @@ The source of the model ports, CLI, runtime, demo apps and docs is in this repo,
 | Docs | [mashbox.gg/docs](https://mashbox.gg/docs) |
 | Models and weights | [huggingface.co/mashbox-labs](https://huggingface.co/mashbox-labs) |
 | News | [x.com/mashboxgg](https://x.com/mashboxgg) |
-| Bugs and model requests | [GitHub issues](https://github.com/mashbox-labs/mashbox/issues), see [CONTRIBUTING.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/CONTRIBUTING.md) |
-| Release notes | [GitHub releases](https://github.com/mashbox-labs/mashbox/releases), one per version; the core changes behind them, and how existing models keep working, are in [CORE-CHANGES.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/CORE-CHANGES.md) |
-| Security reports | [SECURITY.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/SECURITY.md) |
+| Bugs and model requests | [GitHub issues](https://github.com/mashbox-labs/mashbox/issues), see [CONTRIBUTING.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/CONTRIBUTING.md) |
+| Release notes | [GitHub releases](https://github.com/mashbox-labs/mashbox/releases), one per version; the core changes behind them, and how existing models keep working, are in [CORE-CHANGES.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/CORE-CHANGES.md) |
+| Security reports | [SECURITY.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/SECURITY.md) |
 | Companies | hello@mashbox.gg |
 
 ## Licence
 
-Our code is under the [Apache License 2.0](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/LICENSE). The compiled kernels and compile cache are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/LICENSE-KERNELS). Model weights keep each model's own licence, shown on its Hugging Face card and kept unchanged in [licenses/](https://github.com/mashbox-labs/mashbox/tree/v0.1.14/licenses). Details: [docs/licence.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/licence.md).
+Our code is under the [Apache License 2.0](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/LICENSE). The compiled kernels and compile cache are under the [MASHBOX Kernel Licence](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/LICENSE-KERNELS). Model weights keep each model's own licence, shown on its Hugging Face card and kept unchanged in [licenses/](https://github.com/mashbox-labs/mashbox/tree/v0.1.15/licenses). Details: [docs/licence.md](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/licence.md).
 
 ## Citation
 
@@ -322,5 +322,5 @@ Our code is under the [Apache License 2.0](https://github.com/mashbox-labs/mashb
 
 - [Tencent Hunyuan](https://huggingface.co/tencent/Hy-Nomas) for Hy-Nomas and [Qwen](https://huggingface.co/Qwen/Qwen3.8-27B) for Qwen3.8-27B, and for releasing their weights.
 - The [JAX](https://github.com/jax-ml/jax) and Pallas teams, and Google Cloud TPU.
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) and the ggml authors for GGUF; mashbox reads GGUF files with their `gguf` package ([GGUF files](https://github.com/mashbox-labs/mashbox/blob/v0.1.14/docs/gguf.md)).
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) and the ggml authors for GGUF; mashbox reads GGUF files with their `gguf` package ([GGUF files](https://github.com/mashbox-labs/mashbox/blob/v0.1.15/docs/gguf.md)).
 - [Hugging Face](https://huggingface.co) for hosting the weights and [uv](https://github.com/astral-sh/uv) for a one-line Python 3.12.

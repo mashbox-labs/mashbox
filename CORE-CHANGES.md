@@ -2,6 +2,18 @@
 
 Every change to the shared core (listed in [OWNERS.md](OWNERS.md)) gets an entry here: what changed, why, and how existing models keep working. Newest first.
 
+## 0.1.15
+
+### The voice card names its parts, and the maya1 test leg installs SNAC
+
+1. **`templates/hf/card-voice.md`:** the voice card takes the layout of the other cards: banner, badges, guide link, highlights, quickstart, results, the files of every weights part, chips, kernels, links and licence. It uses the values the image-to-3d card already uses (`maturity_line`, `component_files`, `component_licences`, `credit_lines`) and one new one, `component_licence_files`.
+2. **`tools/hf_github_sync_check.py` (`component_licence_files`):** one line per weights part whose licence file sits in the model's Hugging Face repo (`license_file`), linked to the file it was copied from when the row names it (`license_source`).
+3. **`tools/ci_select.py`:** the maya1 test leg installs `snac==1.2.1` on top of `.[dev]`, for the test that checks the JAX decoder against the official one.
+
+Why: maya1 is the first model on the voice card that `mashbox run` starts, and its card has two weights parts (the language model and the SNAC decoder).
+
+How existing models keep working: maya1 is the only model on the voice card; every other card renders byte-identical, and the other test legs install what they did before.
+
 ## 0.1.14
 
 ### `--decode auto | fast | long`, the block drafter, and a plan that counts the drafter
