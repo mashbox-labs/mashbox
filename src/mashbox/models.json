@@ -248,7 +248,7 @@
         ]
       },
       "hf_repo": "mashbox-labs/maya1-TPU",
-      "hf_revision": "f9a6a372969f746ad1b1b989af2445c907a7ba98",
+      "hf_revision": "4fabbd6ccdb5a34ffaff4b4b75e621d1702a252f",
       "pipeline_tag": "text-to-speech",
       "chips": {
         "v5e": {
