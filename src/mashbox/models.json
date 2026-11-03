@@ -2847,6 +2847,23 @@
           }
         ]
       }
+    },
+    {
+      "id": "whisper-large-v3-turbo-coreml-ane",
+      "name": "Whisper large-v3-turbo",
+      "summary": "Speech recognition in 100 languages, as a Core ML model.",
+      "device": "Apple Neural Engine",
+      "how_to_run": "https://mashbox.gg/docs/models/whisper-large-v3-turbo-coreml-ane",
+      "hf_repo": "mashbox-labs/whisper-large-v3-turbo-coreml-ane",
+      "hf_revision": "41244ef7744fb10ede761236db4f31aa40a4f13c",
+      "upstream": {
+        "name": "Whisper large-v3-turbo",
+        "maker": "OpenAI",
+        "hf": "openai/whisper-large-v3-turbo",
+        "revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+        "license": "mit",
+        "license_sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d"
+      }
     }
   ],
   "engine_kernels": [

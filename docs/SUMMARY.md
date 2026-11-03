@@ -25,6 +25,7 @@
 * [Track2Rig](models/track2rig.md)
 * [TRELLIS.2](models/trellis-2.md)
 * [LFM3-1.7B](models/lfm3-1-7b-coreml.md)
+* [Whisper large-v3-turbo](models/whisper-large-v3-turbo-coreml-ane.md)
 <!-- models:end -->
 
 ## Reference
