@@ -396,7 +396,11 @@ class Stream:
             if self.closed:
                 return
             self.meta.put(meta)
-            self.p.stdin.write(np.ascontiguousarray(img).tobytes())
+            try:
+                self.p.stdin.write(np.ascontiguousarray(img).tobytes())
+            except BrokenPipeError:     # the encoder has exited (Ctrl-C in a terminal reaches it too): the stream has ended
+                self.closed = True
+                return
         if any(c.mode == 'jpeg' for c in list(self.clients)):
             jpg = to_jpeg(img)
             if jpg is not None:
@@ -407,8 +411,6 @@ class Stream:
     def close(self, timeout=5.0):
         """No more frames: the encoder gets the end of its input, writes out what it holds and exits (killed after timeout s)."""
         with self.wl:
-            if self.closed:
-                return
             self.closed = True
             try:
                 self.p.stdin.close()
