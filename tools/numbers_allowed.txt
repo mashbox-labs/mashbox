@@ -134,3 +134,4 @@ docs/models/lfm3-1-7b-coreml.md | The context is 2048 tokens | the model's conte
 docs/models/qwen3-8-27b.md | through the server (greedy, `--ctx 2048 --slots 8`) | the options the measured run used (a setting, not a measurement)
 docs/models/qwen3-8-27b.md | use TPU v6e and `--slots 8` | the slot count the kernel bundle is built for (a setting)
 docs/cli.md | with at least 32,768 tokens each | the engine's rule for the default context (runtime/context.py AGENT_CTX), a setting
+docs/models/whisper-large-v3-turbo-coreml-ane.md | Core ML program that takes a 10 s or a 30 s window | the two input window lengths the programs are built for (a shape of the model), not a measurement

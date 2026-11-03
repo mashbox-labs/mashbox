@@ -102,6 +102,7 @@ Models we publish that `mashbox run` does not start in this version. Each names 
 | **LFM3-1.7B**<br>by Liquid AI | Text generation, as a Core ML model. | Apple Neural Engine | [LFM3-1.7B-CoreML](https://huggingface.co/mashbox-labs/LFM3-1.7B-CoreML) | [How to use](https://mashbox.gg/docs/models/lfm3-1-7b-coreml) |
 | **maya1 and the SNAC 24 kHz decoder**<br>by Maya Research | Text to speech from a voice description and the text to say. | TPU | [maya1-TPU](https://huggingface.co/mashbox-labs/maya1-TPU) | [How to use](https://huggingface.co/mashbox-labs/maya1-TPU#load) |
 | **Real-ESRGAN x2plus and x4plus**<br>by Xintao Wang | Image upscaling. | TPU | [Real-ESRGAN-TPU](https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU) | [How to use](https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU#load) |
+| **Whisper large-v3-turbo**<br>by OpenAI | Speech recognition in 100 languages, as a Core ML model. | Apple Neural Engine | [whisper-large-v3-turbo-coreml-ane](https://huggingface.co/mashbox-labs/whisper-large-v3-turbo-coreml-ane) | [How to use](https://mashbox.gg/docs/models/whisper-large-v3-turbo-coreml-ane) |
 | **Z-Image-Turbo**<br>by Tongyi-MAI | Text to image. | TPU | [Z-Image-Turbo-TPU](https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU) | [How to use](https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU#load) |
 <!-- catalog:end -->
 

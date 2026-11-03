@@ -63,6 +63,7 @@ Listed, not in mashbox run:
 - LFM3-1.7B by Liquid AI: Text generation, as a Core ML model. Made for Apple Neural Engine; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/LFM3-1.7B-CoreML. How to use: https://mashbox.gg/docs/models/lfm3-1-7b-coreml
 - maya1 and the SNAC 24 kHz decoder by Maya Research: Text to speech from a voice description and the text to say. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/maya1-TPU. How to use: https://huggingface.co/mashbox-labs/maya1-TPU#load
 - Real-ESRGAN x2plus and x4plus by Xintao Wang: Image upscaling. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU. How to use: https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU#load
+- Whisper large-v3-turbo by OpenAI: Speech recognition in 100 languages, as a Core ML model. Made for Apple Neural Engine; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/whisper-large-v3-turbo-coreml-ane. How to use: https://mashbox.gg/docs/models/whisper-large-v3-turbo-coreml-ane
 - Z-Image-Turbo by Tongyi-MAI: Text to image. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU. How to use: https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU#load
 <!-- models:end -->
 
