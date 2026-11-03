@@ -17,6 +17,7 @@ Model code is open. Each model's TPU kernels ship compiled, as one bundle that `
 <!-- models:start -->
 MASHBOX builds:
 - [Hy-Nomas](https://mashbox.gg/docs/models/hy-nomas): text and movement keys in, video out. World model. Runs on: TPU v6e (v6e-1): 2.46 s of compute per second of video, main model quantized (this version of `mashbox run` starts on a v6e-4); TPU v6e slice (v6e-4).
+- [maya1](https://mashbox.gg/docs/models/maya1): text, and a voice name or a voice description in, 24 kHz mono speech (WAV or raw 16-bit PCM) out. Voice. Experimental. Runs on: TPU v5e (v5e-1), TPU v6e (v6e-1).
 - [Qwen3.8-27B](https://mashbox.gg/docs/models/qwen3-8-27b): text in, text out. LLM. Runs on: TPU v5e (v5e-4), TPU v6e (v6e-1), TPU v6e slice (v6e-4).
 - [Track2Rig](https://mashbox.gg/docs/models/track2rig): 3D point tracks in, rig (JSON and glTF) out. Rigging. Experimental. Runs on: CPU, TPU v6e.
 - [TRELLIS.2](https://mashbox.gg/docs/models/trellis-2): an RGBA image (background cut out) in, a textured 3D mesh (GLB) out. image-to-3d. Experimental. Runs on: TPU v6e (v6e-1).
@@ -55,13 +56,12 @@ GGUF files that run in our engine:
 - Qwen3.5-4B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-4B-GGUF:Q4_K_M`
 - Qwen3.5-9B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.5-9B-GGUF:Q4_K_M`
 - Qwen3.8-27B Q4_K_M by Qwen (qwen35, GGUF from unsloth): Quick check, runs on TPU v6e-1. `mashbox run unsloth/Qwen3.8-27B-GGUF:Q4_K_M`
-- [Full catalog](https://mashbox.gg/docs/supported-models): 37 entries: 3 MASHBOX ports, 1 MASHBOX model and 33 GGUF files of 20 models.
+- [Full catalog](https://mashbox.gg/docs/supported-models): 38 entries: 4 MASHBOX ports, 1 MASHBOX model and 33 GGUF files of 20 models.
 
 Listed, not in mashbox run:
 - Audio2Face-3D v3.0 by NVIDIA: Speech audio to face motion for skin, tongue, jaw and eyes. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/Audio2Face-3D-v3.0-TPU. How to use: https://huggingface.co/mashbox-labs/Audio2Face-3D-v3.0-TPU#load
 - Granite Speech 4.1 2B by IBM: Speech recognition and speech translation. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/granite-speech-4.1-2b-TPU. How to use: https://huggingface.co/mashbox-labs/granite-speech-4.1-2b-TPU#load
 - LFM3-1.7B by Liquid AI: Text generation, as a Core ML model. Made for Apple Neural Engine; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/LFM3-1.7B-CoreML. How to use: https://mashbox.gg/docs/models/lfm3-1-7b-coreml
-- maya1 and the SNAC 24 kHz decoder by Maya Research: Text to speech from a voice description and the text to say. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/maya1-TPU. How to use: https://huggingface.co/mashbox-labs/maya1-TPU#load
 - Real-ESRGAN x2plus and x4plus by Xintao Wang: Image upscaling. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU. How to use: https://huggingface.co/mashbox-labs/Real-ESRGAN-TPU#load
 - Whisper large-v3-turbo by OpenAI: Speech recognition in 100 languages, as a Core ML model. Made for Apple Neural Engine; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/whisper-large-v3-turbo-coreml-ane. How to use: https://mashbox.gg/docs/models/whisper-large-v3-turbo-coreml-ane
 - Z-Image-Turbo by Tongyi-MAI: Text to image. Made for TPU; `mashbox run` does not start it. Files: https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU. How to use: https://huggingface.co/mashbox-labs/Z-Image-Turbo-TPU#load

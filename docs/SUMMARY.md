@@ -21,6 +21,7 @@
 * [Supported models](supported-models.md)
 <!-- models:start -->
 * [Hy-Nomas](models/hy-nomas.md)
+* [maya1](models/maya1.md)
 * [Qwen3.8-27B](models/qwen3-8-27b.md)
 * [Track2Rig](models/track2rig.md)
 * [TRELLIS.2](models/trellis-2.md)

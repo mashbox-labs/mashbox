@@ -1534,6 +1534,20 @@ def licence_file_source(m):
             f"unchanged. ")
 
 
+def component_licence_files(m):
+    """One line per weights component whose licence file sits in the model's HF repo (license_file): that file is the
+    component maker's licence file, unchanged, linked where it came from when the row says (license_source)."""
+    out = []
+    for c in m["upstream"].get("components", []):
+        if c.get("hf") and c.get("license_file") and m["hf_repo"]:
+            f = c["license_file"]
+            src = c.get("license_source")
+            out.append(f"[{f}](https://huggingface.co/{m['hf_repo']}/blob/main/{f}) in this repo is the licence file of "
+                       + (f"[{src['github']}@{src['revision'][:8]}](https://github.com/{src['github']}/blob/{src['revision']}/LICENSE)"
+                          if src else f"[{c['hf']}](https://huggingface.co/{c['hf']})") + ", unchanged. ")
+    return "".join(out)
+
+
 def credit_lines(m):
     """One credit per component with a notice: code the port carries over from another project, named with its licence
     as the row records it, and its own LICENSE shipped unchanged beside that code (the notice path)."""
@@ -1724,7 +1738,7 @@ def card_vars(reg, m, repo=None):
         "login_line": "~/.local/bin/hf auth login\n" if gated(m) else "",
         "gated_note": gated_note(m), "component_files": component_files(m),
         "component_licences": component_licences(m), "licence_file_source": licence_file_source(m),
-        "credit_lines": credit_lines(m),
+        "credit_lines": credit_lines(m), "component_licence_files": component_licence_files(m),
         "status": status_line(reg, m),
     }
 

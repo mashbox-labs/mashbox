@@ -1,0 +1,19 @@
+{
+ "note": "Voice names (the OpenAI speech API's 13) and the voice description each one sends to maya1. Any other description can be passed with --description.",
+ "default": "alloy",
+ "voices": {
+  "alloy": "Realistic female voice in the 30s age with american accent. Normal pitch, balanced timbre, conversational pacing, neutral tone delivery at medium intensity.",
+  "ash": "Realistic male voice in the 30s age with american accent. Normal pitch, slightly raspy timbre, conversational pacing, calm tone delivery at medium intensity.",
+  "ballad": "Realistic male voice in the 30s age with british accent. Normal pitch, smooth timbre, measured pacing, warm tone delivery at low intensity.",
+  "coral": "Realistic female voice in the 20s age with american accent. Normal pitch, bright timbre, lively pacing, friendly tone delivery at medium intensity.",
+  "echo": "Realistic male voice in the 20s age with american accent. Normal pitch, clear timbre, conversational pacing, neutral tone delivery at medium intensity.",
+  "fable": "Realistic male voice in the 40s age with british accent. Normal pitch, warm timbre, storytelling pacing, expressive tone delivery at medium intensity.",
+  "nova": "Realistic female voice in the 20s age with american accent. High pitch, bright timbre, energetic pacing, upbeat tone delivery at medium intensity.",
+  "onyx": "Realistic male voice in the 40s age with american accent. Low pitch, deep timbre, measured pacing, confident tone delivery at medium intensity.",
+  "sage": "Realistic female voice in the 40s age with american accent. Low pitch, calm timbre, measured pacing, reassuring tone delivery at low intensity.",
+  "shimmer": "Realistic female voice in the 30s age with american accent. Normal pitch, soft timbre, gentle pacing, warm tone delivery at low intensity.",
+  "verse": "Realistic male voice in the 30s age with american accent. Normal pitch, rich timbre, dynamic pacing, expressive tone delivery at medium intensity.",
+  "marin": "Realistic female voice in the 30s age with american accent. Normal pitch, smooth timbre, natural pacing, friendly tone delivery at medium intensity.",
+  "cedar": "Realistic male voice in the 50s age with american accent. Low pitch, warm timbre, natural pacing, steady tone delivery at medium intensity."
+ }
+}

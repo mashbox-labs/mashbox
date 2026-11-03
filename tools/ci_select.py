@@ -35,7 +35,7 @@ T0_TESTS = {"test_core.py"}                     # the T0 suite: static and regis
 # Qwen3.8-27B tokenizer files (--upstream-files, MASHBOX_QWEN_UPSTREAM). A change that runs core runs it too.
 CLIENTS = "api_clients"
 CLIENTS_FILES = {"test_api_conformance.py", "test_api_loaded_clients.py"}
-EXTRA = {"hy_nomas": "imageio-ffmpeg", "track2rig": "scipy",          # pip packages an area's tests need beyond .[dev] (the app server test)
+EXTRA = {"hy_nomas": "imageio-ffmpeg", "track2rig": "scipy", "maya1": "snac==1.2.1",        # pip packages an area's tests need beyond .[dev] (the app server test)
          CLIENTS: "openai==3.40.0 anthropic==2.3.0"}
 # The upstream files of UPSTREAM_MODEL that runtime/chat.py reads (tokenizer, chat template, stop ids), fetched at its
 # models.json upstream revision for the CLIENTS leg and checked against these sha256 before any test reads them.

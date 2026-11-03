@@ -135,3 +135,8 @@ docs/models/qwen3-8-27b.md | through the server (greedy, `--ctx 2048 --slots 8`)
 docs/models/qwen3-8-27b.md | use TPU v6e and `--slots 8` | the slot count the kernel bundle is built for (a setting)
 docs/cli.md | with at least 32,768 tokens each | the engine's rule for the default context (runtime/context.py AGENT_CTX), a setting
 docs/models/whisper-large-v3-turbo-coreml-ane.md | Core ML program that takes a 10 s or a 30 s window | the two input window lengths the programs are built for (a shape of the model), not a measurement
+docs/models/maya1.md | 7 codes for every 85.3 ms of audio | one SNAC frame: 2048 samples at 24 kHz (the codec's design)
+docs/models/maya1.md | the first run downloads 6.68 GB into | maya1 download, the sum of its pinned files (models.json files and upstream.json)
+docs/models/maya1.md | fetches the three files (6.68 GB), checks | maya1 download, the sum of its pinned files (models.json files and upstream.json)
+docs/models/maya1.md | at most 2048 (about 25 s of audio) | 2048 tokens / 7 codes per frame x 85.3 ms per frame (arithmetic)
+docs/models/maya1.md | and 8 slots of 3,072 tokens, with | the run settings (--slots and --ctx defaults of mashbox run maya1), not a measurement

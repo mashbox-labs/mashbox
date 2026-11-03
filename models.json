@@ -7,7 +7,7 @@
   "hf": {
     "org": "mashbox-labs"
   },
-  "version": "0.1.14",
+  "version": "0.1.15",
   "license": "Apache-2.0",
   "company_line": "MASHBOX Labs makes open models run faster and cheaper on TPUs and accelerated hardware, as well as exploring the future of the intersection of AI and gaming.",
   "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]\"",
@@ -206,6 +206,187 @@
         ]
       },
       "notes": "The app serves on the VM's 127.0.0.1:8790 only. Connect with `gcloud compute tpus tpu-vm ssh hy-nomas --zone=asia-northeast1-b -- -L 8790:127.0.0.1:8790` (your chip's name and zone) and open http://127.0.0.1:8790 on your own machine. The start times below are with the weights downloaded and still in the VM's memory; the first start after the VM restarts reads them from disk again and takes longer."
+    },
+    {
+      "id": "maya1",
+      "name": "maya1",
+      "kind": "voice",
+      "version": "0.1.0",
+      "summary": "Maya Research's open text-to-speech model: a voice description and the text to say in, 24 kHz speech out, on one TPU chip, with the SNAC 24 kHz decoder it speaks through. Emotion tags such as <laugh> and <whisper> go inline in the text.",
+      "in": "text, and a voice name or a voice description",
+      "out": "24 kHz mono speech (WAV or raw 16-bit PCM)",
+      "path": "src/mashbox/models/maya1",
+      "run": "~/.local/bin/mashbox run maya1 --text \"Hello there. <laugh> It works.\" --voice alloy --out hello.wav",
+      "install": "python3 -m pip install uv && python3 -m uv tool install --python 3.12 \"mashbox[tpu]>=0.1.15\" --with-executables-from huggingface_hub",
+      "upstream": {
+        "name": "maya1",
+        "maker": "Maya Research",
+        "hf": "maya-research/maya1",
+        "revision": "b1b9b38ca9decbfcfd6c98ea93dd502bfd0f9572",
+        "license": "apache-2.0",
+        "components": [
+          {
+            "role": "SNAC 24 kHz decoder",
+            "hf": "hubertsiuzdak/snac_24khz",
+            "revision": "d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec",
+            "license": "mit",
+            "license_file": "snac/LICENSE",
+            "license_sha256": "a82cc54b23e2fa07772629f94effa8abfb7e6bc8ebfd31cb7ae5c606520650de",
+            "license_source": {
+              "github": "hubertsiuzdak/snac",
+              "revision": "8f79a718f1ad71f94f79999f0071348227aff22e"
+            }
+          },
+          {
+            "role": "code (the SNAC decoder in plain JAX follows its decode path)",
+            "github": "hubertsiuzdak/snac",
+            "revision": "8f79a718f1ad71f94f79999f0071348227aff22e",
+            "license": "MIT",
+            "license_sha256": "a82cc54b23e2fa07772629f94effa8abfb7e6bc8ebfd31cb7ae5c606520650de",
+            "notice": "src/mashbox/models/maya1/LICENSE-SNAC"
+          }
+        ]
+      },
+      "hf_repo": "mashbox-labs/maya1-TPU",
+      "hf_revision": "f9a6a372969f746ad1b1b989af2445c907a7ba98",
+      "pipeline_tag": "text-to-speech",
+      "chips": {
+        "v5e": {
+          "status": "passing",
+          "date": "2026-11-03",
+          "accelerator": "v5e-1",
+          "gcloud_type": "v5litepod-1",
+          "runtime": "v2-alpha-tpuv5-lite",
+          "chip_count": 1,
+          "note": "one chip (v5e-1)"
+        },
+        "v6e": {
+          "status": "passing",
+          "date": "2026-11-03",
+          "accelerator": "v6e-1",
+          "gcloud_type": "v6e-1",
+          "chip_count": 1,
+          "note": "one chip (v6e-1)"
+        },
+        "v5p-8": {
+          "status": "pending",
+          "not_run_reason": "Outside the chip types this release was tested on"
+        },
+        "v6e-4": {
+          "status": "pending",
+          "not_run_reason": "Outside the chip types this release was tested on"
+        }
+      },
+      "results": [
+        {
+          "chip": "TPU v6e-1",
+          "metric": "First audio, one request, decoded while it is generated (programs compiled)",
+          "value": "0.266 to 0.269 s",
+          "baseline": "n/a",
+          "date": "2026-11-03"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Compute per second of audio, one request at a time, whole take (programs compiled)",
+          "value": "0.536 to 0.545 s",
+          "baseline": "n/a",
+          "date": "2026-11-03"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "8 requests at once (programs compiled)",
+          "value": "4.95 s of audio per second",
+          "baseline": "n/a",
+          "date": "2026-11-03"
+        },
+        {
+          "chip": "TPU v6e-1",
+          "metric": "Chip memory peak (8 slots, 3,072 tokens each)",
+          "value": "11.33 GB",
+          "baseline": "n/a",
+          "date": "2026-11-03"
+        },
+        {
+          "chip": "TPU v5e-1",
+          "metric": "First audio, one request, decoded while it is generated (programs compiled)",
+          "value": "0.450 to 0.452 s",
+          "baseline": "n/a",
+          "date": "2026-11-03"
+        },
+        {
+          "chip": "TPU v5e-1",
+          "metric": "Compute per second of audio, one request at a time, whole take (programs compiled)",
+          "value": "0.903 to 0.917 s",
+          "baseline": "n/a",
+          "date": "2026-11-03"
+        },
+        {
+          "chip": "TPU v5e-1",
+          "metric": "8 requests at once (programs compiled)",
+          "value": "4.65 s of audio per second",
+          "baseline": "n/a",
+          "date": "2026-11-03"
+        },
+        {
+          "chip": "TPU v5e-1",
+          "metric": "Chip memory peak (8 slots, 3,072 tokens each)",
+          "value": "11.29 GB",
+          "baseline": "n/a",
+          "date": "2026-11-03"
+        }
+      ],
+      "files": [
+        {
+          "name": "maya1-BF16.gguf",
+          "kind": "weights",
+          "format": "GGUF",
+          "default": true,
+          "variant": false,
+          "bytes": 6602223264,
+          "sha256": "13846fcf8214a91b162082d242997a853bce412abf4eb2180083b67cfca69df1",
+          "gb": 6.6,
+          "bpw": 16.0,
+          "quality": "mean KL 0.00255, top-1 agreement 91.4% vs the float32 reference (38 prompts, 15,392 codes)",
+          "speed": "first audio 0.27 s, 0.54 s of compute per second of audio for 1 request (TPU v6e-1)",
+          "date": "2026-11-03"
+        },
+        {
+          "name": "snac/snac_24khz_decoder.npz",
+          "kind": "weights",
+          "format": "NumPy arrays (npz)",
+          "default": false,
+          "variant": false,
+          "bytes": 52515536,
+          "sha256": "c202a814c1d65fc8ac91387228ec55c858c36b043be0ecff999de89f9b3f1d50",
+          "gb": 0.05,
+          "note": "SNAC 24 kHz decoder",
+          "quality": "109.9 dB SNR or more vs the official SNAC decoder in float32 (38 prompts)",
+          "date": "2026-11-03"
+        }
+      ],
+      "kernels": [],
+      "plain_jax": {
+        "status": "tested",
+        "note": "the port is plain JAX on the engine's llama architecture; CPU tests on tiny models of the same shapes"
+      },
+      "catalog": {
+        "source": "ours",
+        "format": "port",
+        "family": "maya1",
+        "params_b": {
+          "total": 3.3,
+          "active": null
+        },
+        "quants": [],
+        "number": null,
+        "experimental": true
+      },
+      "cloud": {
+        "accelerator": "v6e-1",
+        "runtime": "v2-alpha-tpuv6e",
+        "extras": "tpu"
+      },
+      "card_release": "0.1.15"
     },
     {
       "id": "qwen3-8-27b",
@@ -2756,32 +2937,6 @@
         "hf": "ibm-granite/granite-speech-4.1-2b",
         "revision": "de575db64086f84fdc79da4932d1076e965bc546",
         "license": "apache-2.0"
-      }
-    },
-    {
-      "id": "maya1",
-      "name": "maya1 and the SNAC 24 kHz decoder",
-      "summary": "Text to speech from a voice description and the text to say.",
-      "device": "TPU",
-      "how_to_run": "https://huggingface.co/mashbox-labs/maya1-TPU#load",
-      "hf_repo": "mashbox-labs/maya1-TPU",
-      "hf_revision": "f9a6a372969f746ad1b1b989af2445c907a7ba98",
-      "upstream": {
-        "name": "maya1",
-        "maker": "Maya Research",
-        "hf": "maya-research/maya1",
-        "revision": "b1b9b38ca9decbfcfd6c98ea93dd502bfd0f9572",
-        "license": "apache-2.0",
-        "components": [
-          {
-            "role": "SNAC 24 kHz decoder",
-            "hf": "hubertsiuzdak/snac_24khz",
-            "revision": "d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec",
-            "license": "mit",
-            "license_file": "snac/LICENSE",
-            "license_sha256": "a82cc54b23e2fa07772629f94effa8abfb7e6bc8ebfd31cb7ae5c606520650de"
-          }
-        ]
       }
     },
     {

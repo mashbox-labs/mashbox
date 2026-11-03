@@ -1,0 +1,31 @@
+{
+ "note": "Upstream files this model downloads, pinned by revision and checked by sha256 before use, and the code the SNAC decoder follows. maya1's GGUF file and the SNAC arrays come from this model's own repo (models.json files[]).",
+ "code": {
+  "repo": "hubertsiuzdak/snac",
+  "commit": "8f79a718f1ad71f94f79999f0071348227aff22e",
+  "license": "MIT",
+  "license_file": "LICENSE-SNAC",
+  "license_sha256": "a82cc54b23e2fa07772629f94effa8abfb7e6bc8ebfd31cb7ae5c606520650de"
+ },
+ "repos": {
+  "tokenizer": {
+   "hf": "maya-research/maya1",
+   "revision": "b1b9b38ca9decbfcfd6c98ea93dd502bfd0f9572",
+   "license": "apache-2.0",
+   "files": [
+    {
+     "name": "tokenizer.json",
+     "bytes": 22853258,
+     "sha256": "6c5e5b1d89b7e3738e5a5a4f93c326d8f3292ea83f9c560b8dbb6d66fb851973"
+    }
+   ]
+  },
+  "snac": {
+   "hf": "hubertsiuzdak/snac_24khz",
+   "revision": "d73ad176a12188fcf4f360ba3bf2c2fbbe8f58ec",
+   "license": "mit",
+   "note": "source of snac/snac_24khz_decoder.npz (its pytorch_model.bin decoder weights, weight norm folded); nothing is downloaded from here",
+   "files": []
+  }
+ }
+}

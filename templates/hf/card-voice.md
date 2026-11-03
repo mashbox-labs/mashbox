@@ -2,22 +2,23 @@
 ${front_matter}
 ---
 
+<p align="center"><img alt="MASHBOX Labs" src="${banner}" width="100%"></p>
+
 # ${name} on Google Cloud TPU
 
-${status}
+${maturity_line}${status}
 
-${summary}
+${badges}
 
-| | |
-|---|---|
-| In | ${in} |
-| Out | ${out} |
-| Original model | [${upstream_hf}](${upstream_url}) by ${maker} |
-| Code | [mashbox v${version}](${code_url}) |
+### Read our guide: [run ${name} on TPU](${docs_url})
 
-## Run
+${summary} Made by ${maker}, ported to TPU by MASHBOX Labs.
 
-On a Google Cloud TPU VM. The [docs](${docs_url}) cover setup from a new Google account, and coding agents can follow [AGENTS.md](${agents_url}).
+${highlights}
+
+## Quickstart
+
+On a Google Cloud TPU VM (the [setup guide](https://mashbox.gg/docs/google-cloud) gets you there from a new Google account; coding agents can follow [AGENTS.md](${agents_url})):
 
 ```bash
 ${install}
@@ -26,24 +27,26 @@ ${run}
 
 ${notes}
 
-## Chips
-
-${chips_table}
-
 ## Results
 
 ${results_table}
 
-${results_charts}
-
 ## Files
 
-${files_table}
+${component_files}
+
+## Chips
+
+${chips_table}
 
 ## Kernels
 
 ${kernels_section}
 
+## Links
+
+${links_table}
+
 ## Licence
 
-${weights_licence}; code: ${our_license} (MASHBOX Labs). ${upstream_licence_file}${kernels_license}
+${component_licences}; code: ${our_license} (MASHBOX Labs). ${component_licence_files}${credit_lines}${kernels_license}
